@@ -46,17 +46,26 @@ def save_portfolio(portfolio: dict):
 
 
 def init_portfolio():
-    """Initialize portfolio from current recommendations."""
+    """Initialize portfolio from current recommendations.
+
+    Two-tranche structure:
+      Core ($90K):       balanced ETF rotation + stock screen
+      Aggressive ($10K): top-2 leveraged ETF momentum
+    """
     from config import INITIAL_CAPITAL
     portfolio = {
         "positions": [
-            {"ticker": "XLE",  "shares": 13, "entry_price": 56.94,  "entry_date": str(dt.date.today())},
-            {"ticker": "MTUM", "shares": 2,  "entry_price": 263.44, "entry_date": str(dt.date.today())},
-            {"ticker": "XLI",  "shares": 4,  "entry_price": 171.52, "entry_date": str(dt.date.today())},
-            {"ticker": "IWM",  "shares": 2,  "entry_price": 261.30, "entry_date": str(dt.date.today())},
-            {"ticker": "TSLA", "shares": 1,  "entry_price": 348.95, "entry_date": str(dt.date.today())},
-            {"ticker": "INTC", "shares": 3,  "entry_price": 62.38,  "entry_date": str(dt.date.today())},
-            {"ticker": "QCOM", "shares": 1,  "entry_price": 128.06, "entry_date": str(dt.date.today())},
+            # ── Core tranche (balanced) ──────────────────────────
+            {"ticker": "XLE",  "shares": 13, "entry_price": 56.94,  "entry_date": str(dt.date.today()), "tranche": "core"},
+            {"ticker": "MTUM", "shares": 2,  "entry_price": 263.44, "entry_date": str(dt.date.today()), "tranche": "core"},
+            {"ticker": "XLI",  "shares": 4,  "entry_price": 171.52, "entry_date": str(dt.date.today()), "tranche": "core"},
+            {"ticker": "IWM",  "shares": 2,  "entry_price": 261.30, "entry_date": str(dt.date.today()), "tranche": "core"},
+            {"ticker": "TSLA", "shares": 1,  "entry_price": 348.95, "entry_date": str(dt.date.today()), "tranche": "core"},
+            {"ticker": "INTC", "shares": 3,  "entry_price": 62.38,  "entry_date": str(dt.date.today()), "tranche": "core"},
+            {"ticker": "QCOM", "shares": 1,  "entry_price": 128.06, "entry_date": str(dt.date.today()), "tranche": "core"},
+            # ── Aggressive tranche (leveraged ETF — placeholder) ─
+            # Replace these with actual top-2 leveraged ETF picks from run.py
+            # {"ticker": "TQQQ", "shares": 50, "entry_price": 100.00, "entry_date": str(dt.date.today()), "tranche": "aggressive"},
         ],
         "cash": 1860.00,
         "initial_capital": INITIAL_CAPITAL,
@@ -127,21 +136,38 @@ def check_price_moves(portfolio):
             alerts.append((Alert.WARNING, t,
                 f"Moved {daily_chg:+.1f}% today (${prev_close:.2f} → ${current:.2f})"))
 
-        # Stop-loss check (-8% from entry)
-        if from_entry <= -8:
-            alerts.append((Alert.CRITICAL, t,
-                f"STOP-LOSS TRIGGERED: {from_entry:+.1f}% from entry ${entry:.2f} → ${current:.2f}. SELL NOW."))
-        elif from_entry <= -5:
-            alerts.append((Alert.WARNING, t,
-                f"Approaching stop-loss: {from_entry:+.1f}% from entry"))
+        # Tranche-specific stops: aggressive tranche uses tighter levels
+        tranche = pos.get("tranche", "core")
+        if tranche == "aggressive":
+            from config import AGGRESSIVE_PARAMS as _AP
+            stop_loss_pct  = _AP["stop_loss_pct"] * 100          # 10%
+            stop_warn_pct  = stop_loss_pct * 0.7                  # 7%
+            trail_stop_pct = _AP["trailing_stop_pct"] * 100       # 15%
+            trail_warn_pct = trail_stop_pct * 0.67                # 10%
+            tranche_label  = " [AGGRESSIVE]"
+        else:
+            from config import STOP_LOSS_PCT, TRAILING_STOP_PCT
+            stop_loss_pct  = STOP_LOSS_PCT * 100                  # 8%
+            stop_warn_pct  = stop_loss_pct * 0.625                # 5%
+            trail_stop_pct = TRAILING_STOP_PCT * 100              # 12%
+            trail_warn_pct = trail_stop_pct * 0.67                # 8%
+            tranche_label  = ""
 
-        # Trailing stop (-12% from peak)
-        if from_peak <= -12:
+        # Stop-loss check
+        if from_entry <= -stop_loss_pct:
             alerts.append((Alert.CRITICAL, t,
-                f"TRAILING STOP HIT: {from_peak:+.1f}% from peak ${peak:.2f}. Consider selling."))
-        elif from_peak <= -8:
+                f"STOP-LOSS TRIGGERED{tranche_label}: {from_entry:+.1f}% from entry ${entry:.2f} → ${current:.2f}. SELL NOW."))
+        elif from_entry <= -stop_warn_pct:
             alerts.append((Alert.WARNING, t,
-                f"Trailing stop warning: {from_peak:+.1f}% from peak ${peak:.2f}"))
+                f"Approaching stop-loss{tranche_label}: {from_entry:+.1f}% from entry"))
+
+        # Trailing stop check
+        if from_peak <= -trail_stop_pct:
+            alerts.append((Alert.CRITICAL, t,
+                f"TRAILING STOP HIT{tranche_label}: {from_peak:+.1f}% from peak ${peak:.2f}. Consider selling."))
+        elif from_peak <= -trail_warn_pct:
+            alerts.append((Alert.WARNING, t,
+                f"Trailing stop warning{tranche_label}: {from_peak:+.1f}% from peak ${peak:.2f}"))
 
     return alerts
 
