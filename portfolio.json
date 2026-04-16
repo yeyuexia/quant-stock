@@ -1,0 +1,71 @@
+{
+  "positions": [
+    {
+      "ticker": "MTUM",
+      "shares": 63,
+      "entry_price": 269.99,
+      "entry_date": "2026-04-16",
+      "tranche": "core"
+    },
+    {
+      "ticker": "XLK",
+      "shares": 113,
+      "entry_price": 150.30,
+      "entry_date": "2026-04-16",
+      "tranche": "core"
+    },
+    {
+      "ticker": "IWM",
+      "shares": 63,
+      "entry_price": 269.39,
+      "entry_date": "2026-04-16",
+      "tranche": "core"
+    },
+    {
+      "ticker": "QQQ",
+      "shares": 26,
+      "entry_price": 637.40,
+      "entry_date": "2026-04-16",
+      "tranche": "core"
+    },
+    {
+      "ticker": "TSLA",
+      "shares": 14,
+      "entry_price": 391.95,
+      "entry_date": "2026-04-16",
+      "tranche": "core"
+    },
+    {
+      "ticker": "RKLB",
+      "shares": 78,
+      "entry_price": 73.60,
+      "entry_date": "2026-04-16",
+      "tranche": "core"
+    },
+    {
+      "ticker": "AXON",
+      "shares": 7,
+      "entry_price": 402.18,
+      "entry_date": "2026-04-16",
+      "tranche": "core"
+    },
+    {
+      "ticker": "TQQQ",
+      "shares": 85,
+      "entry_price": 55.65,
+      "entry_date": "2026-04-16",
+      "tranche": "aggressive"
+    },
+    {
+      "ticker": "TECL",
+      "shares": 38,
+      "entry_price": 123.60,
+      "entry_date": "2026-04-16",
+      "tranche": "aggressive"
+    }
+  ],
+  "cash": 8992.35,
+  "initial_capital": 100000,
+  "start_date": "2026-04-16",
+  "last_rebalance": "2026-04-16"
+}
