@@ -674,3 +674,69 @@ def test_order_intent_new_fields_default_to_none():
     assert i.decision_price is None
     assert i.max_price is None
     assert i.slice_count is None
+
+
+def test_submit_limit_slice_respects_halt(tmp_path, monkeypatch):
+    import orders
+    from orders import submit_limit_slice
+    from tests.fakes import FakeBroker
+
+    halt_path = tmp_path / "HALT"
+    halt_path.write_text("")
+    monkeypatch.setattr(orders, "HALT_PATH", str(halt_path))
+
+    b = FakeBroker()
+    intent = OrderIntent(
+        symbol="SPY", notional=1000.0, side="buy",
+        reason="slice", tranche="core", client_order_id="slice-1",
+        tier="MED", decision_price=480.0, max_price=481.5, slice_count=4,
+    )
+    result = submit_limit_slice(intent, limit_price=480.50, notional=250.0, broker=b)
+    assert result.submitted == []
+    assert any("HALT" in msg for _, msg in result.skipped)
+
+
+def test_submit_limit_slice_respects_market_closed(monkeypatch, tmp_path):
+    import orders
+    from orders import submit_limit_slice
+    from tests.fakes import FakeBroker
+
+    monkeypatch.setattr(orders, "HALT_PATH", str(tmp_path / "no_halt"))
+    b = FakeBroker(market_open=False)
+    intent = OrderIntent(
+        symbol="SPY", notional=1000.0, side="buy",
+        reason="slice", tranche="core", client_order_id="slice-2",
+        tier="MED", decision_price=480.0, max_price=481.5, slice_count=4,
+    )
+    result = submit_limit_slice(intent, limit_price=480.50, notional=250.0, broker=b)
+    assert result.submitted == []
+    assert any("market closed" in msg.lower() for _, msg in result.skipped)
+
+
+def test_submit_limit_slice_counts_against_daily_cap(monkeypatch, tmp_path):
+    import orders
+    from orders import submit_limit_slice
+    from tests.fakes import FakeBroker
+
+    monkeypatch.setattr(orders, "HALT_PATH", str(tmp_path / "no_halt"))
+    monkeypatch.setattr(orders, "DAILY_TRADE_LOG", str(tmp_path / "log.json"))
+    monkeypatch.setattr(orders, "PENDING_ORDERS_PATH", str(tmp_path / "pend.json"))
+    monkeypatch.setattr(orders, "DAILY_MAX_ORDERS", 1)
+
+    b = FakeBroker()
+    b.set_latest_price("SPY", 480.0)
+    intent = OrderIntent(
+        symbol="SPY", notional=500.0, side="buy",
+        reason="slice", tranche="core", client_order_id="slice-3",
+        tier="MED", decision_price=480.0, max_price=481.5, slice_count=2,
+    )
+    r1 = submit_limit_slice(intent, limit_price=480.50, notional=250.0, broker=b)
+    assert len(r1.submitted) == 1
+    intent2 = OrderIntent(
+        symbol="SPY", notional=500.0, side="buy",
+        reason="slice", tranche="core", client_order_id="slice-3b",
+        tier="MED", decision_price=480.0, max_price=481.5, slice_count=2,
+    )
+    r2 = submit_limit_slice(intent2, limit_price=480.60, notional=250.0, broker=b)
+    assert len(r2.submitted) == 0
+    assert len(r2.deferred) == 1

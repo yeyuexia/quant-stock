@@ -343,6 +343,79 @@ def execute_plan(plan: OrderPlan, *, broker, reason: str) -> ExecutionResult:
     return result
 
 
+def submit_limit_slice(
+    intent: OrderIntent,
+    *,
+    limit_price: float,
+    notional: float,
+    broker,
+) -> ExecutionResult:
+    """Submit one slice of an intent as a marketable limit order.
+
+    Enforces the same four safety rails as execute_plan: HALT, market-open,
+    daily caps, large-order gate. Distinct `client_order_id` required per
+    slice — callers suffix the parent cid with the slice index.
+    """
+    result = ExecutionResult()
+
+    if os.path.exists(HALT_PATH):
+        result.skipped.append((intent, "HALT file present"))
+        return result
+
+    try:
+        if not broker.is_market_open():
+            result.skipped.append((intent, "market closed — defer to next tick"))
+            return result
+    except BrokerError as e:
+        result.skipped.append((intent, f"BrokerError: {e}"))
+        return result
+
+    log = _load_daily_log()
+    bucket = _today_bucket(log)
+    pending = _load_pending()
+
+    if bucket["submitted_count"] >= DAILY_MAX_ORDERS:
+        result.deferred.append(intent)
+        bucket["deferred"].append(asdict(intent))
+        _save_daily_log(log)
+        return result
+    if bucket["submitted_notional"] + notional > DAILY_MAX_NOTIONAL:
+        result.deferred.append(intent)
+        bucket["deferred"].append(asdict(intent))
+        _save_daily_log(log)
+        return result
+
+    if notional >= LARGE_ORDER_THRESHOLD:
+        sliced_intent = _intent_with_notional(intent, notional)
+        pending.append(_intent_to_pending(sliced_intent, dt.datetime.now(dt.timezone.utc)))
+        result.queued.append(sliced_intent)
+        _save_pending(pending)
+        return result
+
+    try:
+        o = broker.submit_limit(
+            intent.symbol,
+            notional=notional,
+            side=intent.side,
+            limit_price=limit_price,
+            client_order_id=intent.client_order_id,
+        )
+        result.submitted.append(o)
+        bucket["submitted_count"] += 1
+        bucket["submitted_notional"] += notional
+    except BrokerError as e:
+        result.skipped.append((intent, f"BrokerError: {e}"))
+
+    _save_daily_log(log)
+    return result
+
+
+def _intent_with_notional(intent: OrderIntent, notional: float) -> OrderIntent:
+    """Return a copy of intent with notional overridden (for per-slice tracking)."""
+    from dataclasses import replace
+    return replace(intent, notional=round(notional, 2))
+
+
 def _submit_intent(broker, i: OrderIntent, result: ExecutionResult):
     """Submit a single intent via the appropriate broker method. Catches BrokerError."""
     try:
