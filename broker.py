@@ -185,6 +185,8 @@ class Broker:
         if limit_price <= 0:
             raise BrokerError(f"submit_limit: limit_price must be positive, got {limit_price}")
 
+        if time_in_force not in ("day", "gtc"):
+            raise BrokerError(f"submit_limit: unsupported time_in_force {time_in_force!r}")
         tif = TimeInForce.DAY if time_in_force == "day" else TimeInForce.GTC
         req = LimitOrderRequest(
             symbol=symbol,
