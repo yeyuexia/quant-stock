@@ -63,7 +63,7 @@ def run_tick(*, broker) -> Optional[TickResult]:
 
     _process_breakers(plan, obs, result)
     _process_slices(plan, obs, result, broker=broker)
-    # Task 18 adds end-of-day cleanup.
+    _process_eod(plan, result, broker=broker)
 
     write_plan(plan)
     return result
@@ -362,3 +362,30 @@ def _cancel_prior(broker, client_order_id: str, result: TickResult):
 def _observed_fill(broker, state) -> float:
     """Best-effort observed fill. For v1, trust the local counter."""
     return state.notional_filled
+
+
+def _process_eod(plan: PendingPlan, result: TickResult, *, broker):
+    """At the last tick of the day, cancel all outstanding limits and mark
+    each intent done/deferred based on fill ratio."""
+    now = _now_et()
+    end_h, end_m = map(int, config.EXECUTOR_WINDOW_END.split(":"))
+    eod = dt.datetime.combine(now.date(), dt.time(end_h, end_m))
+    if now < eod:
+        return
+
+    for state in plan.intents:
+        if state.status != "active":
+            continue
+        if state.last_client_order_id:
+            _cancel_prior(broker, state.last_client_order_id, result)
+            state.last_client_order_id = None
+        intent = state.intent
+        fill_ratio = state.notional_filled / max(1.0, intent.notional)
+        if fill_ratio >= 0.95:
+            state.status = "done"
+        else:
+            state.status = "deferred"
+            state.abort_reason = (
+                f"EOD deferred at {fill_ratio * 100:.1f}% filled"
+            )
+            result.deferred.append(intent)
