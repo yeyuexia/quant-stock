@@ -473,3 +473,176 @@ def test_tag_position_bad_tranche_raises(tmp_path, monkeypatch):
     from orders import tag_position
     with pytest.raises(ValueError):
         tag_position("NVDA", tranche="invalid")
+
+
+# ── Critical fixes: market-open gate ────────────────────────────
+
+def test_execute_plan_skips_when_market_closed(tmp_path, monkeypatch):
+    _safety_paths(tmp_path, monkeypatch)
+    _portfolio_cache(tmp_path, monkeypatch, None)
+
+    from orders import OrderPlan, execute_plan
+    fb = FakeBroker()
+    fb.market_open = False
+    plan = OrderPlan(buys=[_intent("A", 500)], sells=[], holds=[])
+    result = execute_plan(plan, broker=fb, reason="test")
+    assert result.submitted == []
+    assert len(result.skipped) == 1
+    assert "market closed" in result.skipped[0][1].lower()
+
+
+# ── Critical fixes: approve_pending non-destructive ─────────────
+
+def test_approve_pending_halt_preserves_queue(tmp_path, monkeypatch):
+    _safety_paths(tmp_path, monkeypatch)
+    _portfolio_cache(tmp_path, monkeypatch, None)
+    monkeypatch.setattr("orders.LARGE_ORDER_THRESHOLD", 1_000)
+
+    from orders import OrderPlan, execute_plan, approve_pending, list_pending
+    fb = FakeBroker()
+    execute_plan(OrderPlan(buys=[_intent("BIG", 2_500)], sells=[], holds=[]),
+                 broker=fb, reason="test")
+    assert len(list_pending()) == 1
+
+    # HALT active at approval time
+    (tmp_path / "HALT").write_text("paused")
+    pid = list_pending()[0]["id"]
+    result = approve_pending(pid, broker=fb)
+
+    assert result.submitted == []
+    assert any("HALT" in msg for _, msg in result.skipped)
+    # Order remains in queue
+    assert len(list_pending()) == 1
+    assert list_pending()[0]["id"] == pid
+
+
+def test_approve_pending_cap_preserves_queue(tmp_path, monkeypatch):
+    _safety_paths(tmp_path, monkeypatch)
+    _portfolio_cache(tmp_path, monkeypatch, None)
+    monkeypatch.setattr("orders.LARGE_ORDER_THRESHOLD", 1_000)
+    # Normal caps so the order queues first
+    monkeypatch.setattr("orders.DAILY_MAX_ORDERS", 100)
+    monkeypatch.setattr("orders.DAILY_MAX_NOTIONAL", 100_000)
+
+    from orders import OrderPlan, execute_plan, approve_pending, list_pending
+    fb = FakeBroker()
+    execute_plan(OrderPlan(buys=[_intent("BIG", 2_500)], sells=[], holds=[]),
+                 broker=fb, reason="test")
+    pid = list_pending()[0]["id"]
+
+    # Squeeze the cap before approval
+    monkeypatch.setattr("orders.DAILY_MAX_ORDERS", 0)
+    result = approve_pending(pid, broker=fb)
+    assert result.submitted == []
+    assert any("cap" in msg.lower() for _, msg in result.skipped)
+    # Order stays pending so the user can retry tomorrow
+    assert len(list_pending()) == 1
+
+
+def test_approve_pending_market_closed_preserves_queue(tmp_path, monkeypatch):
+    _safety_paths(tmp_path, monkeypatch)
+    _portfolio_cache(tmp_path, monkeypatch, None)
+    monkeypatch.setattr("orders.LARGE_ORDER_THRESHOLD", 1_000)
+
+    from orders import OrderPlan, execute_plan, approve_pending, list_pending
+    fb = FakeBroker()
+    execute_plan(OrderPlan(buys=[_intent("BIG", 2_500)], sells=[], holds=[]),
+                 broker=fb, reason="test")
+
+    fb.market_open = False
+    pid = list_pending()[0]["id"]
+    result = approve_pending(pid, broker=fb)
+    assert result.submitted == []
+    assert any("market closed" in msg.lower() for _, msg in result.skipped)
+    assert len(list_pending()) == 1
+
+
+# ── Critical fixes: ensure_trailing_stops ───────────────────────
+
+def test_ensure_trailing_stops_attaches_to_new_positions(tmp_path, monkeypatch):
+    _safety_paths(tmp_path, monkeypatch)
+    _portfolio_cache(tmp_path, monkeypatch, {
+        "synced_at": "x", "alpaca_env": "paper", "cash": 0, "equity": 0,
+        "positions": [
+            {"symbol": "SPY", "shares": 10.0, "avg_entry": 500.0,
+             "market_value": 5000.0, "unrealized_pl": 0.0,
+             "tranche": "core", "entry_reason": "rebalance",
+             "stop_order_id": None, "trail_order_id": None},
+        ],
+        "tranches": {"core": {"last_rebalance": None},
+                     "aggressive": {"last_rebalance": None}},
+    })
+
+    from orders import ensure_trailing_stops
+    fb = FakeBroker()
+    fb.seed_position("SPY", qty=10, avg_entry=500)
+
+    result = ensure_trailing_stops(fb)
+    assert len(result.submitted) == 1
+    o = result.submitted[0]
+    assert o.symbol == "SPY"
+    assert o.side == "sell"
+    assert o.type == "trailing_stop"
+
+
+def test_ensure_trailing_stops_skips_when_already_attached(tmp_path, monkeypatch):
+    _safety_paths(tmp_path, monkeypatch)
+    _portfolio_cache(tmp_path, monkeypatch, {
+        "synced_at": "x", "alpaca_env": "paper", "cash": 0, "equity": 0,
+        "positions": [
+            {"symbol": "SPY", "shares": 10.0, "avg_entry": 500.0,
+             "market_value": 5000.0, "unrealized_pl": 0.0,
+             "tranche": "core", "entry_reason": "rebalance",
+             "stop_order_id": None, "trail_order_id": None},
+        ],
+        "tranches": {"core": {"last_rebalance": None},
+                     "aggressive": {"last_rebalance": None}},
+    })
+
+    from orders import ensure_trailing_stops
+    from broker import Order
+    fb = FakeBroker()
+    fb.seed_position("SPY", qty=10, avg_entry=500)
+    fb.seed_open_order(Order(
+        id="existing_trail", symbol="SPY", side="sell", type="trailing_stop",
+        qty=10.0, notional=None, status="accepted",
+        client_order_id="prev", parent_order_id=None,
+    ))
+
+    result = ensure_trailing_stops(fb)
+    assert result.submitted == []
+
+
+def test_ensure_trailing_stops_skips_unknown_tranche(tmp_path, monkeypatch):
+    _safety_paths(tmp_path, monkeypatch)
+    _portfolio_cache(tmp_path, monkeypatch, None)  # no cache → position is unknown
+
+    from orders import ensure_trailing_stops
+    fb = FakeBroker()
+    fb.seed_position("NVDA", qty=5, avg_entry=100)
+
+    result = ensure_trailing_stops(fb)
+    assert result.submitted == []
+
+
+def test_ensure_trailing_stops_respects_halt(tmp_path, monkeypatch):
+    _safety_paths(tmp_path, monkeypatch)
+    _portfolio_cache(tmp_path, monkeypatch, {
+        "synced_at": "x", "alpaca_env": "paper", "cash": 0, "equity": 0,
+        "positions": [
+            {"symbol": "SPY", "shares": 10.0, "avg_entry": 500.0,
+             "market_value": 5000.0, "unrealized_pl": 0.0,
+             "tranche": "core", "entry_reason": "rebalance",
+             "stop_order_id": None, "trail_order_id": None},
+        ],
+        "tranches": {"core": {"last_rebalance": None},
+                     "aggressive": {"last_rebalance": None}},
+    })
+    (tmp_path / "HALT").write_text("paused")
+
+    from orders import ensure_trailing_stops
+    fb = FakeBroker()
+    fb.seed_position("SPY", qty=10, avg_entry=500)
+
+    result = ensure_trailing_stops(fb)
+    assert result.submitted == []

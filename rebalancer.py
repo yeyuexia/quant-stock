@@ -145,13 +145,26 @@ def run(
 
     result = orders.execute_plan(plan, broker=broker, reason=f"{tranche} rebalance")
 
-    # Update last_rebalance in the cache
-    cache = orders._load_portfolio_cache()
-    cache.setdefault("tranches", {}).setdefault(tranche, {})["last_rebalance"] = \
-        dt.date.today().isoformat()
-    import json
-    with open(orders.PORTFOLIO_PATH, "w") as f:
-        json.dump(cache, f, indent=2, default=str)
+    # Attach trailing stops to freshly-opened positions. Small sleep lets
+    # paper-account buys fill before we query positions.
+    if result.submitted:
+        import time
+        time.sleep(2)
+        trail_result = orders.ensure_trailing_stops(broker)
+        for o in trail_result.submitted:
+            result.submitted.append(o)
+        for pair in trail_result.skipped:
+            result.skipped.append(pair)
+
+    # Only update last_rebalance if at least one order actually submitted.
+    # A run fully blocked by HALT or caps should not satisfy the cadence gate.
+    if result.submitted or result.queued:
+        cache = orders._load_portfolio_cache()
+        cache.setdefault("tranches", {}).setdefault(tranche, {})["last_rebalance"] = \
+            dt.date.today().isoformat()
+        import json
+        with open(orders.PORTFOLIO_PATH, "w") as f:
+            json.dump(cache, f, indent=2, default=str)
 
     _print_result(result)
     return result

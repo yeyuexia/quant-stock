@@ -417,6 +417,21 @@ def run_watchdog(quick=False):
         "initial_capital": config.INITIAL_CAPITAL,
     }
 
+    # Safety net: attach trailing stops to any known-tranche position missing one.
+    # Rebalancer normally does this at submit time; this catches anything that
+    # slipped through (e.g., buy filled after rebalancer exited, or bracket
+    # attach failed).
+    broker = Broker(env=config.ALPACA_ENV)
+    trail_result = orders.ensure_trailing_stops(broker)
+    if trail_result.submitted:
+        print(f"  Attached {len(trail_result.submitted)} missing trailing stop(s):")
+        for o in trail_result.submitted:
+            print(f"    • {o.symbol}")
+    if trail_result.skipped:
+        for pair in trail_result.skipped:
+            sym = pair[0].symbol if pair[0] is not None else "?"
+            print(f"    ! Could not attach trailing stop on {sym}: {pair[1]}")
+
     # Portfolio status
     header("PORTFOLIO STATUS")
     rows, total_value, total_pnl, total_pnl_pct, cash = check_portfolio_status(portfolio)

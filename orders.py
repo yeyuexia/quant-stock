@@ -301,6 +301,11 @@ def execute_plan(plan: OrderPlan, *, broker, reason: str) -> ExecutionResult:
             result.skipped.append((i, "HALT file present"))
         return result
 
+    if not broker.is_market_open():
+        for i in intents:
+            result.skipped.append((i, "market closed — defer to next open"))
+        return result
+
     log = _load_daily_log()
     bucket = _today_bucket(log)
     pending = _load_pending()
@@ -408,7 +413,13 @@ def reject_pending(pending_id: str) -> None:
 
 
 def approve_pending(pending_id: str, *, broker) -> ExecutionResult:
-    """Re-runs HALT + daily cap checks before submitting."""
+    """Re-runs HALT + market-open + daily cap checks before submitting.
+
+    Non-destructive on transient failures: if HALT is active, market is closed,
+    or daily caps are reached at approval time, the order remains in the queue
+    so the user can re-approve later. Only expiry and successful submission
+    remove the order from the queue.
+    """
     result = ExecutionResult()
     items = _load_pending()
     target = next((p for p in items if p["id"] == pending_id), None)
@@ -416,36 +427,104 @@ def approve_pending(pending_id: str, *, broker) -> ExecutionResult:
         result.skipped.append((None, f"pending id not found: {pending_id}"))  # type: ignore[arg-type]
         return result
 
-    # Remove from queue immediately — win or lose, it leaves the queue.
-    _save_pending([p for p in items if p["id"] != pending_id])
-
     now = dt.datetime.now(dt.timezone.utc)
     expires = dt.datetime.fromisoformat(target["expires"])
     intent = _pending_to_intent(target)
 
+    # Expiry: always remove from queue (order was going to disappear anyway).
     if now > expires:
+        _save_pending([p for p in items if p["id"] != pending_id])
         result.skipped.append((intent, "pending order expired"))
         return result
 
+    # Transient gates: leave the order in the queue so re-approval is possible.
     if os.path.exists(HALT_PATH):
-        result.skipped.append((intent, "HALT file present"))
+        result.skipped.append((intent, "HALT file present — order remains pending"))
+        return result
+
+    if not broker.is_market_open():
+        result.skipped.append((intent, "market closed — order remains pending"))
         return result
 
     log = _load_daily_log()
     bucket = _today_bucket(log)
     if bucket["submitted_count"] >= DAILY_MAX_ORDERS or \
        bucket["submitted_notional"] + intent.notional > DAILY_MAX_NOTIONAL:
-        bucket["deferred"].append(asdict(intent))
-        _save_daily_log(log)
-        result.deferred.append(intent)
+        result.skipped.append((intent, "daily cap reached — order remains pending"))
         return result
 
+    # All checks passed; now remove from queue and submit.
+    _save_pending([p for p in items if p["id"] != pending_id])
     before = len(result.submitted)
     _submit_intent(broker, intent, result)
     if len(result.submitted) > before:
         bucket["submitted_count"] += 1
         bucket["submitted_notional"] += intent.notional
-    _save_daily_log(log)
+        _save_daily_log(log)
+    return result
+
+
+# ── ensure_trailing_stops ───────────────────────────────────────
+
+def ensure_trailing_stops(broker) -> ExecutionResult:
+    """Attach trailing-stop SELL orders to positions that lack them.
+
+    `broker.submit_bracket` only attaches a fixed stop-loss leg — Alpaca does
+    not allow combining trailing-stop + bracket natively. This helper runs
+    after rebalance (and again from watchdog) to submit the trailing-stop leg
+    for every known-tranche position that doesn't already have one attached.
+
+    Respects HALT. Bypasses the daily-cap and large-order gates because
+    trailing stops are protective orders: holding up protection on a cap is
+    worse than exceeding the cap by one order.
+    """
+    result = ExecutionResult()
+    if os.path.exists(HALT_PATH):
+        return result
+
+    try:
+        positions = broker.get_positions()
+        open_orders = broker.get_open_orders()
+    except BrokerError as e:
+        result.skipped.append((None, f"ensure_trailing_stops: {e}"))  # type: ignore[arg-type]
+        return result
+
+    trails_by_symbol = {o.symbol for o in open_orders if o.type == "trailing_stop"}
+
+    cache = _load_portfolio_cache()
+    meta_by_symbol = {p["symbol"]: p for p in cache.get("positions", [])}
+
+    today = dt.date.today()
+    for p in positions:
+        if p.symbol in trails_by_symbol:
+            continue
+        meta = meta_by_symbol.get(p.symbol)
+        if meta is None or meta.get("tranche") == "unknown":
+            # External / untagged positions: don't touch them. Watchdog will
+            # surface the missing-bracket alert so the user can intervene.
+            continue
+        tranche = meta["tranche"]
+        _, trail_pct = _tranche_stops(tranche)
+        cid = _make_cid(tranche, "trail", p.symbol, today)
+        try:
+            o = broker.submit_trailing_stop(
+                p.symbol, qty=p.qty,
+                trail_percent=trail_pct,
+                client_order_id=cid,
+            )
+            result.submitted.append(o)
+        except BrokerError as e:
+            # Duplicate client_order_id (already attached earlier today) is a no-op.
+            msg = str(e)
+            if "duplicate" in msg.lower():
+                continue
+            intent = OrderIntent(
+                symbol=p.symbol, notional=0.0, side="sell",
+                reason="trailing-stop attach", tranche=tranche,
+                client_order_id=cid, stop_pct=None, trail_pct=trail_pct,
+            )
+            result.skipped.append((intent, f"BrokerError: {e}"))
+
     return result
 
 
