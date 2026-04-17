@@ -208,12 +208,24 @@ def _print_result(result: orders.ExecutionResult):
 
 
 def _write_pending_plan(tranche, intents, *, broker):
-    """Enrich intents with tier/max_price/slice_count; capture baseline; persist."""
+    """Enrich intents with tier/max_price/slice_count; capture baseline; persist.
+
+    Merges with any existing plan on disk so that running --tranche both
+    (core then aggressive) preserves both tranches' intents.  A same-tranche
+    re-run is idempotent: the current tranche's intents are replaced, not
+    duplicated.  The baseline and created_at are kept from the first writer.
+    """
     from baseline import capture_baseline
     from planner import build_priced_intents, PricingContext
-    from pending_plan import PendingPlan, IntentState, write_plan
+    from pending_plan import PendingPlan, IntentState, load_plan, write_plan
 
-    baseline = capture_baseline()
+    # Only capture baseline when we're creating a brand-new plan; reuse the
+    # existing baseline on merge (first-writer wins — that's the day's reference).
+    existing = load_plan()
+    if existing is None:
+        baseline = capture_baseline()
+    else:
+        baseline = existing.baseline
 
     ranks = {}
     asset_class = {}
@@ -267,15 +279,36 @@ def _write_pending_plan(tranche, intents, *, broker):
     )
     priced = build_priced_intents(intents, ctx)
 
-    plan = PendingPlan(
-        plan_id=f"{tranche}-{dt.date.today().isoformat()}",
-        tranche=tranche,
-        created_at=dt.datetime.now(dt.timezone.utc),
-        baseline=baseline,
-        intents=[IntentState(intent=i) for i in priced],
-    )
+    # Merge with any existing plan on disk.
+    if existing is not None:
+        # Drop intents from this tranche (same-day re-run is idempotent);
+        # keep intents from other tranches.
+        kept_states = [s for s in existing.intents if s.intent.tranche != tranche]
+        new_states = [IntentState(intent=i) for i in priced]
+        all_states = kept_states + new_states
+        # Plan-level tranche becomes "mixed" if more than one tranche is present.
+        tranches_present = {s.intent.tranche for s in all_states}
+        plan_tranche = "mixed" if len(tranches_present) > 1 else tranche
+        plan_id_prefix = "multi" if plan_tranche == "mixed" else tranche
+        plan = PendingPlan(
+            plan_id=f"{plan_id_prefix}-{dt.date.today().isoformat()}",
+            tranche=plan_tranche,
+            created_at=existing.created_at,          # preserve first-writer creation time
+            baseline=existing.baseline,              # preserve first-writer baseline
+            intents=all_states,
+            breakers_tripped=existing.breakers_tripped,
+        )
+    else:
+        plan = PendingPlan(
+            plan_id=f"{tranche}-{dt.date.today().isoformat()}",
+            tranche=tranche,
+            created_at=dt.datetime.now(dt.timezone.utc),
+            baseline=baseline,
+            intents=[IntentState(intent=i) for i in priced],
+        )
     write_plan(plan)
-    print(f"\n── Pending plan written: {len(priced)} intents, baseline SPY={baseline.spy:.2f} "
+    print(f"\n── Pending plan written: {len(plan.intents)} intents "
+          f"(tranche={plan.tranche}), baseline SPY={baseline.spy:.2f} "
           f"VIX={baseline.vix:.2f} macro={baseline.macro_score:+.3f}")
 
 

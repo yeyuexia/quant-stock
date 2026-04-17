@@ -176,3 +176,83 @@ def test_rebalancer_drops_symbol_with_missing_decision_price(tmp_path, monkeypat
     captured = capsys.readouterr()
     assert "NVDA" in captured.out
     assert "decision price" in captured.out.lower() or "price" in captured.out.lower()
+
+
+def test_rebalancer_core_then_aggressive_preserves_both(tmp_path, monkeypatch):
+    """Running --tranche core then --tranche aggressive should leave BOTH
+    tranches' intents in pending_plan.json, not clobber the first."""
+    import rebalancer, orders, config as cfg
+    from pending_plan import load_plan
+    from tests.fakes import FakeBroker
+
+    monkeypatch.setattr(orders, "HALT_PATH", str(tmp_path / "no_halt"))
+    monkeypatch.setattr(orders, "DAILY_TRADE_LOG", str(tmp_path / "log.json"))
+    monkeypatch.setattr(orders, "PENDING_ORDERS_PATH", str(tmp_path / "pend.json"))
+    monkeypatch.setattr(orders, "PORTFOLIO_PATH", str(tmp_path / "port.json"))
+    monkeypatch.setattr("pending_plan.PENDING_PLAN_PATH", str(tmp_path / "plan.json"))
+    monkeypatch.setattr(cfg, "EXECUTOR_SHADOW_MODE", False)
+
+    import baseline as bl
+    monkeypatch.setattr(bl, "_fetch_spy", lambda: 480.0)
+    monkeypatch.setattr(bl, "_fetch_vix", lambda: 14.0)
+    monkeypatch.setattr(bl, "_fetch_macro_score", lambda: 0.0)
+
+    b = FakeBroker(cash=100_000.0, equity=100_000.0)
+    b.set_latest_price("SPY", 480.0)
+    b.set_latest_price("TQQQ", 60.0)
+
+    rebalancer.run(
+        tranche="core", dry_run=False, force=True, broker=b,
+        target_builder=lambda: ({"SPY": 0.20}, 90_000.0),
+    )
+    rebalancer.run(
+        tranche="aggressive", dry_run=False, force=True, broker=b,
+        target_builder=lambda: ({"TQQQ": 0.50}, 10_000.0),
+    )
+
+    plan = load_plan()
+    assert plan is not None
+    tranches_in_plan = {s.intent.tranche for s in plan.intents}
+    assert tranches_in_plan == {"core", "aggressive"}
+    symbols = {s.intent.symbol for s in plan.intents}
+    assert {"SPY", "TQQQ"} <= symbols
+
+
+def test_rebalancer_same_tranche_rerun_replaces_not_duplicates(tmp_path, monkeypatch):
+    """Running --tranche core twice should replace core's intents, not duplicate them."""
+    import rebalancer, orders, config as cfg
+    from pending_plan import load_plan
+    from tests.fakes import FakeBroker
+
+    monkeypatch.setattr(orders, "HALT_PATH", str(tmp_path / "no_halt"))
+    monkeypatch.setattr(orders, "DAILY_TRADE_LOG", str(tmp_path / "log.json"))
+    monkeypatch.setattr(orders, "PENDING_ORDERS_PATH", str(tmp_path / "pend.json"))
+    monkeypatch.setattr(orders, "PORTFOLIO_PATH", str(tmp_path / "port.json"))
+    monkeypatch.setattr("pending_plan.PENDING_PLAN_PATH", str(tmp_path / "plan.json"))
+    monkeypatch.setattr(cfg, "EXECUTOR_SHADOW_MODE", False)
+
+    import baseline as bl
+    monkeypatch.setattr(bl, "_fetch_spy", lambda: 480.0)
+    monkeypatch.setattr(bl, "_fetch_vix", lambda: 14.0)
+    monkeypatch.setattr(bl, "_fetch_macro_score", lambda: 0.0)
+
+    b = FakeBroker(cash=100_000.0, equity=100_000.0)
+    b.set_latest_price("SPY", 480.0)
+    b.set_latest_price("QQQ", 400.0)
+
+    # First run: SPY
+    rebalancer.run(
+        tranche="core", dry_run=False, force=True, broker=b,
+        target_builder=lambda: ({"SPY": 0.20}, 90_000.0),
+    )
+    # Second run (same tranche): QQQ instead
+    rebalancer.run(
+        tranche="core", dry_run=False, force=True, broker=b,
+        target_builder=lambda: ({"QQQ": 0.20}, 90_000.0),
+    )
+
+    plan = load_plan()
+    symbols = {s.intent.symbol for s in plan.intents}
+    # Core's earlier SPY intent should be gone; replaced with QQQ.
+    assert "SPY" not in symbols
+    assert "QQQ" in symbols
