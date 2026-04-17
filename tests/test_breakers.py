@@ -86,3 +86,42 @@ def test_single_name_shock_no_trip_if_all_above_threshold():
     baselines = {"AAPL": 180.0, "MSFT": 400.0}
     results = check_single_name_shock(bl, baselines, prices)
     assert all(not r.tripped for r in results)
+
+
+from breakers import check_news_shock
+from news_shock import NewsHit
+
+
+def test_news_shock_requires_corroboration():
+    bl = _baseline(spy=480.0)
+    hits = [NewsHit(title="Trump threatens new tariffs",
+                    source="yahoo",
+                    ts=dt.datetime(2026, 4, 17, 14, 0, tzinfo=dt.timezone.utc),
+                    matched="tariffs")]
+    result = check_news_shock(
+        baseline=bl, hits=hits,
+        spy_now=479.9,
+        spy_15min_ago=479.0,
+    )
+    assert result.tripped is False
+
+
+def test_news_shock_trips_when_corroborated():
+    bl = _baseline(spy=480.0)
+    hits = [NewsHit(title="Fed surprise rate hike",
+                    source="yahoo",
+                    ts=dt.datetime(2026, 4, 17, 14, 0, tzinfo=dt.timezone.utc),
+                    matched="fed")]
+    result = check_news_shock(
+        baseline=bl, hits=hits,
+        spy_now=476.0, spy_15min_ago=479.0,
+    )
+    assert result.tripped is True
+    assert result.breaker == "D"
+    assert result.scope == "buys"
+
+
+def test_news_shock_no_hits_never_trips():
+    bl = _baseline()
+    result = check_news_shock(baseline=bl, hits=[], spy_now=470.0, spy_15min_ago=480.0)
+    assert result.tripped is False

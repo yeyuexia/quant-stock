@@ -92,3 +92,38 @@ def check_single_name_shock(
                 measurement=change,
             ))
     return results
+
+
+def check_news_shock(
+    *,
+    baseline: Baseline,
+    hits: list,
+    spy_now: float,
+    spy_15min_ago: float,
+) -> BreakerResult:
+    """Requires BOTH: at least one matched headline, AND SPY moved > threshold
+    in the corroboration window. See news_shock.py for match/dedupe logic."""
+    if not hits:
+        return BreakerResult(breaker="D", tripped=False, scope="none",
+                             message="no news hits")
+
+    if spy_15min_ago <= 0:
+        return BreakerResult(breaker="D", tripped=False, scope="none",
+                             message="no 15-min-ago SPY reference")
+
+    move = abs(spy_now - spy_15min_ago) / spy_15min_ago
+    threshold = config.CIRCUIT_BREAKERS["news_corroboration_pct"]
+    if move < threshold:
+        return BreakerResult(
+            breaker="D", tripped=False, scope="none",
+            message=f"{len(hits)} news hit(s) but SPY 15min move "
+                    f"{move * 100:.2f}% < threshold {threshold * 100:.2f}%",
+            measurement=move,
+        )
+
+    titles = ", ".join(h.title[:60] for h in hits[:3])
+    return BreakerResult(
+        breaker="D", tripped=True, scope="buys",
+        message=f"news shock corroborated: SPY {move * 100:+.2f}% in 15min; hits: {titles}",
+        measurement=move,
+    )
