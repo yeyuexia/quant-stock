@@ -1,0 +1,17 @@
+# Paste these lines into `crontab -e`. Times are your local wall clock,
+# NOT market time — these assume you are in ET (US/Eastern). Adjust hours
+# if your machine is in a different timezone:
+#   - If machine is UTC, add 4 (DST) or 5 (standard) → rebalancer at 13:35 / 14:35
+#   - If machine is PT, subtract 3 → rebalancer at 06:35
+#
+# Watchdog — 8:30 AM ET weekdays
+30 8 * * 1-5 /Users/zl/works/stock/scripts/cron-wrapper.sh watchdog.py >> /Users/zl/works/stock/.cache/watchdog.log 2>&1
+
+# Rebalancer core — 9:35 AM ET weekdays (cadence-gated, safe to run daily)
+35 9 * * 1-5 /Users/zl/works/stock/scripts/cron-wrapper.sh rebalancer.py --tranche core >> /Users/zl/works/stock/.cache/rebalance.log 2>&1
+
+# Rebalancer aggressive — 9:35 AM ET Mondays only (weekly cadence)
+35 9 * * 1 /Users/zl/works/stock/scripts/cron-wrapper.sh rebalancer.py --tranche aggressive >> /Users/zl/works/stock/.cache/rebalance.log 2>&1
+
+# Executor — every 10 min, 10:00–15:50 ET weekdays
+*/10 10-15 * * 1-5 /Users/zl/works/stock/scripts/cron-wrapper.sh executor.py >> /Users/zl/works/stock/.cache/executor.log 2>&1
