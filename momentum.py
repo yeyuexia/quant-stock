@@ -81,6 +81,7 @@ def generate_signals() -> dict:
 
     Returns dict with:
       - 'holdings': list of (ticker, weight) to hold
+      - 'holdings_ranked': list of (ticker, weight, rank) — rank 1 = best
       - 'ranking': full ranking DataFrame
       - 'regime': 'risk-on' or 'risk-off'
     """
@@ -88,24 +89,28 @@ def generate_signals() -> dict:
     eligible = ranking[ranking["above_sma200"]].head(MOMENTUM_TOP_N)
 
     if len(eligible) == 0:
-        # Full risk-off: everything to safe haven
         return {
             "holdings": [(SAFE_HAVEN, 1.0)],
+            "holdings_ranked": [(SAFE_HAVEN, 1.0, 1)],
             "ranking": ranking,
             "regime": "risk-off",
         }
 
-    # Equal-weight the eligible ETFs
     w = 1.0 / MOMENTUM_TOP_N
     holdings = [(row["ticker"], w) for _, row in eligible.iterrows()]
-    # If fewer than TOP_N eligible, allocate remainder to safe haven
+    holdings_ranked = [
+        (row["ticker"], w, idx + 1)
+        for idx, (_, row) in enumerate(eligible.iterrows())
+    ]
     remainder = 1.0 - w * len(eligible)
     if remainder > 0.01:
         holdings.append((SAFE_HAVEN, remainder))
+        holdings_ranked.append((SAFE_HAVEN, remainder, len(eligible) + 1))
 
     regime = "risk-on" if len(eligible) >= MOMENTUM_TOP_N else "mixed"
     return {
         "holdings": holdings,
+        "holdings_ranked": holdings_ranked,
         "ranking": ranking,
         "regime": regime,
     }
