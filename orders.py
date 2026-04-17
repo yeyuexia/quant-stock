@@ -184,3 +184,70 @@ def sync_state(broker, *, alerts: Optional[list] = None) -> PortfolioSnapshot:
     # Append an equity snapshot
     _append_daily_log(f"{snap.synced_at},EQUITY,{snap.equity:.2f},{snap.cash:.2f}")
     return snap
+
+
+# ── Stop / trailing-stop percentages per tranche ────────────────
+
+def _tranche_stops(tranche: str) -> tuple[float, float]:
+    if tranche == "aggressive":
+        ap = config.AGGRESSIVE_PARAMS
+        return ap["stop_loss_pct"], ap["trailing_stop_pct"]
+    return config.STOP_LOSS_PCT, config.TRAILING_STOP_PCT
+
+
+# ── reconcile_to_targets ────────────────────────────────────────
+
+_REBALANCE_BAND_PCT = 0.05   # ignore drifts smaller than 5% of tranche capital
+
+
+def reconcile_to_targets(
+    targets: dict[str, float],
+    *,
+    tranche: str,
+    snapshot: PortfolioSnapshot,
+    tranche_capital: float,
+    today: dt.date,
+) -> OrderPlan:
+    """Diff target weights against current positions for the given tranche.
+
+    targets: {symbol: fraction_of_tranche_capital}. Fractions summing to <1 leave the
+    remainder in cash. Unknown-tranche positions are ignored (neither sold nor counted).
+    Drifts smaller than `_REBALANCE_BAND_PCT * tranche_capital` are treated as holds.
+    """
+    stop_pct, trail_pct = _tranche_stops(tranche)
+    held = {p["symbol"]: p for p in snapshot.by_tranche(tranche)}
+
+    target_dollars = {sym: frac * tranche_capital for sym, frac in targets.items()}
+    band = tranche_capital * _REBALANCE_BAND_PCT
+
+    buys: list[OrderIntent] = []
+    sells: list[OrderIntent] = []
+    holds: list[str] = []
+
+    all_symbols = set(target_dollars) | set(held)
+    for sym in sorted(all_symbols):
+        current_mv = held.get(sym, {}).get("market_value", 0.0)
+        target_mv = target_dollars.get(sym, 0.0)
+        diff = target_mv - current_mv
+
+        if abs(diff) < band and sym in held:
+            holds.append(sym)
+            continue
+
+        reason = f"{tranche} rebalance"
+        if diff > 0:
+            cid = _make_cid(tranche, "rebalance", sym, today)
+            buys.append(OrderIntent(
+                symbol=sym, notional=round(diff, 2), side="buy",
+                reason=reason, tranche=tranche, client_order_id=cid,
+                stop_pct=stop_pct, trail_pct=trail_pct,
+            ))
+        elif diff < 0:
+            # Selling: notional is the amount to reduce by.
+            cid = _make_cid(tranche, "rebalance-sell", sym, today)
+            sells.append(OrderIntent(
+                symbol=sym, notional=round(abs(diff), 2), side="sell",
+                reason=reason, tranche=tranche, client_order_id=cid,
+            ))
+
+    return OrderPlan(buys=buys, sells=sells, holds=holds)

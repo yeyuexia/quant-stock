@@ -117,3 +117,101 @@ def test_sync_state_flags_missing_bracket(tmp_path, monkeypatch):
     alerts: list = []
     sync_state(fb, alerts=alerts)
     assert any("bracket" in a.lower() and "SPY" in a for a in alerts)
+
+
+# ── reconcile_to_targets ────────────────────────────────────────
+
+def _snap(positions, cash=10_000, equity=100_000):
+    from orders import PortfolioSnapshot
+    return PortfolioSnapshot(
+        synced_at="2026-04-17T14:00:00+00:00",
+        alpaca_env="paper",
+        cash=cash, equity=equity,
+        positions=positions,
+        tranches={"core": {"last_rebalance": None},
+                  "aggressive": {"last_rebalance": None}},
+    )
+
+
+def test_reconcile_opens_new_positions(tmp_path, monkeypatch):
+    from orders import reconcile_to_targets
+
+    snap = _snap(positions=[], cash=90_000, equity=90_000)
+    plan = reconcile_to_targets(
+        {"SPY": 0.5, "QQQ": 0.5},
+        tranche="core",
+        snapshot=snap,
+        tranche_capital=90_000,
+        today=dt.date(2026, 4, 17),
+    )
+    assert len(plan.buys) == 2
+    buy_syms = sorted(i.symbol for i in plan.buys)
+    assert buy_syms == ["QQQ", "SPY"]
+    assert all(i.notional == 45_000 for i in plan.buys)
+    assert all(i.tranche == "core" for i in plan.buys)
+    assert all(i.stop_pct is not None and i.trail_pct is not None for i in plan.buys)
+
+
+def test_reconcile_closes_removed_positions(tmp_path, monkeypatch):
+    from orders import reconcile_to_targets
+
+    positions = [
+        {"symbol": "TSLA", "shares": 10, "avg_entry": 300,
+         "market_value": 3000, "unrealized_pl": 0,
+         "tranche": "core", "entry_reason": "x",
+         "stop_order_id": None, "trail_order_id": None},
+    ]
+    snap = _snap(positions=positions)
+    plan = reconcile_to_targets(
+        {"SPY": 1.0},
+        tranche="core", snapshot=snap, tranche_capital=10_000,
+        today=dt.date(2026, 4, 17),
+    )
+    sell_syms = [i.symbol for i in plan.sells]
+    assert sell_syms == ["TSLA"]
+    assert plan.sells[0].notional == 3000
+
+
+def test_reconcile_ignores_unknown_tranche(tmp_path, monkeypatch):
+    from orders import reconcile_to_targets
+
+    positions = [
+        {"symbol": "NVDA", "shares": 5, "avg_entry": 100,
+         "market_value": 520, "unrealized_pl": 0,
+         "tranche": "unknown", "entry_reason": "external",
+         "stop_order_id": None, "trail_order_id": None},
+    ]
+    snap = _snap(positions=positions)
+    plan = reconcile_to_targets(
+        {"SPY": 1.0},
+        tranche="core", snapshot=snap, tranche_capital=10_000,
+        today=dt.date(2026, 4, 17),
+    )
+    # NVDA is unknown — should not be sold
+    assert all(i.symbol != "NVDA" for i in plan.sells)
+
+
+def test_reconcile_rebalance_within_tranche(tmp_path, monkeypatch):
+    from orders import reconcile_to_targets
+
+    positions = [
+        {"symbol": "SPY", "shares": 10, "avg_entry": 500,
+         "market_value": 6000, "unrealized_pl": 0,
+         "tranche": "core", "entry_reason": "x",
+         "stop_order_id": None, "trail_order_id": None},
+        {"symbol": "QQQ", "shares": 5, "avg_entry": 400,
+         "market_value": 2000, "unrealized_pl": 0,
+         "tranche": "core", "entry_reason": "x",
+         "stop_order_id": None, "trail_order_id": None},
+    ]
+    snap = _snap(positions=positions)
+    plan = reconcile_to_targets(
+        {"SPY": 0.4, "QQQ": 0.4, "IWM": 0.2},
+        tranche="core", snapshot=snap, tranche_capital=10_000,
+        today=dt.date(2026, 4, 17),
+    )
+    # Targets: SPY $4000 (down from $6000), QQQ $4000 (up from $2000), IWM $2000 new
+    got = {i.symbol: (i.side, i.notional) for i in plan.buys + plan.sells}
+    assert got["SPY"] == ("sell", 2000)
+    assert got["QQQ"] == ("buy", 2000)
+    assert got["IWM"] == ("buy", 2000)
