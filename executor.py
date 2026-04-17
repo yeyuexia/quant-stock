@@ -202,27 +202,6 @@ def _now_et() -> dt.datetime:
         return dt.datetime.utcnow() - dt.timedelta(hours=4)
 
 
-def main():
-    broker = Broker(env=config.ALPACA_ENV)
-    result = run_tick(broker=broker)
-    if result is None:
-        print("executor: no pending plan — exiting")
-        return
-    if result.halted:
-        print("executor: HALT file present — exiting")
-        return
-    if result.market_closed:
-        print("executor: market closed — exiting")
-        return
-    print(f"executor: tick complete "
-          f"(submitted={len(result.submitted)} would_submit={len(result.would_submit)} "
-          f"tripped={result.tripped_breakers})")
-
-
-if __name__ == "__main__":
-    main()
-
-
 def _slice_windows(slice_count: int) -> list:
     """Time-of-day anchors for each slice. ET, naive."""
     if slice_count <= 1:
@@ -426,3 +405,24 @@ def _process_eod(plan: PendingPlan, result: TickResult, *, broker):
                 f"EOD deferred at {fill_ratio * 100:.1f}% filled"
             )
             result.deferred.append(intent)
+
+
+def main():
+    broker = Broker(env=config.ALPACA_ENV)
+    result = run_tick(broker=broker)
+    if result is None:
+        print("executor: no pending plan — exiting")
+        return
+    if result.halted:
+        print("executor: HALT file present — exiting")
+        return
+    if result.market_closed:
+        print("executor: market closed — exiting")
+        return
+    print(f"executor: tick complete "
+          f"(submitted={len(result.submitted)} would_submit={len(result.would_submit)} "
+          f"tripped={result.tripped_breakers})")
+
+
+if __name__ == "__main__":
+    main()
