@@ -64,6 +64,12 @@ class FakeBroker:
     def is_market_open(self) -> bool:
         return self.market_open
 
+    def _latest_price(self, symbol: str) -> float:
+        p = self.latest_prices.get(symbol)
+        if p is None:
+            raise BrokerError(f"FakeBroker: no latest price seeded for {symbol}")
+        return p
+
     def latest_quote(self, symbol: str) -> tuple[float, float]:
         if symbol in self.latest_quotes:
             return self.latest_quotes[symbol]

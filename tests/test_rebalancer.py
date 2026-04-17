@@ -48,13 +48,89 @@ def test_rebalancer_skips_when_not_due(tmp_path, monkeypatch):
 
 
 def test_rebalancer_submits_when_forced(tmp_path, monkeypatch):
+    """Large orders (>= $500 threshold) now go to pending_plan, not direct-submit."""
+    from rebalancer import run
     _portfolio_cache(tmp_path, monkeypatch, None)
     _safety_paths(tmp_path, monkeypatch)
     monkeypatch.setattr("orders.LARGE_ORDER_THRESHOLD", 100_000)
-    from rebalancer import run
+    monkeypatch.setattr("pending_plan.PENDING_PLAN_PATH", str(tmp_path / "plan.json"))
+    import config as cfg
+    monkeypatch.setattr(cfg, "EXECUTOR_SHADOW_MODE", False)
+
+    import baseline as bl
+    monkeypatch.setattr(bl, "_fetch_spy", lambda: 480.0)
+    monkeypatch.setattr(bl, "_fetch_vix", lambda: 14.0)
+    monkeypatch.setattr(bl, "_fetch_macro_score", lambda: 0.0)
 
     fb = FakeBroker()
+    fb.set_latest_price("SPY", 480.0)
     result = run(tranche="core", dry_run=False, force=True, broker=fb,
                   target_builder=lambda: ({"SPY": 1.0}, 10_000))
-    assert len(result.submitted) == 1
-    assert result.submitted[0].symbol == "SPY"
+    # $10k SPY order >= $500 threshold → goes to pending_plan, not direct-submit
+    assert len(result.submitted) == 0
+    from pending_plan import load_plan
+    plan = load_plan()
+    assert plan is not None
+    assert any(s.intent.symbol == "SPY" for s in plan.intents)
+
+
+def test_rebalancer_writes_pending_plan_for_large_orders(tmp_path, monkeypatch):
+    import rebalancer, orders, config as cfg
+    from pending_plan import load_plan
+    from tests.fakes import FakeBroker
+
+    monkeypatch.setattr(orders, "HALT_PATH", str(tmp_path / "no_halt"))
+    monkeypatch.setattr(orders, "DAILY_TRADE_LOG", str(tmp_path / "log.json"))
+    monkeypatch.setattr(orders, "PENDING_ORDERS_PATH", str(tmp_path / "pend.json"))
+    monkeypatch.setattr(orders, "PORTFOLIO_PATH", str(tmp_path / "port.json"))
+    monkeypatch.setattr("pending_plan.PENDING_PLAN_PATH", str(tmp_path / "plan.json"))
+    monkeypatch.setattr(cfg, "EXECUTOR_SHADOW_MODE", False)
+
+    b = FakeBroker(cash=50_000.0, equity=100_000.0)
+    b.set_latest_price("SPY", 480.0)
+
+    def fake_target_builder():
+        return {"SPY": 0.20}, 90_000.0
+
+    import baseline as bl
+    monkeypatch.setattr(bl, "_fetch_spy", lambda: 480.0)
+    monkeypatch.setattr(bl, "_fetch_vix", lambda: 14.0)
+    monkeypatch.setattr(bl, "_fetch_macro_score", lambda: 0.12)
+
+    rebalancer.run(tranche="core", dry_run=False, force=True,
+                   broker=b, target_builder=fake_target_builder)
+
+    plan = load_plan()
+    assert plan is not None
+    assert plan.tranche == "core"
+    assert any(s.intent.symbol == "SPY" for s in plan.intents)
+    # SPY intent is $18K, well above direct-submit threshold → in plan, not market-submitted
+    assert len(b._submitted) == 0
+
+
+def test_rebalancer_direct_submits_tiny_orders(tmp_path, monkeypatch):
+    import rebalancer, orders, config as cfg
+    from tests.fakes import FakeBroker
+
+    monkeypatch.setattr(orders, "HALT_PATH", str(tmp_path / "no_halt"))
+    monkeypatch.setattr(orders, "DAILY_TRADE_LOG", str(tmp_path / "log.json"))
+    monkeypatch.setattr(orders, "PENDING_ORDERS_PATH", str(tmp_path / "pend.json"))
+    monkeypatch.setattr(orders, "PORTFOLIO_PATH", str(tmp_path / "port.json"))
+    monkeypatch.setattr("pending_plan.PENDING_PLAN_PATH", str(tmp_path / "plan.json"))
+
+    b = FakeBroker()
+    b.set_latest_price("SPY", 480.0)
+
+    def fake_target_builder():
+        return {"SPY": 0.003}, 100_000.0   # 0.3% × 100k = $300, below $500 threshold
+
+    import baseline as bl
+    monkeypatch.setattr(bl, "_fetch_spy", lambda: 480.0)
+    monkeypatch.setattr(bl, "_fetch_vix", lambda: 14.0)
+    monkeypatch.setattr(bl, "_fetch_macro_score", lambda: 0.0)
+
+    rebalancer.run(tranche="core", dry_run=False, force=True,
+                   broker=b, target_builder=fake_target_builder)
+
+    # Below threshold → submitted directly (market order via execute_plan)
+    assert len(b._submitted) == 1

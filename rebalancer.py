@@ -143,22 +143,34 @@ def run(
     if dry_run:
         return orders.ExecutionResult()
 
-    result = orders.execute_plan(plan, broker=broker, reason=f"{tranche} rebalance")
+    # Split plan into (direct-submit tiny orders) and (intraday-executor orders)
+    tiny_intents = []
+    intraday_intents = []
+    for i in (list(plan.buys) + list(plan.sells)):
+        if i.notional < config.PLANNER_DIRECT_SUBMIT_THRESHOLD:
+            tiny_intents.append(i)
+        else:
+            intraday_intents.append(i)
 
-    # Attach trailing stops to freshly-opened positions. Small sleep lets
-    # paper-account buys fill before we query positions.
+    tiny_plan = orders.OrderPlan(
+        buys=[i for i in tiny_intents if i.side == "buy"],
+        sells=[i for i in tiny_intents if i.side == "sell"],
+        holds=[],
+    )
+    result = orders.execute_plan(tiny_plan, broker=broker, reason=f"{tranche} rebalance (tiny)")
+
+    if intraday_intents:
+        _write_pending_plan(tranche, intraday_intents, broker=broker)
+
     if result.submitted:
         import time
         time.sleep(2)
-        trail_result = orders.ensure_trailing_stops(broker)
-        for o in trail_result.submitted:
-            result.submitted.append(o)
-        for pair in trail_result.skipped:
-            result.skipped.append(pair)
+        trail = orders.ensure_trailing_stops(broker)
+        result.submitted.extend(trail.submitted)
+        result.skipped.extend(trail.skipped)
 
-    # Only update last_rebalance if at least one order actually submitted.
-    # A run fully blocked by HALT or caps should not satisfy the cadence gate.
-    if result.submitted or result.queued:
+    # Cadence bump: commit today if either tiny submissions happened OR intraday plan written.
+    if result.submitted or result.queued or intraday_intents:
         cache = orders._load_portfolio_cache()
         cache.setdefault("tranches", {}).setdefault(tranche, {})["last_rebalance"] = \
             dt.date.today().isoformat()
@@ -193,6 +205,69 @@ def _print_result(result: orders.ExecutionResult):
     for i, msg in result.skipped:
         sym = i.symbol if i is not None else "?"
         print(f"  ✗ {sym}: {msg}")
+
+
+def _write_pending_plan(tranche, intents, *, broker):
+    """Enrich intents with tier/max_price/slice_count; capture baseline; persist."""
+    from baseline import capture_baseline
+    from planner import build_priced_intents, PricingContext
+    from pending_plan import PendingPlan, IntentState, write_plan
+
+    baseline = capture_baseline()
+
+    ranks = {}
+    asset_class = {}
+    decision_prices = {}
+    symbols = [i.symbol for i in intents]
+
+    try:
+        from momentum import generate_signals
+        sig = generate_signals()
+        for ticker, _w, rank in sig.get("holdings_ranked", []):
+            if ticker in symbols:
+                ranks[ticker] = rank
+                asset_class[ticker] = "etf"
+    except Exception:
+        pass
+
+    try:
+        from screener import screen_stocks
+        df = screen_stocks()
+        if df is not None and not df.empty:
+            for _, row in df.iterrows():
+                t = row["ticker"]
+                if t in symbols:
+                    ranks[t] = int(row["rank"])
+                    asset_class[t] = "stock"
+    except Exception:
+        pass
+
+    for s in symbols:
+        asset_class.setdefault(s, "etf")
+        ranks.setdefault(s, 99)
+
+    for s in symbols:
+        try:
+            decision_prices[s] = broker._latest_price(s)
+        except Exception:
+            decision_prices[s] = 0.0
+
+    ctx = PricingContext(
+        ranks=ranks, asset_class=asset_class,
+        decision_prices=decision_prices, tranche=tranche,
+    )
+    priced = build_priced_intents(intents, ctx)
+
+    plan = PendingPlan(
+        plan_id=f"{tranche}-{dt.date.today().isoformat()}",
+        tranche=tranche,
+        created_at=dt.datetime.now(dt.timezone.utc),
+        baseline=baseline,
+        intents=[IntentState(intent=i) for i in priced],
+    )
+    write_plan(plan)
+    print(f"\n── Pending plan written: {len(priced)} intents, baseline SPY={baseline.spy:.2f} "
+          f"VIX={baseline.vix:.2f} macro={baseline.macro_score:+.3f}")
 
 
 def main():
