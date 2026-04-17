@@ -256,7 +256,15 @@ def _write_pending_plan(tranche, intents, *, broker):
 
     for s in symbols:
         asset_class.setdefault(s, "etf")
-        ranks.setdefault(s, 99)
+        # Aggressive-tranche picks are always top-N by their own leveraged-ETF
+        # momentum scoring (_build_aggressive_targets); they don't appear in
+        # momentum.generate_signals' holdings_ranked. Treat every aggressive
+        # pick as rank 1 so it gets HIGH tier with the wider tolerance that
+        # leveraged-ETF volatility warrants.
+        if tranche == "aggressive":
+            ranks[s] = 1
+        else:
+            ranks.setdefault(s, 99)
 
     missing_prices = []
     for s in symbols:

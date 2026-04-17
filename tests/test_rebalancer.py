@@ -256,3 +256,38 @@ def test_rebalancer_same_tranche_rerun_replaces_not_duplicates(tmp_path, monkeyp
     # Core's earlier SPY intent should be gone; replaced with QQQ.
     assert "SPY" not in symbols
     assert "QQQ" in symbols
+
+
+def test_aggressive_tranche_picks_get_high_tier(tmp_path, monkeypatch):
+    """Aggressive-tranche picks (leveraged ETFs) should be HIGH tier with
+    wider tolerance, not default MED. They aren't in momentum.generate_signals'
+    holdings_ranked, so _write_pending_plan must assign rank=1 directly."""
+    import rebalancer, orders, config as cfg
+    from pending_plan import load_plan
+    from tests.fakes import FakeBroker
+
+    monkeypatch.setattr(orders, "HALT_PATH", str(tmp_path / "no_halt"))
+    monkeypatch.setattr(orders, "DAILY_TRADE_LOG", str(tmp_path / "log.json"))
+    monkeypatch.setattr(orders, "PENDING_ORDERS_PATH", str(tmp_path / "pend.json"))
+    monkeypatch.setattr(orders, "PORTFOLIO_PATH", str(tmp_path / "port.json"))
+    monkeypatch.setattr("pending_plan.PENDING_PLAN_PATH", str(tmp_path / "plan.json"))
+    monkeypatch.setattr(cfg, "EXECUTOR_SHADOW_MODE", False)
+
+    import baseline as bl
+    monkeypatch.setattr(bl, "_fetch_spy", lambda: 480.0)
+    monkeypatch.setattr(bl, "_fetch_vix", lambda: 14.0)
+    monkeypatch.setattr(bl, "_fetch_macro_score", lambda: 0.0)
+
+    b = FakeBroker(cash=100_000.0, equity=100_000.0)
+    b.set_latest_price("SOXL", 30.0)
+    b.set_latest_price("LABU", 15.0)
+
+    rebalancer.run(
+        tranche="aggressive", dry_run=False, force=True, broker=b,
+        target_builder=lambda: ({"SOXL": 0.50, "LABU": 0.50}, 10_000.0),
+    )
+
+    plan = load_plan()
+    by_sym = {s.intent.symbol: s.intent for s in plan.intents}
+    assert by_sym["SOXL"].tier == "HIGH"
+    assert by_sym["LABU"].tier == "HIGH"
