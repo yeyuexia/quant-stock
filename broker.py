@@ -80,3 +80,67 @@ class Broker:
             secret_key=secret,
             paper=(env == "paper"),
         )
+
+    def get_account(self) -> AccountSnapshot:
+        try:
+            a = self._client.get_account()
+        except Exception as e:
+            raise BrokerError(f"get_account failed: {e}") from e
+        return AccountSnapshot(
+            cash=float(a.cash),
+            equity=float(a.equity),
+            buying_power=float(a.buying_power),
+        )
+
+    def get_positions(self) -> list[Position]:
+        try:
+            raw = self._client.get_all_positions()
+        except Exception as e:
+            raise BrokerError(f"get_positions failed: {e}") from e
+        return [
+            Position(
+                symbol=p.symbol,
+                qty=float(p.qty),
+                avg_entry=float(p.avg_entry_price),
+                market_value=float(p.market_value),
+                unrealized_pl=float(p.unrealized_pl),
+            )
+            for p in raw
+        ]
+
+    def get_open_orders(self) -> list[Order]:
+        from alpaca.trading.requests import GetOrdersRequest
+        from alpaca.trading.enums import QueryOrderStatus
+        try:
+            raw = self._client.get_orders(
+                filter=GetOrdersRequest(status=QueryOrderStatus.OPEN, nested=True)
+            )
+        except Exception as e:
+            raise BrokerError(f"get_open_orders failed: {e}") from e
+        out: list[Order] = []
+        for o in raw:
+            out.append(_to_order(o))
+            # Bracket "legs" (stop, trailing) come nested under the parent.
+            for leg in (getattr(o, "legs", None) or []):
+                out.append(_to_order(leg, parent_id=o.id))
+        return out
+
+    def is_market_open(self) -> bool:
+        try:
+            return bool(self._client.get_clock().is_open)
+        except Exception as e:
+            raise BrokerError(f"is_market_open failed: {e}") from e
+
+
+def _to_order(o, parent_id: Optional[str] = None) -> Order:
+    return Order(
+        id=str(o.id),
+        symbol=o.symbol,
+        side=str(o.side.value if hasattr(o.side, "value") else o.side).lower(),
+        type=str(o.type.value if hasattr(o.type, "value") else o.type).lower(),
+        qty=float(o.qty) if o.qty is not None else None,
+        notional=float(o.notional) if getattr(o, "notional", None) is not None else None,
+        status=str(o.status.value if hasattr(o.status, "value") else o.status).lower(),
+        client_order_id=o.client_order_id or "",
+        parent_order_id=parent_id,
+    )
