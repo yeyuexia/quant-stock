@@ -12,6 +12,7 @@ import sys
 import numpy as np
 import pandas as pd
 from tabulate import tabulate
+import config
 
 from config import (INITIAL_CAPITAL, MAX_POSITION_PCT, CASH_BUFFER_PCT, MOMENTUM_TOP_N,
                      PORTFOLIO_MODE, ETF_ALLOCATION_PCT, STOCK_ALLOCATION_PCT,
@@ -145,135 +146,6 @@ def run_stock_screener():
                             "Div%", "RevGr", "3M Ret", "Score"],
                    tablefmt="simple"))
     return df
-
-
-def run_portfolio_construction(signals, screen_df, macro=None):
-    section("PORTFOLIO CONSTRUCTION")
-    capital = INITIAL_CAPITAL
-
-    # ── Two-Tranche Split ────────────────────────────────────────
-    aggressive_capital = capital * AGGRESSIVE_TRANCHE_PCT          # $10,000
-    core_capital = capital * (1 - AGGRESSIVE_TRANCHE_PCT)           # $90,000
-
-    print(f"  Total Capital:        {fmt_dollar(capital)}")
-    print(f"  ├─ Core tranche:      {fmt_dollar(core_capital)} ({(1-AGGRESSIVE_TRANCHE_PCT)*100:.0f}%)  ← balanced ETF + stock screen")
-    print(f"  └─ Aggressive tranche:{fmt_dollar(aggressive_capital)} ({AGGRESSIVE_TRANCHE_PCT*100:.0f}%)  ← leveraged ETF momentum")
-
-    # ── CORE TRANCHE ─────────────────────────────────────────────
-    print(f"\n  ── Core Tranche ({fmt_dollar(core_capital)}) ──")
-    cash_reserve = core_capital * CASH_BUFFER_PCT
-    investable = core_capital - cash_reserve
-
-    # Macro adjustment: scale equity allocation based on macro regime
-    macro_adj = 1.0
-    if macro:
-        macro_adj = macro_risk_adjustment(1.0)
-
-    adj_etf_pct = ETF_ALLOCATION_PCT * macro_adj
-    adj_stock_pct = STOCK_ALLOCATION_PCT * macro_adj
-    safe_pct = 1.0 - adj_etf_pct - adj_stock_pct
-
-    etf_alloc = investable * adj_etf_pct
-    stock_alloc = investable * adj_stock_pct
-    safe_alloc = investable * safe_pct
-
-    print(f"  Cash Reserve:     {fmt_dollar(cash_reserve)} ({CASH_BUFFER_PCT*100:.0f}%)")
-    if macro_adj < 1.0:
-        print(f"  Macro Adjustment: {macro_adj*100:.0f}% (reduced due to macro conditions)")
-    print(f"  ETF Allocation:   {fmt_dollar(etf_alloc)} ({adj_etf_pct*100:.0f}%)")
-    print(f"  Stock Allocation: {fmt_dollar(stock_alloc)} ({adj_stock_pct*100:.0f}%)")
-    if safe_pct > 0.01:
-        print(f"  Safety (BIL):     {fmt_dollar(safe_alloc)} ({safe_pct*100:.0f}%) ← macro hedge")
-
-    # ETF positions
-    print(f"\n  ── Core: ETF Positions ──")
-    etf_positions = []
-    for ticker, weight in signals["holdings"]:
-        dollars = etf_alloc * weight
-        try:
-            from data import fetch_info
-            info = fetch_info(ticker)
-            price = info.get("currentPrice") or info.get("regularMarketPrice", 100)
-        except Exception:
-            price = 100
-        shares = int(dollars / price) if price > 0 else 0
-        actual_cost = shares * price
-        etf_positions.append((ticker, shares, price, actual_cost))
-        print(f"    {ticker:6s}  {shares:4d} shares × ${price:>8.2f} = ${actual_cost:>8.2f}")
-
-    # Stock positions
-    print(f"\n  ── Core: Stock Positions ──")
-    stock_positions = []
-    if screen_df is not None and not screen_df.empty:
-        remaining_budget = stock_alloc
-        for _, row in screen_df.iterrows():
-            if len(stock_positions) >= 3:
-                break
-            price = row["price"] if row["price"] else 0
-            if price <= 0 or price > remaining_budget:
-                continue
-            shares = int(remaining_budget / max(2, 3 - len(stock_positions)) / price)
-            if shares == 0:
-                shares = 1
-            if shares * price > remaining_budget:
-                continue
-            actual_cost = shares * price
-            stock_positions.append((row["ticker"], shares, price, actual_cost))
-            remaining_budget -= actual_cost
-            print(f"    {row['ticker']:6s}  {shares:4d} shares × ${price:>8.2f} = ${actual_cost:>8.2f}")
-
-    core_invested = sum(x[3] for x in etf_positions) + sum(x[3] for x in stock_positions)
-
-    # ── AGGRESSIVE TRANCHE ────────────────────────────────────────
-    print(f"\n  ── Aggressive Tranche ({fmt_dollar(aggressive_capital)}) ──")
-    agg_stop = AGGRESSIVE_PARAMS["stop_loss_pct"]
-    agg_trail = AGGRESSIVE_PARAMS["trailing_stop_pct"]
-    agg_top_n = AGGRESSIVE_PARAMS["momentum_top_n"]
-    agg_rebal = AGGRESSIVE_PARAMS["rebalance_days"]
-    agg_cash = aggressive_capital * AGGRESSIVE_PARAMS["cash_buffer_pct"]
-    agg_investable = aggressive_capital - agg_cash
-
-    print(f"  Strategy:  Top-{agg_top_n} leveraged ETF momentum  |  {agg_rebal}-day rotation")
-    print(f"  Stop-Loss: {agg_stop*100:.0f}%  |  Trailing Stop: {agg_trail*100:.0f}%  |  Cash reserve: {fmt_dollar(agg_cash)}")
-
-    agg_positions = []
-    # Pull leveraged ETF signals from the same momentum engine
-    lev_holdings = [(t, w) for t, w in signals.get("leveraged_holdings", [])
-                    if t not in ("BIL", "SHY")]
-    if not lev_holdings:
-        # Fall back: split equally across configured leveraged ETFs in top signals
-        from config import _ETF_LEVERAGED
-        lev_holdings = [(t, 1.0 / agg_top_n) for t, _ in signals["holdings"]
-                        if t in _ETF_LEVERAGED][:agg_top_n]
-    if not lev_holdings:
-        print(f"    No leveraged ETF signals — parked in BIL (safe haven)")
-    else:
-        per_pos = agg_investable / len(lev_holdings)
-        for ticker, _ in lev_holdings[:agg_top_n]:
-            try:
-                from data import fetch_info
-                info = fetch_info(ticker)
-                price = info.get("currentPrice") or info.get("regularMarketPrice", 100)
-            except Exception:
-                price = 100
-            shares = int(per_pos / price) if price > 0 else 0
-            actual_cost = shares * price
-            agg_positions.append((ticker, shares, price, actual_cost))
-            pct_of_tranche = actual_cost / aggressive_capital * 100
-            print(f"    {ticker:6s}  {shares:4d} shares × ${price:>8.2f} = ${actual_cost:>8.2f}  ({pct_of_tranche:.0f}% of tranche)")
-
-    agg_invested = sum(x[3] for x in agg_positions)
-
-    # ── Summary ───────────────────────────────────────────────────
-    total_invested = core_invested + agg_invested
-    remaining_cash = capital - total_invested
-    print(f"\n  {'─'*50}")
-    print(f"  Core invested:        {fmt_dollar(core_invested)}  ({core_invested/capital*100:.1f}%)")
-    print(f"  Aggressive invested:  {fmt_dollar(agg_invested)}  ({agg_invested/capital*100:.1f}%)")
-    print(f"  Total Invested:       {fmt_dollar(total_invested)}  ({total_invested/capital*100:.1f}%)")
-    print(f"  Remaining Cash:       {fmt_dollar(remaining_cash)}")
-
-    return etf_positions, stock_positions, agg_positions
 
 
 def run_risk_analysis(signals):
@@ -465,8 +337,24 @@ def main():
     # 2. Stock screener
     screen_df = run_stock_screener()
 
-    # 3. Portfolio construction (macro-adjusted)
-    run_portfolio_construction(signals, screen_df, macro)  # returns (etf, stocks, aggressive)
+    # 3. Current holdings (read-only view from Alpaca)
+    from broker import Broker, BrokerError
+    try:
+        broker = Broker(env=config.ALPACA_ENV if hasattr(config, "ALPACA_ENV") else "paper")
+        acc = broker.get_account()
+        positions = broker.get_positions()
+        section("CURRENT ALPACA HOLDINGS")
+        print(f"  Env:    {broker.env}")
+        print(f"  Cash:   ${acc.cash:,.2f}")
+        print(f"  Equity: ${acc.equity:,.2f}")
+        for p in positions:
+            pnl = p.unrealized_pl
+            icon = "▲" if pnl >= 0 else "▼"
+            print(f"    {p.symbol:6s}  {p.qty:>8.2f} × ${p.avg_entry:>8.2f} = "
+                  f"${p.market_value:>10,.2f}  {icon} ${pnl:+,.2f}")
+    except (BrokerError, Exception) as e:
+        section("CURRENT ALPACA HOLDINGS")
+        print(f"  (skipped: {e})")
 
     # 4. Risk analysis
     run_risk_analysis(signals)
@@ -478,11 +366,10 @@ def main():
     run_backtest()
 
     section("NEXT STEPS")
-    print("  1. Review the recommended allocation above")
-    print("  2. Place orders through your broker")
-    print("  3. Set stop-loss orders at -8% per position")
-    print("  4. Re-run this system monthly to rebalance")
-    print("  5. Monitor regime changes (risk-on → risk-off)")
+    print("  Recommendations above are read-only. To act on them:")
+    print(f"    python3 rebalancer.py --tranche core --dry-run")
+    print(f"    python3 rebalancer.py --tranche aggressive --dry-run")
+    print(f"    # remove --dry-run when ready")
     print()
 
 
