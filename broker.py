@@ -283,6 +283,23 @@ class Broker:
             raise BrokerError(f"submit_trailing_stop({symbol}) failed: {e}") from e
         return _to_order(o)
 
+    def get_filled_notional(self, client_order_id: str) -> float:
+        """Return filled notional (filled_qty × filled_avg_price) for the order.
+        Returns 0.0 if order unknown or unfilled. Never raises.
+        """
+        try:
+            o = self._client.get_order_by_client_order_id(client_order_id)
+        except Exception:
+            return 0.0
+        fq = getattr(o, "filled_qty", None)
+        fap = getattr(o, "filled_avg_price", None)
+        if fq is not None and fap is not None:
+            try:
+                return float(fq) * float(fap)
+            except (TypeError, ValueError):
+                return 0.0
+        return 0.0
+
     def cancel_order(self, order_id: str) -> None:
         try:
             self._client.cancel_order_by_id(order_id)

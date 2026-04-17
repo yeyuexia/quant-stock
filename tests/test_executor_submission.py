@@ -138,3 +138,38 @@ def test_sell_side_uses_min_price_floor(tmp_path, monkeypatch):
     write_plan(_plan(sell))
     result = executor.run_tick(broker=b2)
     assert len(result.submitted) == 1
+
+
+def test_partial_fill_is_credited_before_cancel(tmp_path, monkeypatch):
+    """If the prior slice partially filled, notional_filled must reflect it
+    before the next slice is sized. Otherwise we over-buy."""
+    import executor
+    from broker import Order
+    _setup(tmp_path, monkeypatch, now_et=(14, 30))  # past second window of a 2-slice plan
+
+    intent = _base_intent(slice_count=2, notional=1000.0)
+    plan = _plan(intent, slices_submitted=1, last_cid="prior-cid")
+    write_plan(plan)
+
+    b = FakeBroker()
+    b.set_latest_quote("SPY", bid=479.95, ask=480.05)
+
+    prior = Order(id="ord-prior", symbol="SPY", side="buy", type="limit",
+                  qty=None, notional=500.0, status="accepted",
+                  client_order_id="prior-cid", parent_order_id=None)
+    b.seed_open_order(prior)
+    # Partial fill: $300 of the $500 slice filled before cancel
+    b.set_fill("prior-cid", 300.0)
+
+    monkeypatch.setattr(executor, "_fetch_current_observations",
+                        lambda p, b: _Obs(symbol_prices={"SPY": 480.0}))
+    result = executor.run_tick(broker=b)
+
+    loaded = load_plan()
+    # notional_filled should now reflect the $300 partial fill
+    assert loaded.intents[0].notional_filled == 300.0
+    # Next slice should be sized for the remaining $700 (1 slice left)
+    submitted = result.submitted
+    assert len(submitted) == 1
+    # The submitted slice notional should be ~700 (1000 - 300 remaining, 1 slice left)
+    assert abs(submitted[0].notional - 700.0) < 1.0

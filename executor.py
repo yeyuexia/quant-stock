@@ -265,10 +265,10 @@ def _process_slices(plan: PendingPlan, obs, result: TickResult, *, broker):
             continue
 
         if state.last_client_order_id:
+            prior_filled = _broker_filled_notional(broker, state.last_client_order_id)
+            state.notional_filled += prior_filled
             _cancel_prior(broker, state.last_client_order_id, result)
             state.last_client_order_id = None
-
-        state.notional_filled = _observed_fill(broker, state)
 
         if state.notional_filled >= intent.notional * 0.95:
             state.status = "done"
@@ -360,9 +360,12 @@ def _cancel_prior(broker, client_order_id: str, result: TickResult):
         result.notes.append(f"cancel_order({client_order_id}) failed: {e}")
 
 
-def _observed_fill(broker, state) -> float:
-    """Best-effort observed fill. For v1, trust the local counter."""
-    return state.notional_filled
+def _broker_filled_notional(broker, client_order_id: str) -> float:
+    """Safely query the broker for a prior order's filled notional."""
+    try:
+        return float(broker.get_filled_notional(client_order_id))
+    except Exception:
+        return 0.0
 
 
 def _notify_breakers(result: TickResult, plan: PendingPlan):
@@ -410,6 +413,7 @@ def _process_eod(plan: PendingPlan, result: TickResult, *, broker):
         if state.status != "active":
             continue
         if state.last_client_order_id:
+            state.notional_filled += _broker_filled_notional(broker, state.last_client_order_id)
             _cancel_prior(broker, state.last_client_order_id, result)
             state.last_client_order_id = None
         intent = state.intent

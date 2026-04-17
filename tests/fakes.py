@@ -29,6 +29,7 @@ class FakeBroker:
     _seen_cids: set[str] = field(default_factory=set)
     _id_gen: itertools.count = field(default_factory=lambda: itertools.count(1))
     _canceled: list[str] = field(default_factory=list)
+    _fills: dict = field(default_factory=dict)   # client_order_id → filled notional
     _fail_on_submit: Optional[Exception] = None
 
     # ── arrange helpers ─────────────────────────────────────────
@@ -47,6 +48,9 @@ class FakeBroker:
 
     def set_latest_quote(self, symbol: str, bid: float, ask: float):
         self.latest_quotes[symbol] = (bid, ask)
+
+    def set_fill(self, client_order_id: str, filled_notional: float):
+        self._fills[client_order_id] = filled_notional
 
     def fail_next_submit(self, exc: Exception):
         self._fail_on_submit = exc
@@ -94,6 +98,9 @@ class FakeBroker:
     def submit_trailing_stop(self, symbol, *, qty, trail_percent, client_order_id):
         return self._submit(symbol, notional=None, qty=qty, side="sell",
                              cid=client_order_id, type_="trailing_stop")
+
+    def get_filled_notional(self, client_order_id: str) -> float:
+        return self._fills.get(client_order_id, 0.0)
 
     def cancel_order(self, order_id: str) -> None:
         self._open_orders = [o for o in self._open_orders if o.id != order_id]
