@@ -64,6 +64,7 @@ def run_tick(*, broker) -> Optional[TickResult]:
     _process_breakers(plan, obs, result)
     _process_slices(plan, obs, result, broker=broker)
     _process_eod(plan, result, broker=broker)
+    _notify_breakers(result, plan)
 
     write_plan(plan)
     return result
@@ -362,6 +363,38 @@ def _cancel_prior(broker, client_order_id: str, result: TickResult):
 def _observed_fill(broker, state) -> float:
     """Best-effort observed fill. For v1, trust the local counter."""
     return state.notional_filled
+
+
+def _notify_breakers(result: TickResult, plan: PendingPlan):
+    """Append one notification per tripped breaker to the Telegram notify file."""
+    import json
+    if not result.tripped_breakers:
+        return
+    path = getattr(config, "TELEGRAM_NOTIFY_PATH", None)
+    if not path:
+        return
+
+    existing = []
+    if os.path.exists(path):
+        try:
+            with open(path) as f:
+                existing = json.load(f)
+        except Exception:
+            existing = []
+
+    for r in result.tripped_breakers:
+        existing.append({
+            "ts": dt.datetime.now(dt.timezone.utc).isoformat(),
+            "plan_id": plan.plan_id,
+            "breaker": r.breaker,
+            "scope": r.scope,
+            "message": r.message,
+            "aborted": [i.symbol for i in result.aborted_intents],
+        })
+
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "w") as f:
+        json.dump(existing, f, indent=2)
 
 
 def _process_eod(plan: PendingPlan, result: TickResult, *, broker):

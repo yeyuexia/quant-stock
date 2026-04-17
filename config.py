@@ -261,3 +261,5 @@ DEFENSIVE_SYMBOLS = {"BIL", "SHY", "IEF", "TLT"}
 # Pending plan persistence
 PENDING_PLAN_PATH = os.path.join(os.path.dirname(__file__), ".cache", "pending_plan.json")
 NEWS_SHOCK_LOG    = os.path.join(os.path.dirname(__file__), ".cache", "news_shock_log.csv")
+TELEGRAM_NOTIFY_PATH = os.path.join(os.path.dirname(__file__), ".cache",
+                                    "telegram_notifications.json")
