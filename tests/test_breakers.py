@@ -152,3 +152,42 @@ def test_macro_flip_ignores_improvement():
                   news_cursor_at=dt.datetime(2026, 4, 17, tzinfo=dt.timezone.utc))
     result = check_macro_flip(bl, macro_now=0.5)
     assert result.tripped is False
+
+
+def test_news_shock_logs_every_hit_even_if_not_tripped(tmp_path, monkeypatch):
+    """Per spec §6: every keyword hit is logged regardless of corroboration."""
+    import news_shock
+    log_path = tmp_path / "news_log.csv"
+    monkeypatch.setattr(news_shock, "NEWS_SHOCK_LOG", str(log_path))
+
+    bl = Baseline(spy=480.0, vix=14.0, macro_score=0.0,
+                  news_cursor_at=dt.datetime(2026, 4, 17, tzinfo=dt.timezone.utc))
+    hits = [NewsHit(title="Trump floats tariff idea", source="yahoo",
+                    ts=dt.datetime(2026, 4, 17, 14, tzinfo=dt.timezone.utc),
+                    matched="tariff")]
+    # No SPY corroboration → does NOT trip, but MUST log
+    result = check_news_shock(baseline=bl, hits=hits,
+                              spy_now=479.9, spy_15min_ago=479.0)
+    assert result.tripped is False
+    assert log_path.exists()
+    content = log_path.read_text()
+    assert "Trump floats tariff idea" in content
+    assert "False" in content  # corroborated column
+
+
+def test_news_shock_logs_hits_as_corroborated_when_tripped(tmp_path, monkeypatch):
+    import news_shock
+    log_path = tmp_path / "news_log.csv"
+    monkeypatch.setattr(news_shock, "NEWS_SHOCK_LOG", str(log_path))
+
+    bl = Baseline(spy=480.0, vix=14.0, macro_score=0.0,
+                  news_cursor_at=dt.datetime(2026, 4, 17, tzinfo=dt.timezone.utc))
+    hits = [NewsHit(title="Fed surprise rate hike", source="yahoo",
+                    ts=dt.datetime(2026, 4, 17, 14, tzinfo=dt.timezone.utc),
+                    matched="fed")]
+    result = check_news_shock(baseline=bl, hits=hits,
+                              spy_now=476.0, spy_15min_ago=479.0)
+    assert result.tripped is True
+    content = log_path.read_text()
+    assert "Fed surprise rate hike" in content
+    assert "True" in content

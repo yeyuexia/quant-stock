@@ -113,7 +113,14 @@ def check_news_shock(
 
     move = abs(spy_now - spy_15min_ago) / spy_15min_ago
     threshold = config.CIRCUIT_BREAKERS["news_corroboration_pct"]
-    if move < threshold:
+    tripped = move >= threshold
+
+    # Audit log — every hit, regardless of corroboration (spec §6)
+    from news_shock import log_hit
+    for h in hits:
+        log_hit(h, corroborated=tripped)
+
+    if not tripped:
         return BreakerResult(
             breaker="D", tripped=False, scope="none",
             message=f"{len(hits)} news hit(s) but SPY 15min move "
