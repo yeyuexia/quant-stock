@@ -40,3 +40,31 @@ def test_missing_keys_raises(monkeypatch):
 def test_bad_env_raises():
     with pytest.raises(ConfigError, match="env"):
         Broker(env="demo")
+
+
+def test_submit_limit_constructs_limit_order_request(monkeypatch):
+    """broker.submit_limit passes limit_price into LimitOrderRequest."""
+    import broker as broker_mod
+    captured = {}
+
+    class FakeTradingClient:
+        def __init__(self, *a, **kw): pass
+        def submit_order(self, req):
+            captured["req"] = req
+            from types import SimpleNamespace
+            return SimpleNamespace(
+                id="ord-1", symbol=req.symbol, side=req.side, type="limit",
+                qty=req.qty, notional=req.notional, status="accepted",
+                client_order_id=req.client_order_id,
+            )
+
+    monkeypatch.setenv("ALPACA_API_KEY", "k")
+    monkeypatch.setenv("ALPACA_API_SECRET", "s")
+    monkeypatch.setattr(broker_mod, "TradingClient", FakeTradingClient)
+    b = broker_mod.Broker(env="paper")
+    out = b.submit_limit("SPY", notional=1000.0, side="buy",
+                         limit_price=480.50, client_order_id="cid-1")
+    assert captured["req"].limit_price == 480.50
+    assert captured["req"].notional == 1000.0
+    assert out.symbol == "SPY"
+    assert out.type == "limit"

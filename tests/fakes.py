@@ -21,12 +21,14 @@ class FakeBroker:
     buying_power: float = 100_000.0
     market_open: bool = True
     latest_prices: dict[str, float] = field(default_factory=dict)
+    latest_quotes: dict[str, tuple[float, float]] = field(default_factory=dict)
 
     _positions: dict[str, Position] = field(default_factory=dict)
     _open_orders: list[Order] = field(default_factory=list)
     _submitted: list[Order] = field(default_factory=list)
     _seen_cids: set[str] = field(default_factory=set)
     _id_gen: itertools.count = field(default_factory=lambda: itertools.count(1))
+    _canceled: list[str] = field(default_factory=list)
     _fail_on_submit: Optional[Exception] = None
 
     # ── arrange helpers ─────────────────────────────────────────
@@ -42,6 +44,9 @@ class FakeBroker:
 
     def set_latest_price(self, symbol: str, price: float):
         self.latest_prices[symbol] = price
+
+    def set_latest_quote(self, symbol: str, bid: float, ask: float):
+        self.latest_quotes[symbol] = (bid, ask)
 
     def fail_next_submit(self, exc: Exception):
         self._fail_on_submit = exc
@@ -59,9 +64,22 @@ class FakeBroker:
     def is_market_open(self) -> bool:
         return self.market_open
 
+    def latest_quote(self, symbol: str) -> tuple[float, float]:
+        if symbol in self.latest_quotes:
+            return self.latest_quotes[symbol]
+        p = self.latest_prices.get(symbol)
+        if p is not None:
+            return p * 0.999, p * 1.001
+        raise BrokerError(f"FakeBroker: no quote seeded for {symbol}")
+
     def submit_market(self, symbol, *, notional=None, qty=None, side, client_order_id):
         return self._submit(symbol, notional=notional, qty=qty, side=side,
                              cid=client_order_id, type_="market")
+
+    def submit_limit(self, symbol, *, notional=None, qty=None, side, limit_price,
+                     client_order_id, time_in_force="day"):
+        return self._submit(symbol, notional=notional, qty=qty, side=side,
+                             cid=client_order_id, type_="limit")
 
     def submit_bracket(self, symbol, *, notional, stop_loss_pct, trailing_stop_pct, client_order_id):
         return self._submit(symbol, notional=notional, qty=None, side="buy",
@@ -73,6 +91,7 @@ class FakeBroker:
 
     def cancel_order(self, order_id: str) -> None:
         self._open_orders = [o for o in self._open_orders if o.id != order_id]
+        self._canceled.append(order_id)
 
     def close_all_positions(self) -> None:
         self._positions.clear()

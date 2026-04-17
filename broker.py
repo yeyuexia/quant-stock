@@ -163,6 +163,44 @@ class Broker:
             raise BrokerError(f"submit_market({symbol}) failed: {e}") from e
         return _to_order(o)
 
+    def submit_limit(
+        self,
+        symbol: str,
+        *,
+        notional: Optional[float] = None,
+        qty: Optional[float] = None,
+        side: str,
+        limit_price: float,
+        client_order_id: str,
+        time_in_force: str = "day",
+    ) -> Order:
+        """Submit a limit order. Exactly one of notional/qty must be set."""
+        from alpaca.trading.requests import LimitOrderRequest
+        from alpaca.trading.enums import OrderSide, TimeInForce
+
+        if (notional is None) == (qty is None):
+            raise BrokerError("submit_limit: specify exactly one of notional or qty")
+        if side not in ("buy", "sell"):
+            raise BrokerError(f"submit_limit: invalid side {side!r}")
+        if limit_price <= 0:
+            raise BrokerError(f"submit_limit: limit_price must be positive, got {limit_price}")
+
+        tif = TimeInForce.DAY if time_in_force == "day" else TimeInForce.GTC
+        req = LimitOrderRequest(
+            symbol=symbol,
+            notional=notional,
+            qty=qty,
+            side=OrderSide.BUY if side == "buy" else OrderSide.SELL,
+            time_in_force=tif,
+            limit_price=limit_price,
+            client_order_id=client_order_id,
+        )
+        try:
+            o = self._client.submit_order(req)
+        except Exception as e:
+            raise BrokerError(f"submit_limit({symbol}) failed: {e}") from e
+        return _to_order(o)
+
     def submit_bracket(
         self,
         symbol: str,
@@ -256,6 +294,22 @@ class Broker:
             self._client.close_all_positions(cancel_orders=True)
         except Exception as e:
             raise BrokerError(f"close_all_positions failed: {e}") from e
+
+    def latest_quote(self, symbol: str) -> tuple[float, float]:
+        """Return (bid, ask) for symbol."""
+        from alpaca.data.historical import StockHistoricalDataClient
+        from alpaca.data.requests import StockLatestQuoteRequest
+        key = os.environ.get("ALPACA_API_KEY")
+        secret = os.environ.get("ALPACA_API_SECRET")
+        md = StockHistoricalDataClient(api_key=key, secret_key=secret)
+        try:
+            resp = md.get_stock_latest_quote(
+                StockLatestQuoteRequest(symbol_or_symbols=symbol)
+            )
+        except Exception as e:
+            raise BrokerError(f"latest_quote({symbol}) failed: {e}") from e
+        q = resp[symbol]
+        return float(q.bid_price), float(q.ask_price)
 
     def _latest_price(self, symbol: str) -> float:
         """Fetch the latest trade price via the market-data client."""
