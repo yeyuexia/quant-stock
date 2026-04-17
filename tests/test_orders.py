@@ -215,3 +215,32 @@ def test_reconcile_rebalance_within_tranche(tmp_path, monkeypatch):
     assert got["SPY"] == ("sell", 2000)
     assert got["QQQ"] == ("buy", 2000)
     assert got["IWM"] == ("buy", 2000)
+
+
+# ── HALT ────────────────────────────────────────────────────────
+
+def _safety_paths(tmp_path, monkeypatch):
+    """Redirect all safety-rail paths into tmp_path."""
+    monkeypatch.setattr("orders.HALT_PATH", str(tmp_path / "HALT"))
+    monkeypatch.setattr("orders.DAILY_TRADE_LOG", str(tmp_path / "daily_trade_log.json"))
+    monkeypatch.setattr("orders.PENDING_ORDERS_PATH", str(tmp_path / "pending_orders.json"))
+
+
+def test_halt_blocks_all_orders(tmp_path, monkeypatch):
+    _safety_paths(tmp_path, monkeypatch)
+    _portfolio_cache(tmp_path, monkeypatch, None)
+    (tmp_path / "HALT").write_text("paused")
+
+    from orders import OrderIntent, OrderPlan, execute_plan
+    plan = OrderPlan(
+        buys=[OrderIntent(symbol="SPY", notional=500, side="buy",
+                           reason="test", tranche="core",
+                           client_order_id="cid-1",
+                           stop_pct=0.08, trail_pct=0.12)],
+        sells=[], holds=[],
+    )
+    fb = FakeBroker()
+    result = execute_plan(plan, broker=fb, reason="test")
+    assert result.submitted == []
+    assert len(result.skipped) == 1
+    assert "HALT" in result.skipped[0][1]

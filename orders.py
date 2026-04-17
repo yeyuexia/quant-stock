@@ -77,6 +77,12 @@ def _make_cid(tranche: str, reason: str, symbol: str, today: dt.date) -> str:
 PORTFOLIO_PATH = os.path.join(os.path.dirname(__file__), "portfolio.json")
 DAILY_LOG_PATH = os.path.join(os.path.dirname(__file__), "daily_log.csv")
 
+# ── Safety-rail paths (overridable for tests) ───────────────────
+
+HALT_PATH = config.HALT_PATH
+DAILY_TRADE_LOG = config.DAILY_TRADE_LOG
+PENDING_ORDERS_PATH = config.PENDING_ORDERS_PATH
+
 
 # ── sync_state ──────────────────────────────────────────────────
 
@@ -251,3 +257,47 @@ def reconcile_to_targets(
             ))
 
     return OrderPlan(buys=buys, sells=sells, holds=holds)
+
+
+# ── execute_plan (scaffolded with HALT only; caps/large-order added in later tasks)
+
+def execute_plan(plan: OrderPlan, *, broker, reason: str) -> ExecutionResult:
+    """Runs every intent through: HALT → market-open → daily caps → large-order gate."""
+    result = ExecutionResult()
+    intents = list(plan.sells) + list(plan.buys)   # sells first: free up buying power
+
+    if os.path.exists(HALT_PATH):
+        for i in intents:
+            result.skipped.append((i, "HALT file present"))
+        return result
+
+    for i in intents:
+        # Caps + large-order gate added in later tasks
+        _submit_intent(broker, i, result)
+
+    return result
+
+
+def _submit_intent(broker, i: OrderIntent, result: ExecutionResult):
+    """Submit a single intent via the appropriate broker method. Catches BrokerError."""
+    try:
+        if i.side == "buy":
+            if i.stop_pct is not None and i.trail_pct is not None:
+                o = broker.submit_bracket(
+                    i.symbol, notional=i.notional,
+                    stop_loss_pct=i.stop_pct, trailing_stop_pct=i.trail_pct,
+                    client_order_id=i.client_order_id,
+                )
+            else:
+                o = broker.submit_market(
+                    i.symbol, notional=i.notional, side="buy",
+                    client_order_id=i.client_order_id,
+                )
+        else:
+            o = broker.submit_market(
+                i.symbol, notional=i.notional, side="sell",
+                client_order_id=i.client_order_id,
+            )
+        result.submitted.append(o)
+    except BrokerError as e:
+        result.skipped.append((i, f"BrokerError: {e}"))
