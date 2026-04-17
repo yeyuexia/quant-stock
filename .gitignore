@@ -3,3 +3,6 @@ __pycache__/
 *.pyc
 .env
 .worktrees/
+.pytest_cache/
+pending_orders.json
+portfolio.json
