@@ -131,6 +131,147 @@ class Broker:
         except Exception as e:
             raise BrokerError(f"is_market_open failed: {e}") from e
 
+    def submit_market(
+        self,
+        symbol: str,
+        *,
+        notional: Optional[float] = None,
+        qty: Optional[float] = None,
+        side: str,
+        client_order_id: str,
+    ) -> Order:
+        """Submit a plain market order. Exactly one of notional/qty must be set."""
+        from alpaca.trading.requests import MarketOrderRequest
+        from alpaca.trading.enums import OrderSide, TimeInForce
+
+        if (notional is None) == (qty is None):
+            raise BrokerError("submit_market: specify exactly one of notional or qty")
+        if side not in ("buy", "sell"):
+            raise BrokerError(f"submit_market: invalid side {side!r}")
+
+        req = MarketOrderRequest(
+            symbol=symbol,
+            notional=notional,
+            qty=qty,
+            side=OrderSide.BUY if side == "buy" else OrderSide.SELL,
+            time_in_force=TimeInForce.DAY,
+            client_order_id=client_order_id,
+        )
+        try:
+            o = self._client.submit_order(req)
+        except Exception as e:
+            raise BrokerError(f"submit_market({symbol}) failed: {e}") from e
+        return _to_order(o)
+
+    def submit_bracket(
+        self,
+        symbol: str,
+        *,
+        notional: float,
+        stop_loss_pct: float,
+        trailing_stop_pct: float,
+        client_order_id: str,
+    ) -> Order:
+        """Submit a market buy with an OCO stop-loss + trailing-stop attached.
+
+        Alpaca's bracket order requires stop_loss and take_profit legs; we set
+        take_profit to a very high limit so only the stop side is active, and
+        we issue a *separate* trailing-stop order after the bracket fills.
+        This is done by the caller via `orders.py`, not here — this method
+        only places the bracket with the fixed stop.
+        """
+        from alpaca.trading.requests import (
+            MarketOrderRequest, StopLossRequest, TakeProfitRequest,
+        )
+        from alpaca.trading.enums import OrderSide, TimeInForce, OrderClass
+
+        if notional <= 0:
+            raise BrokerError(f"submit_bracket: non-positive notional {notional}")
+        if not (0 < stop_loss_pct < 1):
+            raise BrokerError(f"submit_bracket: stop_loss_pct out of range {stop_loss_pct}")
+        if not (0 < trailing_stop_pct < 1):
+            raise BrokerError(f"submit_bracket: trailing_stop_pct out of range {trailing_stop_pct}")
+
+        # Bracket requires a stop-loss leg priced in absolute dollars.
+        # We use Alpaca's server-side "trail_percent" trailing stop feature
+        # via a separate trailing-stop order; here we attach only the hard stop.
+        # Compute stop price relative to the current ask (fetched via latest quote).
+        last_price = self._latest_price(symbol)
+        stop_price = round(last_price * (1 - stop_loss_pct), 2)
+        # Take-profit leg is required by Alpaca for bracket; set far above market.
+        tp_price = round(last_price * 10, 2)
+
+        req = MarketOrderRequest(
+            symbol=symbol,
+            notional=notional,
+            side=OrderSide.BUY,
+            time_in_force=TimeInForce.DAY,
+            client_order_id=client_order_id,
+            order_class=OrderClass.BRACKET,
+            stop_loss=StopLossRequest(stop_price=stop_price),
+            take_profit=TakeProfitRequest(limit_price=tp_price),
+        )
+        try:
+            o = self._client.submit_order(req)
+        except Exception as e:
+            raise BrokerError(f"submit_bracket({symbol}) failed: {e}") from e
+        return _to_order(o)
+
+    def submit_trailing_stop(
+        self,
+        symbol: str,
+        *,
+        qty: float,
+        trail_percent: float,
+        client_order_id: str,
+    ) -> Order:
+        """Separate trailing-stop sell order (Alpaca's trailing stop is its own order type)."""
+        from alpaca.trading.requests import TrailingStopOrderRequest
+        from alpaca.trading.enums import OrderSide, TimeInForce
+
+        req = TrailingStopOrderRequest(
+            symbol=symbol,
+            qty=qty,
+            side=OrderSide.SELL,
+            time_in_force=TimeInForce.GTC,
+            trail_percent=trail_percent * 100,   # Alpaca wants percent as 10.0, not 0.10
+            client_order_id=client_order_id,
+        )
+        try:
+            o = self._client.submit_order(req)
+        except Exception as e:
+            raise BrokerError(f"submit_trailing_stop({symbol}) failed: {e}") from e
+        return _to_order(o)
+
+    def cancel_order(self, order_id: str) -> None:
+        try:
+            self._client.cancel_order_by_id(order_id)
+        except Exception as e:
+            raise BrokerError(f"cancel_order({order_id}) failed: {e}") from e
+
+    def close_all_positions(self) -> None:
+        """Test-setup helper. Closes every open position and cancels open orders.
+        Safe to call on an empty account."""
+        try:
+            self._client.close_all_positions(cancel_orders=True)
+        except Exception as e:
+            raise BrokerError(f"close_all_positions failed: {e}") from e
+
+    def _latest_price(self, symbol: str) -> float:
+        """Fetch the latest trade price via the market-data client."""
+        from alpaca.data.historical import StockHistoricalDataClient
+        from alpaca.data.requests import StockLatestTradeRequest
+        key = os.environ.get("ALPACA_API_KEY")
+        secret = os.environ.get("ALPACA_API_SECRET")
+        md = StockHistoricalDataClient(api_key=key, secret_key=secret)
+        try:
+            resp = md.get_stock_latest_trade(
+                StockLatestTradeRequest(symbol_or_symbols=symbol)
+            )
+        except Exception as e:
+            raise BrokerError(f"_latest_price({symbol}) failed: {e}") from e
+        return float(resp[symbol].price)
+
 
 def _to_order(o, parent_id: Optional[str] = None) -> Order:
     return Order(
