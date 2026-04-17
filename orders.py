@@ -608,7 +608,16 @@ def ensure_trailing_stops(broker) -> ExecutionResult:
 # ── submit_exit ─────────────────────────────────────────────────
 
 def submit_exit(symbol: str, *, reason: str, broker) -> ExecutionResult:
-    """Full-position exit routed through the same safety rails as a plan."""
+    """Full-position exit. Writes a HIGH-tier intent with 150 bps tolerance to
+    pending_plan.json — executor picks up on next tick and slices it out.
+
+    Falls back to direct execute_plan if pending_plan already has a conflicting
+    intent for this symbol (avoids double-selling).
+    """
+    from dataclasses import replace as _replace
+    from pending_plan import load_plan, write_plan, IntentState, PendingPlan
+    from baseline import capture_baseline
+
     cache = _load_portfolio_cache()
     meta = next((p for p in cache.get("positions", []) if p["symbol"] == symbol), None)
     if meta is None:
@@ -619,13 +628,52 @@ def submit_exit(symbol: str, *, reason: str, broker) -> ExecutionResult:
     tranche = meta.get("tranche", "unknown")
     notional = float(meta["market_value"])
     cid = _make_cid(tranche, f"exit-{reason[:16]}", symbol, dt.date.today())
-    intent = OrderIntent(
+    raw = OrderIntent(
         symbol=symbol, notional=notional, side="sell",
         reason=reason, tranche=tranche, client_order_id=cid,
     )
-    # Wrap in a one-buy plan so HALT + caps + large-order logic fires uniformly.
-    return execute_plan(OrderPlan(buys=[], sells=[intent], holds=[]),
-                        broker=broker, reason=reason)
+
+    # Conflict: rebalance already targets this symbol → fall back to direct path.
+    existing = load_plan()
+    if existing is not None and any(s.intent.symbol == symbol for s in existing.intents):
+        return execute_plan(
+            OrderPlan(buys=[], sells=[raw], holds=[]),
+            broker=broker, reason=reason,
+        )
+
+    # Price + tier + slice metadata for HIGH-tier macro exit
+    try:
+        last = broker._latest_price(symbol)
+    except Exception:
+        last = 0.0
+
+    tolerance = config.MACRO_EXIT_TOLERANCE_BPS / 10_000.0
+    floor = round(last * (1 - tolerance), 4) if last else 0.0
+    priced = _replace(
+        raw,
+        tier="HIGH",
+        decision_price=last,
+        max_price=floor,
+        slice_count=2,
+    )
+
+    # Write/append to pending plan
+    if existing is None:
+        baseline = capture_baseline()
+        existing = PendingPlan(
+            plan_id=f"exit-{dt.date.today().isoformat()}",
+            tranche=tranche,
+            created_at=dt.datetime.now(dt.timezone.utc),
+            baseline=baseline,
+            intents=[IntentState(intent=priced)],
+        )
+    else:
+        existing.intents.append(IntentState(intent=priced))
+
+    write_plan(existing)
+    result = ExecutionResult()
+    result.queued.append(priced)
+    return result
 
 
 # ── tag_position ────────────────────────────────────────────────

@@ -391,8 +391,19 @@ def test_approve_expired_rejected(tmp_path, monkeypatch):
 
 # ── submit_exit ─────────────────────────────────────────────────
 
-def test_submit_exit_sells_full_position(tmp_path, monkeypatch):
+def test_submit_exit_queues_high_tier_intent(tmp_path, monkeypatch):
+    """submit_exit now writes a HIGH-tier intent to pending_plan (not direct submit).
+
+    The intent is preserved: exit is unconditionally queued for the executor to slice
+    out. No order reaches the broker here — slicing happens on the next executor tick.
+    """
+    import baseline as bl
     _safety_paths(tmp_path, monkeypatch)
+    monkeypatch.setattr("pending_plan.PENDING_PLAN_PATH", str(tmp_path / "plan.json"))
+    monkeypatch.setattr(bl, "_fetch_spy", lambda: 480.0)
+    monkeypatch.setattr(bl, "_fetch_vix", lambda: 18.0)
+    monkeypatch.setattr(bl, "_fetch_macro_score", lambda: -0.25)
+
     old = {
         "synced_at": "2026-04-16T14:00:00+00:00", "alpaca_env": "paper",
         "cash": 0.0, "equity": 0.0,
@@ -409,17 +420,55 @@ def test_submit_exit_sells_full_position(tmp_path, monkeypatch):
     monkeypatch.setattr("orders.LARGE_ORDER_THRESHOLD", 10_000)
 
     from orders import submit_exit
+    from pending_plan import load_plan
     fb = FakeBroker()
     fb.seed_position("TQQQ", qty=50, avg_entry=60, mv=3000)
+    fb.set_latest_price("TQQQ", 60.0)
 
     result = submit_exit("TQQQ", reason="macro→contraction", broker=fb)
-    assert len(result.submitted) == 1
-    o = result.submitted[0]
-    assert o.symbol == "TQQQ" and o.side == "sell"
+
+    # New behaviour: queued to pending_plan, not directly submitted.
+    assert len(result.queued) == 1
+    assert result.queued[0].symbol == "TQQQ"
+    assert result.queued[0].side == "sell"
+    assert result.queued[0].tier == "HIGH"
+    assert result.submitted == []
+
+    plan = load_plan()
+    assert plan is not None
+    assert any(s.intent.symbol == "TQQQ" for s in plan.intents)
 
 
-def test_submit_exit_respects_halt(tmp_path, monkeypatch):
+def test_submit_exit_conflict_falls_back_to_direct(tmp_path, monkeypatch):
+    """When pending_plan already has an intent for the symbol, submit_exit falls
+    back to direct execute_plan to avoid double-selling. HALT blocks that path.
+    """
+    import baseline as bl
     _safety_paths(tmp_path, monkeypatch)
+    monkeypatch.setattr("pending_plan.PENDING_PLAN_PATH", str(tmp_path / "plan.json"))
+    monkeypatch.setattr(bl, "_fetch_spy", lambda: 480.0)
+    monkeypatch.setattr(bl, "_fetch_vix", lambda: 18.0)
+    monkeypatch.setattr(bl, "_fetch_macro_score", lambda: -0.25)
+
+    # Pre-populate pending plan with a conflicting TQQQ intent.
+    import datetime as _dt
+    from pending_plan import write_plan, PendingPlan, IntentState, Baseline
+    from orders import OrderIntent
+    existing_intent = OrderIntent(
+        symbol="TQQQ", notional=3000.0, side="sell",
+        reason="rebalance", tranche="aggressive",
+        client_order_id="aggressive-rebalance-TQQQ-existing",
+    )
+    conflict_plan = PendingPlan(
+        plan_id="rebalance-conflict",
+        tranche="aggressive",
+        created_at=_dt.datetime(2026, 4, 17, 14, 0, 0, tzinfo=_dt.timezone.utc),
+        baseline=Baseline(spy=480.0, vix=18.0, macro_score=-0.25,
+                          news_cursor_at=_dt.datetime(2026, 4, 17, tzinfo=_dt.timezone.utc)),
+        intents=[IntentState(intent=existing_intent)],
+    )
+    write_plan(conflict_plan)
+
     _portfolio_cache(tmp_path, monkeypatch, {
         "synced_at": "x", "alpaca_env": "paper", "cash": 0, "equity": 0,
         "positions": [
@@ -436,6 +485,8 @@ def test_submit_exit_respects_halt(tmp_path, monkeypatch):
     from orders import submit_exit
     fb = FakeBroker()
     result = submit_exit("TQQQ", reason="macro→contraction", broker=fb)
+
+    # Conflict path hits execute_plan → HALT blocks it → skipped, not submitted.
     assert result.submitted == []
     assert any("HALT" in msg for _, msg in result.skipped)
 
