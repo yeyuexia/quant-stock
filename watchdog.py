@@ -26,54 +26,40 @@ import datetime as dt
 import numpy as np
 import pandas as pd
 
-# ── Portfolio tracking ──────────────────────────────────────────
+from broker import Broker
+import orders
+import config
 
-PORTFOLIO_FILE = os.path.join(os.path.dirname(__file__), "portfolio.json")
-
-
-def load_portfolio() -> dict:
-    """Load saved portfolio positions."""
-    if os.path.exists(PORTFOLIO_FILE):
-        with open(PORTFOLIO_FILE) as f:
-            return json.load(f)
-    return {"positions": [], "cash": 0, "last_rebalance": None}
+# ── Portfolio state (via orders.sync_state) ─────────────────────
 
 
-def save_portfolio(portfolio: dict):
-    """Save portfolio positions."""
-    with open(PORTFOLIO_FILE, "w") as f:
-        json.dump(portfolio, f, indent=2, default=str)
-
-
-def init_portfolio():
-    """Initialize portfolio from current recommendations.
-
-    Two-tranche structure:
-      Core ($90K):       balanced ETF rotation + stock screen
-      Aggressive ($10K): top-2 leveraged ETF momentum
+def snapshot() -> orders.PortfolioSnapshot:
+    """Pull a fresh PortfolioSnapshot from Alpaca (source of truth).
+    Alerts about unknown positions and missing brackets are returned separately.
     """
-    from config import INITIAL_CAPITAL
-    portfolio = {
-        "positions": [
-            # ── Core tranche (balanced) ──────────────────────────
-            {"ticker": "XLE",  "shares": 13, "entry_price": 56.94,  "entry_date": str(dt.date.today()), "tranche": "core"},
-            {"ticker": "MTUM", "shares": 2,  "entry_price": 263.44, "entry_date": str(dt.date.today()), "tranche": "core"},
-            {"ticker": "XLI",  "shares": 4,  "entry_price": 171.52, "entry_date": str(dt.date.today()), "tranche": "core"},
-            {"ticker": "IWM",  "shares": 2,  "entry_price": 261.30, "entry_date": str(dt.date.today()), "tranche": "core"},
-            {"ticker": "TSLA", "shares": 1,  "entry_price": 348.95, "entry_date": str(dt.date.today()), "tranche": "core"},
-            {"ticker": "INTC", "shares": 3,  "entry_price": 62.38,  "entry_date": str(dt.date.today()), "tranche": "core"},
-            {"ticker": "QCOM", "shares": 1,  "entry_price": 128.06, "entry_date": str(dt.date.today()), "tranche": "core"},
-            # ── Aggressive tranche (leveraged ETF — placeholder) ─
-            # Replace these with actual top-2 leveraged ETF picks from run.py
-            # {"ticker": "TQQQ", "shares": 50, "entry_price": 100.00, "entry_date": str(dt.date.today()), "tranche": "aggressive"},
-        ],
-        "cash": 1860.00,
-        "initial_capital": INITIAL_CAPITAL,
-        "start_date": str(dt.date.today()),
-        "last_rebalance": str(dt.date.today()),
-    }
-    save_portfolio(portfolio)
-    return portfolio
+    broker = Broker(env=config.ALPACA_ENV)
+    alerts: list = []
+    snap = orders.sync_state(broker, alerts=alerts)
+    snapshot.last_alerts = alerts  # type: ignore[attr-defined]
+    return snap
+
+
+snapshot.last_alerts = []  # type: ignore[attr-defined]
+
+
+def _as_legacy_positions(snap: orders.PortfolioSnapshot) -> list[dict]:
+    """Map snapshot position dicts to the legacy fields the check_* functions expect."""
+    return [
+        {
+            "ticker": p["symbol"],
+            "shares": p["shares"],
+            "entry_price": p["avg_entry"],
+            "entry_date": "",
+            "tranche": p.get("tranche", "core"),
+        }
+        for p in snap.positions
+        if p.get("tranche") != "unknown"
+    ]
 
 
 # ── Alert levels ────────────────────────────────────────────────
@@ -250,9 +236,30 @@ def check_volume(portfolio):
     return alerts
 
 
+# ── Macro-flip action ─────────────────────────────────────────
+
+def act_on_macro_flip(snap: orders.PortfolioSnapshot, regime: str) -> list:
+    """If macro regime turned bearish today, exit leveraged-ETF aggressive positions."""
+    if regime != "contraction":
+        return []
+
+    broker = Broker(env=config.ALPACA_ENV)
+    notifications: list = []
+    for p in snap.by_tranche("aggressive"):
+        sym = p["symbol"]
+        if sym not in config._ETF_LEVERAGED:
+            continue
+        result = orders.submit_exit(sym, reason="macro-contraction", broker=broker)
+        if result.submitted:
+            notifications.append(f"Exited {sym} on macro flip.")
+        for _, msg in result.skipped:
+            notifications.append(f"Could not exit {sym}: {msg}")
+    return notifications
+
+
 # ── Check 4: Macro Shifts ─────────────────────────────────────
 
-def check_macro_shift():
+def check_macro_shift(snap=None):
     """Check if macro regime has changed since last check."""
     from macro import macro_regime_score
 
@@ -297,6 +304,11 @@ def check_macro_shift():
         if name == "credit_spreads" and ind["signal"] <= -0.5:
             alerts.append((Alert.WARNING, "MACRO",
                 f"Credit spreads widening — financial stress! {ind['label']}"))
+
+    # Auto-exit leveraged ETFs on contraction
+    notifications = act_on_macro_flip(snap if snap is not None else snapshot(), regime)
+    for n in notifications:
+        alerts.append((Alert.CRITICAL, "MACRO", n))
 
     return alerts, result
 
@@ -397,12 +409,13 @@ def run_watchdog(quick=False):
     print("║           DAILY PORTFOLIO WATCHDOG                       ║")
     print("╚════════════════════════════════════════════════════════════╝")
 
-    # Load or init portfolio
-    portfolio = load_portfolio()
-    if not portfolio["positions"]:
-        print("  No portfolio found. Initializing from current recommendations...")
-        portfolio = init_portfolio()
-        print(f"  Portfolio initialized with {len(portfolio['positions'])} positions.\n")
+    # Load portfolio state from Alpaca
+    snap = snapshot()
+    portfolio = {
+        "positions": _as_legacy_positions(snap),
+        "cash": snap.cash,
+        "initial_capital": config.INITIAL_CAPITAL,
+    }
 
     # Portfolio status
     header("PORTFOLIO STATUS")
@@ -434,7 +447,7 @@ def run_watchdog(quick=False):
 
     if not quick:
         header("MACRO REGIME CHECK")
-        macro_alerts, macro_result = check_macro_shift()
+        macro_alerts, macro_result = check_macro_shift(snap)
         all_alerts.extend(macro_alerts)
         print(f"  Score: {macro_result['score']:+.3f} | Regime: {macro_result['regime'].upper()}")
         for name, ind in macro_result["indicators"].items():
@@ -493,9 +506,12 @@ if __name__ == "__main__":
     if "--quick" in args:
         run_watchdog(quick=True)
     elif "--portfolio" in args:
-        portfolio = load_portfolio()
-        if not portfolio["positions"]:
-            portfolio = init_portfolio()
+        snap = snapshot()
+        portfolio = {
+            "positions": _as_legacy_positions(snap),
+            "cash": snap.cash,
+            "initial_capital": config.INITIAL_CAPITAL,
+        }
         rows, total_value, total_pnl, total_pnl_pct, cash = check_portfolio_status(portfolio)
         header("PORTFOLIO STATUS")
         for r in rows:
