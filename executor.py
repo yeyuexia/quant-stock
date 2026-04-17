@@ -62,7 +62,7 @@ def run_tick(*, broker) -> Optional[TickResult]:
     obs = _fetch_current_observations(plan, broker)
 
     _process_breakers(plan, obs, result)
-    # Task 16+17 add slice scheduling & submission after this line.
+    _process_slices(plan, obs, result, broker=broker)
     # Task 18 adds end-of-day cleanup.
 
     write_plan(plan)
@@ -246,3 +246,119 @@ def _next_slice_due(
     if now >= window_dt:
         return next_idx
     return None
+
+
+def _process_slices(plan: PendingPlan, obs, result: TickResult, *, broker):
+    """For each active intent, cancel prior unfilled limit, then submit
+    the next slice if its window has passed and max_price is respected."""
+    from orders import submit_limit_slice
+    from dataclasses import replace
+    now = _now_et()
+
+    for state in plan.intents:
+        if state.status != "active":
+            continue
+        intent = state.intent
+        if intent.slice_count is None:
+            result.notes.append(f"{intent.symbol}: no slice_count, skipping")
+            continue
+
+        if state.last_client_order_id:
+            _cancel_prior(broker, state.last_client_order_id, result)
+            state.last_client_order_id = None
+
+        state.notional_filled = _observed_fill(broker, state)
+
+        if state.notional_filled >= intent.notional * 0.95:
+            state.status = "done"
+            continue
+
+        windows = _slice_windows(intent.slice_count)
+        next_idx = _next_slice_due(
+            now=now, windows=windows, slices_submitted=state.slices_submitted,
+        )
+        if next_idx is None:
+            continue
+
+        remaining_slices = intent.slice_count - state.slices_submitted
+        slice_size = max(1.0, round(
+            (intent.notional - state.notional_filled) / remaining_slices, 2,
+        ))
+
+        try:
+            bid, ask = broker.latest_quote(intent.symbol)
+        except BrokerError as e:
+            result.notes.append(f"{intent.symbol}: quote error {e}")
+            continue
+
+        if intent.side == "buy":
+            if intent.max_price is not None and ask > intent.max_price:
+                result.notes.append(
+                    f"{intent.symbol}: ask {ask:.4f} > max_price "
+                    f"{intent.max_price:.4f} — slice skipped, will retry next tick"
+                )
+                continue
+            ceiling = intent.max_price if intent.max_price is not None else ask * 1.001
+            limit_price = round(min(ask * 1.001, ceiling), 2)
+        else:
+            if intent.max_price is not None and bid < intent.max_price:
+                result.notes.append(
+                    f"{intent.symbol}: bid {bid:.4f} < min_price "
+                    f"{intent.max_price:.4f} — slice skipped, will retry next tick"
+                )
+                continue
+            floor = intent.max_price if intent.max_price is not None else bid * 0.999
+            limit_price = round(max(bid * 0.999, floor), 2)
+
+        if config.EXECUTOR_SHADOW_MODE:
+            result.would_submit.append({
+                "symbol": intent.symbol,
+                "side": intent.side,
+                "slice_size": slice_size,
+                "limit_price": limit_price,
+            })
+            continue
+
+        slice_cid = f"{intent.client_order_id}-s{state.slices_submitted + 1}"
+        slice_intent = replace(intent, client_order_id=slice_cid)
+        slice_result = submit_limit_slice(
+            slice_intent, limit_price=limit_price,
+            notional=slice_size, broker=broker,
+        )
+        if slice_result.submitted:
+            o = slice_result.submitted[0]
+            result.submitted.append(o)
+            state.slices_submitted += 1
+            state.last_client_order_id = o.client_order_id
+            state.last_limit_price = limit_price
+        elif slice_result.deferred:
+            result.deferred.extend(slice_result.deferred)
+        elif slice_result.queued:
+            result.notes.append(
+                f"{intent.symbol}: slice queued for Telegram approval"
+            )
+        elif slice_result.skipped:
+            for _, msg in slice_result.skipped:
+                result.notes.append(f"{intent.symbol}: skipped ({msg})")
+
+
+def _cancel_prior(broker, client_order_id: str, result: TickResult):
+    """Cancel the open order whose client_order_id matches. Uses get_open_orders
+    to resolve the broker order ID, then cancels by that ID."""
+    try:
+        open_orders = broker.get_open_orders()
+        matched = next(
+            (o for o in open_orders if o.client_order_id == client_order_id), None
+        )
+        if matched is None:
+            # Already filled or already canceled — nothing to do.
+            return
+        broker.cancel_order(matched.id)
+        result.canceled.append(matched.id)
+    except BrokerError as e:
+        result.notes.append(f"cancel_order({client_order_id}) failed: {e}")
+
+
+def _observed_fill(broker, state) -> float:
+    """Best-effort observed fill. For v1, trust the local counter."""
+    return state.notional_filled
