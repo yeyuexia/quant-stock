@@ -61,16 +61,83 @@ def run_tick(*, broker) -> Optional[TickResult]:
 
     obs = _fetch_current_observations(plan, broker)
 
-    # Placeholder for Tasks 15-18 — they replace this block with real logic.
-    _placeholder_process(plan, obs, result)
+    _process_breakers(plan, obs, result)
+    # Task 16+17 add slice scheduling & submission after this line.
+    # Task 18 adds end-of-day cleanup.
 
     write_plan(plan)
     return result
 
 
-def _placeholder_process(plan, obs, result: TickResult):
-    """Stub for tasks 15–18. Intentionally minimal."""
-    pass
+def _process_breakers(plan: PendingPlan, obs, result: TickResult):
+    """Evaluate all five breakers; update intent statuses + sticky list."""
+    from breakers import (
+        check_spy_drop, check_vix_spike, check_single_name_shock,
+        check_news_shock, check_macro_flip,
+    )
+
+    already = set(plan.breakers_tripped)
+
+    symbol_baselines = {
+        s.intent.symbol: s.intent.decision_price
+        for s in plan.intents
+        if s.intent.decision_price is not None and s.intent.side == "buy"
+    }
+
+    evaluations = [
+        check_spy_drop(plan.baseline, obs.spy),
+        check_vix_spike(plan.baseline, obs.vix),
+        check_news_shock(baseline=plan.baseline, hits=obs.news_hits,
+                         spy_now=obs.spy, spy_15min_ago=obs.spy_15min_ago),
+        check_macro_flip(plan.baseline, obs.macro),
+    ]
+
+    c_results = check_single_name_shock(plan.baseline, symbol_baselines, obs.symbol_prices)
+
+    for r in evaluations:
+        if not r.tripped:
+            continue
+        if r.breaker in already:
+            continue
+        already.add(r.breaker)
+        result.tripped_breakers.append(r)
+        _abort_for_breaker(plan, r, result)
+
+    for r in c_results:
+        if not r.tripped:
+            continue
+        if "C" not in already:
+            already.add("C")
+            result.tripped_breakers.append(r)
+        for state in plan.intents:
+            if state.status != "active":
+                continue
+            if state.intent.symbol in (r.affected_symbols or []):
+                if state.intent.symbol in config.DEFENSIVE_SYMBOLS:
+                    continue
+                state.status = "aborted"
+                state.abort_reason = f"C: {r.message}"
+                result.aborted_intents.append(state.intent)
+
+    plan.breakers_tripped = sorted(already)
+
+
+def _abort_for_breaker(plan: PendingPlan, r, result: TickResult):
+    """Apply a broad-scope abort (A/B/D/E)."""
+    for state in plan.intents:
+        if state.status != "active":
+            continue
+        i = state.intent
+        if r.scope == "buys" and i.side != "buy":
+            continue
+        if r.scope == "risk_on_buys":
+            if i.side != "buy":
+                continue
+            if i.symbol in config.DEFENSIVE_SYMBOLS:
+                continue
+        state.status = "aborted"
+        state.abort_reason = f"{r.breaker}: {r.message}"
+        result.aborted_intents.append(i)
 
 
 def _fetch_current_observations(plan: PendingPlan, broker):
