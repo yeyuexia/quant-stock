@@ -45,3 +45,38 @@ class Order:
     status: str                     # "accepted" | "filled" | "canceled" | ...
     client_order_id: str
     parent_order_id: Optional[str]  # for legs of a bracket order
+
+
+from alpaca.trading.client import TradingClient
+
+
+class Broker:
+    """Thin wrapper around alpaca-py TradingClient.
+
+    Use `env="paper"` (default) for the simulated account.
+    `env="live"` additionally requires ALPACA_LIVE_CONFIRM=yes in the environment.
+    """
+
+    def __init__(self, env: str = "paper"):
+        if env not in ("paper", "live"):
+            raise ConfigError(f"env must be 'paper' or 'live', got {env!r}")
+
+        key = os.environ.get("ALPACA_API_KEY")
+        secret = os.environ.get("ALPACA_API_SECRET")
+        if not key or not secret:
+            raise ConfigError(
+                "ALPACA_API_KEY and ALPACA_API_SECRET must be set in the environment"
+            )
+
+        if env == "live" and os.environ.get("ALPACA_LIVE_CONFIRM") != "yes":
+            raise ConfigError(
+                "Live trading requires ALPACA_LIVE_CONFIRM=yes. "
+                "Refusing to construct a live Broker."
+            )
+
+        self.env = env
+        self._client = TradingClient(
+            api_key=key,
+            secret_key=secret,
+            paper=(env == "paper"),
+        )
