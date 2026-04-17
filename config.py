@@ -203,7 +203,7 @@ HALT_PATH = os.path.join(os.path.dirname(__file__), ".cache", "HALT")
 DAILY_TRADE_LOG = os.path.join(os.path.dirname(__file__), ".cache", "daily_trade_log.json")
 PENDING_ORDERS_PATH = os.path.join(os.path.dirname(__file__), "pending_orders.json")
 
-DAILY_MAX_ORDERS = 20
+DAILY_MAX_ORDERS = 40
 DAILY_MAX_NOTIONAL = 25_000
 LARGE_ORDER_THRESHOLD = 2_000
 PENDING_ORDER_TTL_HOURS = 6
@@ -214,3 +214,50 @@ REBALANCE_DAYS = {
     "core": _params["rebalance_days"],
     "aggressive": AGGRESSIVE_PARAMS["rebalance_days"],
 }
+
+# ── Intraday execution layer ────────────────────────────────────
+
+EXECUTOR_WINDOW_START = "10:00"         # ET (avoids 9:30 open auction)
+EXECUTOR_WINDOW_END   = "15:50"         # ET (leaves room for end-of-day cleanup)
+EXECUTOR_TICK_MINUTES = 10
+EXECUTOR_SHADOW_MODE  = True            # Phase 0: log intended submissions only
+PLANNER_DIRECT_SUBMIT_THRESHOLD = 500.0  # USD: below this, planner submits immediately
+
+EXECUTION_TIERS = {
+    "HIGH": {"etf_bps": 50, "stock_bps": 100},
+    "MED":  {"etf_bps": 30, "stock_bps": 50},
+}
+AGGRESSIVE_TIER_MULTIPLIER = 1.5
+MACRO_EXIT_TOLERANCE_BPS   = 150        # overrides HIGH for macro-driven exits
+
+# Slice count by (tier, notional bucket). "small" = $500–$2000, "large" = ≥$2000.
+SLICE_COUNTS = {
+    "HIGH": {"small": 2, "large": 2},
+    "MED":  {"small": 2, "large": 4},
+}
+SLICE_SIZE_SMALL_MAX = 2000.0
+
+CIRCUIT_BREAKERS = {
+    "spy_drop_pct":           0.015,    # A: SPY drop from baseline
+    "vix_multiplier":         1.5,      # B: VIX vs baseline
+    "vix_absolute":           25.0,     # B: absolute VIX floor
+    "single_name_drop_pct":   0.05,     # C: per-symbol drop from baseline
+    "news_corroboration_pct": 0.005,    # D: SPY move to corroborate news
+    "news_window_minutes":    15,       # D: corroboration lookback
+    "news_dedupe_minutes":    60,       # D: title-hash dedupe window
+    "macro_drop":             0.3,      # E: macro score drop
+}
+
+NEWS_SHOCK_KEYWORDS = [
+    "tariff", "tariffs", "sanctions",
+    "rate cut", "rate hike", "fed", "powell", "fomc",
+    "war", "military", "invasion",
+    "shutdown", "default", "recession",
+]
+
+# Breaker E exempts these from abort (rotating into them is the right response to macro stress).
+DEFENSIVE_SYMBOLS = {"BIL", "SHY", "IEF", "TLT"}
+
+# Pending plan persistence
+PENDING_PLAN_PATH = os.path.join(os.path.dirname(__file__), ".cache", "pending_plan.json")
+NEWS_SHOCK_LOG    = os.path.join(os.path.dirname(__file__), ".cache", "news_shock_log.csv")
