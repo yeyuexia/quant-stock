@@ -1,7 +1,11 @@
 """
-Portfolio configuration for a $5,000 quantitative investment system.
+Portfolio configuration for a $100,000 quantitative investment system.
 
-Modes:
+Capital structure (two-tranche):
+  Core tranche    $90,000 (90%) — balanced mode: ETF rotation + stock screen
+  Aggressive tranche $10,000 (10%) — leveraged ETF momentum, top-2, weekly
+
+Core modes (set via PORTFOLIO_MODE env var):
   conservative — capital preservation, ETF-heavy, wide stops
   balanced     — default, mix of ETFs and stocks
   growth       — aggressive, small/mid-cap heavy, leveraged ETFs, tighter rotation
@@ -14,7 +18,12 @@ import os
 PORTFOLIO_MODE = os.environ.get("PORTFOLIO_MODE", "balanced")
 
 # ── Capital ─────────────────────────────────────────────────────
-INITIAL_CAPITAL = 5000
+INITIAL_CAPITAL = 100_000
+
+# ── Two-Tranche Structure ────────────────────────────────────────
+# Core tranche:       $90,000 — standard balanced strategy
+# Aggressive tranche: $10,000 — leveraged ETF rotation, no stocks
+AGGRESSIVE_TRANCHE_PCT = 0.10    # 10% = $10,000
 
 # ── Mode-specific parameters ────────────────────────────────────
 _MODE_PARAMS = {
@@ -66,6 +75,18 @@ TRAILING_STOP_PCT = _params["trailing_stop_pct"]
 ETF_ALLOCATION_PCT = _params["etf_allocation_pct"]
 STOCK_ALLOCATION_PCT = _params["stock_allocation_pct"]
 USE_LEVERAGED_ETFS = _params["use_leveraged_etfs"]
+
+# ── Aggressive Tranche Parameters ($10,000) ─────────────────────
+# Pure leveraged ETF momentum — top-2 picks, weekly rotation.
+# Tight stops because leveraged ETFs decay rapidly if held through drawdowns.
+AGGRESSIVE_PARAMS = {
+    "momentum_top_n": 2,            # hold only the top-2 leveraged ETFs
+    "max_position_pct": 0.50,       # up to $5,000 per position
+    "stop_loss_pct": 0.10,          # cut at -10% (tight — leveraged decay is costly)
+    "trailing_stop_pct": 0.15,      # trail at -15% from peak
+    "rebalance_days": 7,            # weekly rotation
+    "cash_buffer_pct": 0.05,        # keep $500 in cash as reserve
+}
 
 # ── Strategy 1: Dual Momentum ETF Rotation ──────────────────────
 # Concept: Hold the top-N momentum ETFs; flee to safety (BIL/SHY) when
@@ -165,3 +186,31 @@ WATCHLIST = [
     "LUNR",  # Intuitive Machines — space/lunar missions
     "RDDT",  # Reddit — social platform, recently IPO'd
 ]
+
+# ── Alpaca broker ───────────────────────────────────────────────
+ALPACA_ENV = os.environ.get("ALPACA_ENV", "paper")         # "paper" | "live"
+ALPACA_LIVE_CONFIRM = os.environ.get("ALPACA_LIVE_CONFIRM") == "yes"
+ALPACA_API_KEY = os.environ.get("ALPACA_API_KEY")
+ALPACA_API_SECRET = os.environ.get("ALPACA_API_SECRET")
+
+# Alpaca API endpoints. The SDK picks these automatically from env, but
+# surfaced here for clarity / dry-run / test overrides.
+ALPACA_PAPER_URL = "https://paper-api.alpaca.markets"
+ALPACA_LIVE_URL = "https://api.alpaca.markets"
+
+# ── Safety rails ────────────────────────────────────────────────
+HALT_PATH = os.path.join(os.path.dirname(__file__), ".cache", "HALT")
+DAILY_TRADE_LOG = os.path.join(os.path.dirname(__file__), ".cache", "daily_trade_log.json")
+PENDING_ORDERS_PATH = os.path.join(os.path.dirname(__file__), "pending_orders.json")
+
+DAILY_MAX_ORDERS = 20
+DAILY_MAX_NOTIONAL = 25_000
+LARGE_ORDER_THRESHOLD = 2_000
+PENDING_ORDER_TTL_HOURS = 6
+
+# ── Rebalance cadence per tranche ───────────────────────────────
+# Core cadence comes from the active mode; aggressive is fixed (weekly).
+REBALANCE_DAYS = {
+    "core": _params["rebalance_days"],
+    "aggressive": AGGRESSIVE_PARAMS["rebalance_days"],
+}

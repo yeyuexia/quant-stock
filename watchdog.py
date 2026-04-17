@@ -26,45 +26,40 @@ import datetime as dt
 import numpy as np
 import pandas as pd
 
-# ── Portfolio tracking ──────────────────────────────────────────
+from broker import Broker
+import orders
+import config
 
-PORTFOLIO_FILE = os.path.join(os.path.dirname(__file__), "portfolio.json")
-
-
-def load_portfolio() -> dict:
-    """Load saved portfolio positions."""
-    if os.path.exists(PORTFOLIO_FILE):
-        with open(PORTFOLIO_FILE) as f:
-            return json.load(f)
-    return {"positions": [], "cash": 0, "last_rebalance": None}
+# ── Portfolio state (via orders.sync_state) ─────────────────────
 
 
-def save_portfolio(portfolio: dict):
-    """Save portfolio positions."""
-    with open(PORTFOLIO_FILE, "w") as f:
-        json.dump(portfolio, f, indent=2, default=str)
+def snapshot() -> orders.PortfolioSnapshot:
+    """Pull a fresh PortfolioSnapshot from Alpaca (source of truth).
+    Alerts about unknown positions and missing brackets are returned separately.
+    """
+    broker = Broker(env=config.ALPACA_ENV)
+    alerts: list = []
+    snap = orders.sync_state(broker, alerts=alerts)
+    snapshot.last_alerts = alerts  # type: ignore[attr-defined]
+    return snap
 
 
-def init_portfolio():
-    """Initialize portfolio from current recommendations."""
-    from config import INITIAL_CAPITAL
-    portfolio = {
-        "positions": [
-            {"ticker": "XLE",  "shares": 13, "entry_price": 56.94,  "entry_date": str(dt.date.today())},
-            {"ticker": "MTUM", "shares": 2,  "entry_price": 263.44, "entry_date": str(dt.date.today())},
-            {"ticker": "XLI",  "shares": 4,  "entry_price": 171.52, "entry_date": str(dt.date.today())},
-            {"ticker": "IWM",  "shares": 2,  "entry_price": 261.30, "entry_date": str(dt.date.today())},
-            {"ticker": "TSLA", "shares": 1,  "entry_price": 348.95, "entry_date": str(dt.date.today())},
-            {"ticker": "INTC", "shares": 3,  "entry_price": 62.38,  "entry_date": str(dt.date.today())},
-            {"ticker": "QCOM", "shares": 1,  "entry_price": 128.06, "entry_date": str(dt.date.today())},
-        ],
-        "cash": 1860.00,
-        "initial_capital": INITIAL_CAPITAL,
-        "start_date": str(dt.date.today()),
-        "last_rebalance": str(dt.date.today()),
-    }
-    save_portfolio(portfolio)
-    return portfolio
+snapshot.last_alerts = []  # type: ignore[attr-defined]
+
+
+def _as_legacy_positions(snap: orders.PortfolioSnapshot) -> list[dict]:
+    """Map snapshot position dicts to the legacy fields the check_* functions expect."""
+    return [
+        {
+            "ticker": p["symbol"],
+            "shares": p["shares"],
+            "entry_price": p["avg_entry"],
+            "entry_date": "",
+            "tranche": p.get("tranche", "core"),
+        }
+        for p in snap.positions
+        if p.get("tranche") != "unknown"
+    ]
 
 
 # ── Alert levels ────────────────────────────────────────────────
@@ -127,21 +122,38 @@ def check_price_moves(portfolio):
             alerts.append((Alert.WARNING, t,
                 f"Moved {daily_chg:+.1f}% today (${prev_close:.2f} → ${current:.2f})"))
 
-        # Stop-loss check (-8% from entry)
-        if from_entry <= -8:
-            alerts.append((Alert.CRITICAL, t,
-                f"STOP-LOSS TRIGGERED: {from_entry:+.1f}% from entry ${entry:.2f} → ${current:.2f}. SELL NOW."))
-        elif from_entry <= -5:
-            alerts.append((Alert.WARNING, t,
-                f"Approaching stop-loss: {from_entry:+.1f}% from entry"))
+        # Tranche-specific stops: aggressive tranche uses tighter levels
+        tranche = pos.get("tranche", "core")
+        if tranche == "aggressive":
+            from config import AGGRESSIVE_PARAMS as _AP
+            stop_loss_pct  = _AP["stop_loss_pct"] * 100          # 10%
+            stop_warn_pct  = stop_loss_pct * 0.7                  # 7%
+            trail_stop_pct = _AP["trailing_stop_pct"] * 100       # 15%
+            trail_warn_pct = trail_stop_pct * 0.67                # 10%
+            tranche_label  = " [AGGRESSIVE]"
+        else:
+            from config import STOP_LOSS_PCT, TRAILING_STOP_PCT
+            stop_loss_pct  = STOP_LOSS_PCT * 100                  # 8%
+            stop_warn_pct  = stop_loss_pct * 0.625                # 5%
+            trail_stop_pct = TRAILING_STOP_PCT * 100              # 12%
+            trail_warn_pct = trail_stop_pct * 0.67                # 8%
+            tranche_label  = ""
 
-        # Trailing stop (-12% from peak)
-        if from_peak <= -12:
+        # Stop-loss check
+        if from_entry <= -stop_loss_pct:
             alerts.append((Alert.CRITICAL, t,
-                f"TRAILING STOP HIT: {from_peak:+.1f}% from peak ${peak:.2f}. Consider selling."))
-        elif from_peak <= -8:
+                f"STOP-LOSS TRIGGERED{tranche_label}: {from_entry:+.1f}% from entry ${entry:.2f} → ${current:.2f}. SELL NOW."))
+        elif from_entry <= -stop_warn_pct:
             alerts.append((Alert.WARNING, t,
-                f"Trailing stop warning: {from_peak:+.1f}% from peak ${peak:.2f}"))
+                f"Approaching stop-loss{tranche_label}: {from_entry:+.1f}% from entry"))
+
+        # Trailing stop check
+        if from_peak <= -trail_stop_pct:
+            alerts.append((Alert.CRITICAL, t,
+                f"TRAILING STOP HIT{tranche_label}: {from_peak:+.1f}% from peak ${peak:.2f}. Consider selling."))
+        elif from_peak <= -trail_warn_pct:
+            alerts.append((Alert.WARNING, t,
+                f"Trailing stop warning{tranche_label}: {from_peak:+.1f}% from peak ${peak:.2f}"))
 
     return alerts
 
@@ -224,9 +236,30 @@ def check_volume(portfolio):
     return alerts
 
 
+# ── Macro-flip action ─────────────────────────────────────────
+
+def act_on_macro_flip(snap: orders.PortfolioSnapshot, regime: str) -> list:
+    """If macro regime turned bearish today, exit leveraged-ETF aggressive positions."""
+    if regime != "contraction":
+        return []
+
+    broker = Broker(env=config.ALPACA_ENV)
+    notifications: list = []
+    for p in snap.by_tranche("aggressive"):
+        sym = p["symbol"]
+        if sym not in config._ETF_LEVERAGED:
+            continue
+        result = orders.submit_exit(sym, reason="macro-contraction", broker=broker)
+        if result.submitted:
+            notifications.append(f"Exited {sym} on macro flip.")
+        for _, msg in result.skipped:
+            notifications.append(f"Could not exit {sym}: {msg}")
+    return notifications
+
+
 # ── Check 4: Macro Shifts ─────────────────────────────────────
 
-def check_macro_shift():
+def check_macro_shift(snap=None):
     """Check if macro regime has changed since last check."""
     from macro import macro_regime_score
 
@@ -271,6 +304,11 @@ def check_macro_shift():
         if name == "credit_spreads" and ind["signal"] <= -0.5:
             alerts.append((Alert.WARNING, "MACRO",
                 f"Credit spreads widening — financial stress! {ind['label']}"))
+
+    # Auto-exit leveraged ETFs on contraction
+    notifications = act_on_macro_flip(snap if snap is not None else snapshot(), regime)
+    for n in notifications:
+        alerts.append((Alert.CRITICAL, "MACRO", n))
 
     return alerts, result
 
@@ -371,12 +409,28 @@ def run_watchdog(quick=False):
     print("║           DAILY PORTFOLIO WATCHDOG                       ║")
     print("╚════════════════════════════════════════════════════════════╝")
 
-    # Load or init portfolio
-    portfolio = load_portfolio()
-    if not portfolio["positions"]:
-        print("  No portfolio found. Initializing from current recommendations...")
-        portfolio = init_portfolio()
-        print(f"  Portfolio initialized with {len(portfolio['positions'])} positions.\n")
+    # Load portfolio state from Alpaca
+    snap = snapshot()
+    portfolio = {
+        "positions": _as_legacy_positions(snap),
+        "cash": snap.cash,
+        "initial_capital": config.INITIAL_CAPITAL,
+    }
+
+    # Safety net: attach trailing stops to any known-tranche position missing one.
+    # Rebalancer normally does this at submit time; this catches anything that
+    # slipped through (e.g., buy filled after rebalancer exited, or bracket
+    # attach failed).
+    broker = Broker(env=config.ALPACA_ENV)
+    trail_result = orders.ensure_trailing_stops(broker)
+    if trail_result.submitted:
+        print(f"  Attached {len(trail_result.submitted)} missing trailing stop(s):")
+        for o in trail_result.submitted:
+            print(f"    • {o.symbol}")
+    if trail_result.skipped:
+        for pair in trail_result.skipped:
+            sym = pair[0].symbol if pair[0] is not None else "?"
+            print(f"    ! Could not attach trailing stop on {sym}: {pair[1]}")
 
     # Portfolio status
     header("PORTFOLIO STATUS")
@@ -408,7 +462,7 @@ def run_watchdog(quick=False):
 
     if not quick:
         header("MACRO REGIME CHECK")
-        macro_alerts, macro_result = check_macro_shift()
+        macro_alerts, macro_result = check_macro_shift(snap)
         all_alerts.extend(macro_alerts)
         print(f"  Score: {macro_result['score']:+.3f} | Regime: {macro_result['regime'].upper()}")
         for name, ind in macro_result["indicators"].items():
@@ -467,9 +521,12 @@ if __name__ == "__main__":
     if "--quick" in args:
         run_watchdog(quick=True)
     elif "--portfolio" in args:
-        portfolio = load_portfolio()
-        if not portfolio["positions"]:
-            portfolio = init_portfolio()
+        snap = snapshot()
+        portfolio = {
+            "positions": _as_legacy_positions(snap),
+            "cash": snap.cash,
+            "initial_capital": config.INITIAL_CAPITAL,
+        }
         rows, total_value, total_pnl, total_pnl_pct, cash = check_portfolio_status(portfolio)
         header("PORTFOLIO STATUS")
         for r in rows:
