@@ -197,13 +197,15 @@ def _print_result(result: orders.ExecutionResult):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--tranche", required=True, choices=["core", "aggressive"])
+    ap.add_argument("--tranche", required=True, choices=["core", "aggressive", "both"])
     ap.add_argument("--dry-run", action="store_true")
     ap.add_argument("--force", action="store_true")
     args = ap.parse_args()
 
     broker = Broker(env=config.ALPACA_ENV)
-    run(tranche=args.tranche, dry_run=args.dry_run, force=args.force, broker=broker)
+    tranches = ["core", "aggressive"] if args.tranche == "both" else [args.tranche]
+    for t in tranches:
+        run(tranche=t, dry_run=args.dry_run, force=args.force, broker=broker)
 
 
 if __name__ == "__main__":
