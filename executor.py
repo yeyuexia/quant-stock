@@ -113,8 +113,6 @@ def _process_breakers(plan: PendingPlan, obs, result: TickResult):
             if state.status != "active":
                 continue
             if state.intent.symbol in (r.affected_symbols or []):
-                if state.intent.symbol in config.DEFENSIVE_SYMBOLS:
-                    continue
                 state.status = "aborted"
                 state.abort_reason = f"C: {r.message}"
                 result.aborted_intents.append(state.intent)

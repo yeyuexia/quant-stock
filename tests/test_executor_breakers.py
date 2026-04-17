@@ -73,7 +73,7 @@ def test_breaker_e_spares_defensive_buys(tmp_path, monkeypatch):
         spy = 480.0
         vix = 14.0
         macro = -0.15                # baseline 0.20 → drop 0.35 trips E
-        symbol_prices = {"SPY": 480.0, "BIL": 91.5}
+        symbol_prices = {"SPY": 480.0, "BIL": 100.0}
         spy_15min_ago = 480.0
         news_hits: list = []
     monkeypatch.setattr(executor, "_fetch_current_observations", lambda p, b: Obs())
