@@ -646,3 +646,32 @@ def test_ensure_trailing_stops_respects_halt(tmp_path, monkeypatch):
 
     result = ensure_trailing_stops(fb)
     assert result.submitted == []
+
+
+# ── OrderIntent new fields (Task 2: intraday execution layer) ────
+
+def test_order_intent_accepts_new_fields():
+    from orders import OrderIntent
+    i = OrderIntent(
+        symbol="SPY", notional=1000.0, side="buy",
+        reason="test", tranche="core", client_order_id="x-1",
+        stop_pct=0.08, trail_pct=0.12,
+        tier="HIGH", decision_price=480.0, max_price=482.4, slice_count=2,
+    )
+    assert i.tier == "HIGH"
+    assert i.decision_price == 480.0
+    assert i.max_price == 482.4
+    assert i.slice_count == 2
+
+
+def test_order_intent_new_fields_default_to_none():
+    from orders import OrderIntent
+    # Backwards-compatible construction (existing paths don't set the new fields).
+    i = OrderIntent(
+        symbol="SPY", notional=1000.0, side="buy",
+        reason="test", tranche="core", client_order_id="x-2",
+    )
+    assert i.tier is None
+    assert i.decision_price is None
+    assert i.max_price is None
+    assert i.slice_count is None
