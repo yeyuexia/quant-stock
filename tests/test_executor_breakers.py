@@ -150,3 +150,60 @@ def test_sticky_breaker_stays_tripped_on_next_tick(tmp_path, monkeypatch):
     loaded = load_plan()
     assert loaded.intents[0].status == "aborted"
     assert loaded.breakers_tripped == ["A"]
+
+
+def test_per_symbol_sticky_allows_new_c_trips_on_different_symbols(tmp_path, monkeypatch):
+    """Breaker C on NVDA should not silence a subsequent C on a different symbol."""
+    import executor, orders
+    monkeypatch.setattr(orders, "HALT_PATH", str(tmp_path / "no_halt"))
+    monkeypatch.setattr(executor, "HALT_PATH", str(tmp_path / "no_halt"))
+    monkeypatch.setattr("pending_plan.PENDING_PLAN_PATH", str(tmp_path / "p.json"))
+    monkeypatch.setattr(executor, "_now_et",
+                        lambda: dt.datetime(2026, 4, 17, 11, 0))
+
+    plan = _plan_with_intents([
+        IntentState(intent=_intent("NVDA", "buy")),
+        IntentState(intent=_intent("AMD", "buy")),
+        IntentState(intent=_intent("TSLA", "buy")),
+    ])
+    write_plan(plan)
+
+    # Tick 1: NVDA crashes -6%
+    class Obs1:
+        spy = 478.0
+        vix = 14.0
+        macro = 0.20
+        symbol_prices = {"NVDA": 94.0, "AMD": 100.0, "TSLA": 100.0}
+        spy_15min_ago = 478.0
+        news_hits: list = []
+    monkeypatch.setattr(executor, "_fetch_current_observations", lambda p, b: Obs1())
+    r1 = executor.run_tick(broker=FakeBroker())
+    assert any(br.breaker == "C" and (br.affected_symbols or [None])[0] == "NVDA"
+               for br in r1.tripped_breakers)
+
+    # Tick 2: AMD crashes -6% (TSLA stable). NVDA already aborted but new C event on AMD
+    class Obs2:
+        spy = 478.0
+        vix = 14.0
+        macro = 0.20
+        symbol_prices = {"NVDA": 94.0, "AMD": 93.0, "TSLA": 100.0}
+        spy_15min_ago = 478.0
+        news_hits: list = []
+    monkeypatch.setattr(executor, "_fetch_current_observations", lambda p, b: Obs2())
+    r2 = executor.run_tick(broker=FakeBroker())
+
+    # AMD must get its own notification; current code silently drops it.
+    assert any(br.breaker == "C" and (br.affected_symbols or [None])[0] == "AMD"
+               for br in r2.tripped_breakers), \
+        "New C trip on AMD was swallowed by sticky 'C' filter"
+
+    # Both NVDA and AMD are aborted now
+    loaded = load_plan()
+    by_sym = {s.intent.symbol: s for s in loaded.intents}
+    assert by_sym["NVDA"].status == "aborted"
+    assert by_sym["AMD"].status == "aborted"
+    assert by_sym["TSLA"].status == "active"
+
+    # breakers_tripped should now have per-symbol entries for C
+    assert "C:NVDA" in loaded.breakers_tripped
+    assert "C:AMD" in loaded.breakers_tripped

@@ -107,9 +107,12 @@ def _process_breakers(plan: PendingPlan, obs, result: TickResult):
     for r in c_results:
         if not r.tripped:
             continue
-        if "C" not in already:
-            already.add("C")
+        sym = (r.affected_symbols or [None])[0]
+        key = f"C:{sym}"
+        if key not in already:
+            already.add(key)
             result.tripped_breakers.append(r)
+        # apply aborts — idempotent; already-aborted intents are skipped by status check
         for state in plan.intents:
             if state.status != "active":
                 continue
