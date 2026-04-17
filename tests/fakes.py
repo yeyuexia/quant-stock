@@ -133,3 +133,33 @@ class FakeClock:
 
     def advance(self, seconds: float):
         self.now_value = self.now_value + dt.timedelta(seconds=seconds)
+
+
+@dataclass
+class FakeMarketData:
+    """Deterministic SPY/VIX/per-symbol prices indexed by simulated clock."""
+    spy_by_time: dict = field(default_factory=dict)
+    vix_by_time: dict = field(default_factory=dict)
+    symbol_prices_by_time: dict = field(default_factory=dict)
+    macro_score: float = 0.0
+
+    def spy_at(self, t: dt.datetime) -> float:
+        return self.spy_by_time.get(t, 480.0)
+
+    def vix_at(self, t: dt.datetime) -> float:
+        return self.vix_by_time.get(t, 14.0)
+
+    def price_at(self, symbol: str, t: dt.datetime) -> float:
+        return self.symbol_prices_by_time.get((symbol, t), 100.0)
+
+
+@dataclass
+class FakeNewsFeed:
+    """Canned keyword hits, replayable by timestamp."""
+    headlines: list = field(default_factory=list)
+
+    def add(self, *, title: str, source: str, ts: dt.datetime):
+        self.headlines.append({"title": title, "source": source, "ts": ts})
+
+    def fetch_since(self, since: dt.datetime) -> list:
+        return [h for h in self.headlines if h["ts"] >= since]
