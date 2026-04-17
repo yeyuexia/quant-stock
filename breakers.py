@@ -127,3 +127,22 @@ def check_news_shock(
         message=f"news shock corroborated: SPY {move * 100:+.2f}% in 15min; hits: {titles}",
         measurement=move,
     )
+
+
+def check_macro_flip(baseline: Baseline, macro_now: float) -> BreakerResult:
+    threshold = config.CIRCUIT_BREAKERS["macro_drop"]
+    drop = baseline.macro_score - macro_now
+    if drop >= threshold:
+        return BreakerResult(
+            breaker="E",
+            tripped=True,
+            scope="risk_on_buys",
+            message=f"macro score dropped from {baseline.macro_score:+.3f} to "
+                    f"{macro_now:+.3f} (drop {drop:.3f} ≥ threshold {threshold:.3f})",
+            measurement=drop,
+        )
+    return BreakerResult(
+        breaker="E", tripped=False, scope="none",
+        message=f"macro score {macro_now:+.3f} vs baseline {baseline.macro_score:+.3f}",
+        measurement=drop,
+    )

@@ -125,3 +125,30 @@ def test_news_shock_no_hits_never_trips():
     bl = _baseline()
     result = check_news_shock(baseline=bl, hits=[], spy_now=470.0, spy_15min_ago=480.0)
     assert result.tripped is False
+
+
+from breakers import check_macro_flip
+
+
+def test_macro_flip_trips_on_score_drop():
+    bl = Baseline(spy=480.0, vix=14.0, macro_score=0.20,
+                  news_cursor_at=dt.datetime(2026, 4, 17, tzinfo=dt.timezone.utc))
+    # Drop of 0.35 → exceeds 0.3 threshold
+    result = check_macro_flip(bl, macro_now=-0.15)
+    assert result.tripped is True
+    assert result.breaker == "E"
+    assert result.scope == "risk_on_buys"
+
+
+def test_macro_flip_does_not_trip_small_drop():
+    bl = Baseline(spy=480.0, vix=14.0, macro_score=0.20,
+                  news_cursor_at=dt.datetime(2026, 4, 17, tzinfo=dt.timezone.utc))
+    result = check_macro_flip(bl, macro_now=0.05)  # drop of 0.15
+    assert result.tripped is False
+
+
+def test_macro_flip_ignores_improvement():
+    bl = Baseline(spy=480.0, vix=14.0, macro_score=0.0,
+                  news_cursor_at=dt.datetime(2026, 4, 17, tzinfo=dt.timezone.utc))
+    result = check_macro_flip(bl, macro_now=0.5)
+    assert result.tripped is False
