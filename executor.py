@@ -220,3 +220,29 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+
+def _slice_windows(slice_count: int) -> list:
+    """Time-of-day anchors for each slice. ET, naive."""
+    if slice_count <= 1:
+        return [dt.time(10, 0)]
+    start_minutes = 10 * 60 + 30     # 10:30
+    end_minutes   = 14 * 60 + 30     # 14:30
+    span = end_minutes - start_minutes
+    step = span // (slice_count - 1)
+    mins_list = [start_minutes + i * step for i in range(slice_count)]
+    return [dt.time(m // 60, m % 60) for m in mins_list]
+
+
+def _next_slice_due(
+    *, now: dt.datetime, windows: list, slices_submitted: int,
+) -> Optional[int]:
+    """Return the index of the next slice that is due. None if nothing due
+    or all already submitted."""
+    if slices_submitted >= len(windows):
+        return None
+    next_idx = slices_submitted
+    window_dt = dt.datetime.combine(now.date(), windows[next_idx])
+    if now >= window_dt:
+        return next_idx
+    return None
