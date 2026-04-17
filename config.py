@@ -186,3 +186,31 @@ WATCHLIST = [
     "LUNR",  # Intuitive Machines — space/lunar missions
     "RDDT",  # Reddit — social platform, recently IPO'd
 ]
+
+# ── Alpaca broker ───────────────────────────────────────────────
+ALPACA_ENV = os.environ.get("ALPACA_ENV", "paper")         # "paper" | "live"
+ALPACA_LIVE_CONFIRM = os.environ.get("ALPACA_LIVE_CONFIRM") == "yes"
+ALPACA_API_KEY = os.environ.get("ALPACA_API_KEY")
+ALPACA_API_SECRET = os.environ.get("ALPACA_API_SECRET")
+
+# Alpaca API endpoints. The SDK picks these automatically from env, but
+# surfaced here for clarity / dry-run / test overrides.
+ALPACA_PAPER_URL = "https://paper-api.alpaca.markets"
+ALPACA_LIVE_URL = "https://api.alpaca.markets"
+
+# ── Safety rails ────────────────────────────────────────────────
+HALT_PATH = os.path.join(os.path.dirname(__file__), ".cache", "HALT")
+DAILY_TRADE_LOG = os.path.join(os.path.dirname(__file__), ".cache", "daily_trade_log.json")
+PENDING_ORDERS_PATH = os.path.join(os.path.dirname(__file__), "pending_orders.json")
+
+DAILY_MAX_ORDERS = 20
+DAILY_MAX_NOTIONAL = 25_000
+LARGE_ORDER_THRESHOLD = 2_000
+PENDING_ORDER_TTL_HOURS = 6
+
+# ── Rebalance cadence per tranche ───────────────────────────────
+# Core cadence comes from the active mode; aggressive is fixed (weekly).
+REBALANCE_DAYS = {
+    "core": _params["rebalance_days"],
+    "aggressive": AGGRESSIVE_PARAMS["rebalance_days"],
+}
