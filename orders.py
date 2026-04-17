@@ -470,3 +470,27 @@ def submit_exit(symbol: str, *, reason: str, broker) -> ExecutionResult:
     # Wrap in a one-buy plan so HALT + caps + large-order logic fires uniformly.
     return execute_plan(OrderPlan(buys=[], sells=[intent], holds=[]),
                         broker=broker, reason=reason)
+
+
+# ── tag_position ────────────────────────────────────────────────
+
+def tag_position(symbol: str, tranche: str, entry_reason: str = "manual") -> None:
+    """Set tranche/entry_reason for a position in the cache.
+    Use to label an 'unknown' position after a manual Alpaca trade.
+    """
+    if tranche not in ("core", "aggressive"):
+        raise ValueError(f"tranche must be 'core' or 'aggressive', got {tranche!r}")
+
+    cache = _load_portfolio_cache()
+    found = False
+    for p in cache.get("positions", []):
+        if p["symbol"] == symbol:
+            p["tranche"] = tranche
+            p["entry_reason"] = entry_reason
+            found = True
+            break
+    if not found:
+        raise ValueError(f"{symbol} not in portfolio cache — run sync_state first")
+
+    with open(PORTFOLIO_PATH, "w") as f:
+        json.dump(cache, f, indent=2, default=str)

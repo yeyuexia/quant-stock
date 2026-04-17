@@ -437,3 +437,39 @@ def test_submit_exit_respects_halt(tmp_path, monkeypatch):
     result = submit_exit("TQQQ", reason="macro→contraction", broker=fb)
     assert result.submitted == []
     assert any("HALT" in msg for _, msg in result.skipped)
+
+
+# ── tag_position ────────────────────────────────────────────────
+
+def test_tag_position_updates_metadata(tmp_path, monkeypatch):
+    old = {
+        "synced_at": "x", "alpaca_env": "paper", "cash": 0, "equity": 0,
+        "positions": [
+            {"symbol": "NVDA", "shares": 5, "avg_entry": 100,
+             "market_value": 520, "unrealized_pl": 0,
+             "tranche": "unknown", "entry_reason": "external",
+             "stop_order_id": None, "trail_order_id": None},
+        ],
+        "tranches": {"core": {"last_rebalance": None},
+                     "aggressive": {"last_rebalance": None}},
+    }
+    _portfolio_cache(tmp_path, monkeypatch, old)
+
+    from orders import tag_position
+    tag_position("NVDA", tranche="core", entry_reason="manual 2026-04-17")
+
+    got = json.loads((tmp_path / "portfolio.json").read_text())
+    pos = got["positions"][0]
+    assert pos["tranche"] == "core"
+    assert pos["entry_reason"] == "manual 2026-04-17"
+
+
+def test_tag_position_bad_tranche_raises(tmp_path, monkeypatch):
+    _portfolio_cache(tmp_path, monkeypatch, {
+        "synced_at": "x", "alpaca_env": "paper", "cash": 0, "equity": 0,
+        "positions": [], "tranches": {"core": {"last_rebalance": None},
+                                       "aggressive": {"last_rebalance": None}},
+    })
+    from orders import tag_position
+    with pytest.raises(ValueError):
+        tag_position("NVDA", tranche="invalid")
