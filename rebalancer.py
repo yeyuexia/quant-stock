@@ -246,11 +246,20 @@ def _write_pending_plan(tranche, intents, *, broker):
         asset_class.setdefault(s, "etf")
         ranks.setdefault(s, 99)
 
+    missing_prices = []
     for s in symbols:
         try:
             decision_prices[s] = broker._latest_price(s)
         except Exception:
-            decision_prices[s] = 0.0
+            missing_prices.append(s)
+
+    if missing_prices:
+        print(f"\n── WARN: no decision price for {missing_prices}; "
+              f"dropping from pending plan. Tomorrow's rebalance will re-evaluate.")
+        intents = [i for i in intents if i.symbol not in missing_prices]
+        if not intents:
+            print("── No intents left to plan; skipping pending_plan write.")
+            return
 
     ctx = PricingContext(
         ranks=ranks, asset_class=asset_class,

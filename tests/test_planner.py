@@ -92,3 +92,28 @@ def test_sell_side_uses_min_price_floor():
     # sells: max_price stores the FLOOR (decision × (1 - tol))
     assert i.tier == "MED"
     assert round(i.max_price, 2) == round(90.0 * (1 - 0.003), 2)
+
+
+def test_unpriced_intent_passes_through_unchanged_when_price_is_zero():
+    ctx = PricingContext(
+        ranks={"XYZ": 1},
+        asset_class={"XYZ": "etf"},
+        decision_prices={"XYZ": 0.0},
+        tranche="core",
+    )
+    [i] = build_priced_intents([_intent("XYZ", 1000)], ctx)
+    assert i.tier is None
+    assert i.max_price is None
+    assert i.decision_price is None
+    assert i.slice_count is None
+
+
+def test_unpriced_intent_passes_through_when_price_is_negative():
+    ctx = PricingContext(
+        ranks={"XYZ": 1},
+        asset_class={"XYZ": "etf"},
+        decision_prices={"XYZ": -5.0},  # nonsense value
+        tranche="core",
+    )
+    [i] = build_priced_intents([_intent("XYZ", 1000)], ctx)
+    assert i.tier is None

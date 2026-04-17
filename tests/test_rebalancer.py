@@ -134,3 +134,45 @@ def test_rebalancer_direct_submits_tiny_orders(tmp_path, monkeypatch):
 
     # Below threshold → submitted directly (market order via execute_plan)
     assert len(b._submitted) == 1
+
+
+def test_rebalancer_drops_symbol_with_missing_decision_price(tmp_path, monkeypatch, capsys):
+    """If _latest_price raises, the symbol should be dropped from the pending plan
+    with a warning, not silently included with decision_price=0.0."""
+    import rebalancer, orders, config as cfg
+    from pending_plan import load_plan
+    from tests.fakes import FakeBroker
+
+    monkeypatch.setattr(orders, "HALT_PATH", str(tmp_path / "no_halt"))
+    monkeypatch.setattr(orders, "DAILY_TRADE_LOG", str(tmp_path / "log.json"))
+    monkeypatch.setattr(orders, "PENDING_ORDERS_PATH", str(tmp_path / "pend.json"))
+    monkeypatch.setattr(orders, "PORTFOLIO_PATH", str(tmp_path / "port.json"))
+    monkeypatch.setattr("pending_plan.PENDING_PLAN_PATH", str(tmp_path / "plan.json"))
+    monkeypatch.setattr(cfg, "EXECUTOR_SHADOW_MODE", False)
+
+    import baseline as bl
+    monkeypatch.setattr(bl, "_fetch_spy", lambda: 480.0)
+    monkeypatch.setattr(bl, "_fetch_vix", lambda: 14.0)
+    monkeypatch.setattr(bl, "_fetch_macro_score", lambda: 0.0)
+
+    b = FakeBroker(cash=50_000.0, equity=100_000.0)
+    b.set_latest_price("SPY", 480.0)
+    # Deliberately DO NOT seed NVDA price — FakeBroker._latest_price will raise
+
+    def fake_target_builder():
+        return {"SPY": 0.10, "NVDA": 0.05}, 90_000.0
+
+    rebalancer.run(tranche="core", dry_run=False, force=True,
+                   broker=b, target_builder=fake_target_builder)
+
+    plan = load_plan()
+    # Plan must exist with SPY but NOT NVDA
+    assert plan is not None
+    syms = [s.intent.symbol for s in plan.intents]
+    assert "SPY" in syms
+    assert "NVDA" not in syms
+
+    # And a warning should have been printed
+    captured = capsys.readouterr()
+    assert "NVDA" in captured.out
+    assert "decision price" in captured.out.lower() or "price" in captured.out.lower()

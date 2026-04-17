@@ -34,7 +34,7 @@ def build_priced_intents(
             tolerance *= config.AGGRESSIVE_TIER_MULTIPLIER
 
         price = ctx.decision_prices.get(raw.symbol)
-        if price is None:
+        if price is None or price <= 0:
             out.append(raw)
             continue
 
