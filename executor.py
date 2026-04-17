@@ -233,10 +233,19 @@ def _next_slice_due(
 
 def _process_slices(plan: PendingPlan, obs, result: TickResult, *, broker):
     """For each active intent, cancel prior unfilled limit, then submit
-    the next slice if its window has passed and max_price is respected."""
+    the next slice if its window has passed and max_price is respected.
+
+    Bails early at/after EXECUTOR_WINDOW_END so we don't submit slices that
+    _process_eod would immediately cancel on the same tick.
+    """
     from orders import submit_limit_slice
     from dataclasses import replace
     now = _now_et()
+
+    end_h, end_m = map(int, config.EXECUTOR_WINDOW_END.split(":"))
+    eod = dt.datetime.combine(now.date(), dt.time(end_h, end_m))
+    if now >= eod:
+        return
 
     for state in plan.intents:
         if state.status != "active":

@@ -173,3 +173,19 @@ def test_partial_fill_is_credited_before_cancel(tmp_path, monkeypatch):
     assert len(submitted) == 1
     # The submitted slice notional should be ~700 (1000 - 300 remaining, 1 slice left)
     assert abs(submitted[0].notional - 700.0) < 1.0
+
+
+def test_process_slices_bails_past_eod(tmp_path, monkeypatch):
+    """After EXECUTOR_WINDOW_END, _process_slices must not submit or populate
+    would_submit — otherwise _process_eod on the same tick cancels the just-
+    submitted slice, a wasted round-trip."""
+    import executor
+    _setup(tmp_path, monkeypatch, now_et=(15, 55), shadow=True)
+    write_plan(_plan(_base_intent(slice_count=4)))
+    b = FakeBroker()
+    b.set_latest_quote("SPY", bid=479.95, ask=480.05)
+    monkeypatch.setattr(executor, "_fetch_current_observations",
+                        lambda p, b: _Obs(symbol_prices={"SPY": 480.0}))
+    result = executor.run_tick(broker=b)
+    assert result.would_submit == []
+    assert result.submitted == []
