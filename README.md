@@ -7,17 +7,40 @@ A Python-based quantitative investment system for the US stock market. Designed 
 ```bash
 pip3 install -r requirements.txt
 
-# Set your FRED API key (free: https://fred.stlouisfed.org/docs/api/api_key.html)
-echo "FRED_API_KEY=your_key_here" > .env
+# Copy .env.example to .env and fill in:
+#   FRED_API_KEY (free)                  https://fred.stlouisfed.org/docs/api/api_key.html
+#   ALPACA_API_KEY + ALPACA_API_SECRET   https://app.alpaca.markets/paper/dashboard/overview
+cp .env.example .env
+# edit .env
 
-# Run the full analysis
+# 1. See what the system would do (read-only)
 python3 run.py
+
+# 2. Dry-run the rebalancer (prints plan, submits nothing)
+python3 rebalancer.py --tranche core --dry-run
+python3 rebalancer.py --tranche aggressive --dry-run
+
+# 3. When ready, let it place orders on the paper account
+python3 rebalancer.py --tranche core
 ```
 
 ## Commands
 
 ```bash
-# Full analysis (three modes)
+# Trading (Alpaca; paper by default)
+python3 rebalancer.py --tranche core              # core tranche, mode-specific cadence
+python3 rebalancer.py --tranche aggressive        # aggressive tranche, weekly
+python3 rebalancer.py --tranche core --dry-run    # plan without submitting
+python3 rebalancer.py --tranche core --force      # bypass cadence gate
+
+# Kill-switch
+touch .cache/HALT                                  # pause all order logic
+rm .cache/HALT                                     # resume
+
+# Tag an externally-opened position so it's counted in a tranche
+python3 -c "from orders import tag_position; tag_position('NVDA', 'core', 'manual 2026-04-17')"
+
+# Read-only analysis (three modes)
 python3 run.py                              # balanced (default)
 PORTFOLIO_MODE=growth python3 run.py        # aggressive: leveraged ETFs + small-caps
 PORTFOLIO_MODE=conservative python3 run.py  # capital preservation
@@ -128,8 +151,12 @@ Portfolio value is logged daily to `daily_log.csv` for tracking.
 ### Automate with cron (weekdays 8:30 AM ET):
 ```bash
 crontab -e
-30 8 * * 1-5 cd /path/to/stock && python3 watchdog.py >> .cache/watchdog.log 2>&1
+30 8 * * 1-5 cd /Users/zl/works/stock && python3 watchdog.py >> .cache/watchdog.log 2>&1
+0  9 * * 1-5 cd /Users/zl/works/stock && python3 rebalancer.py --tranche core >> .cache/rebalance.log 2>&1
+0  9 * * 1   cd /Users/zl/works/stock && python3 rebalancer.py --tranche aggressive >> .cache/rebalance.log 2>&1
 ```
+
+Note: rebalancer.py no-ops unless cadence is reached, so running daily is fine.
 
 ## Auto Stock Discovery
 
@@ -151,6 +178,24 @@ Run `python3 discovery.py --update` to automatically add top discoveries to the 
 - **Macro overlay**: reduces equity exposure in deteriorating macro conditions
 - **Diversification**: correlation matrix monitoring, diversification ratio tracking
 - **Metrics**: annualized Sharpe ratio, max drawdown, VaR/CVaR at 95%, win rate
+
+## Safety Rails
+
+Every order — rebalance, stop-exit, or signal-driven — goes through `orders.py`:
+
+1. **HALT file** (`.cache/HALT`) — if present, all order logic exits cleanly.
+2. **Paper/live guard** — live mode requires both `ALPACA_ENV=live` and `ALPACA_LIVE_CONFIRM=yes`.
+3. **Daily caps** — `DAILY_MAX_ORDERS` and `DAILY_MAX_NOTIONAL` in `config.py`.
+4. **Large-order approval** — orders ≥ `LARGE_ORDER_THRESHOLD` ($2K default) go to `pending_orders.json` and require Telegram approval before submission.
+
+## Switching to live
+
+Paper is the default. Before flipping to live:
+
+1. Run on paper for several weeks. Review `daily_log.csv`, verify brackets always attach, watch for Telegram prompts that were wrong.
+2. Set `DAILY_MAX_NOTIONAL` to a small number (e.g. $500) in `config.py`.
+3. Export `ALPACA_ENV=live` and `ALPACA_LIVE_CONFIRM=yes`.
+4. Ramp `DAILY_MAX_NOTIONAL` up over subsequent weeks.
 
 ## Data Sources
 
