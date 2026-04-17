@@ -259,6 +259,37 @@ def reconcile_to_targets(
     return OrderPlan(buys=buys, sells=sells, holds=holds)
 
 
+# ── Daily caps ──────────────────────────────────────────────────
+
+DAILY_MAX_ORDERS = config.DAILY_MAX_ORDERS
+DAILY_MAX_NOTIONAL = config.DAILY_MAX_NOTIONAL
+LARGE_ORDER_THRESHOLD = config.LARGE_ORDER_THRESHOLD
+
+
+def _today_key(now: Optional[dt.datetime] = None) -> str:
+    return (now or dt.datetime.now(dt.timezone.utc)).date().isoformat()
+
+
+def _load_daily_log() -> dict:
+    if not os.path.exists(DAILY_TRADE_LOG):
+        return {}
+    with open(DAILY_TRADE_LOG) as f:
+        return json.load(f)
+
+
+def _save_daily_log(log: dict):
+    os.makedirs(os.path.dirname(DAILY_TRADE_LOG), exist_ok=True) if os.path.dirname(DAILY_TRADE_LOG) else None
+    with open(DAILY_TRADE_LOG, "w") as f:
+        json.dump(log, f, indent=2)
+
+
+def _today_bucket(log: dict) -> dict:
+    key = _today_key()
+    if key not in log:
+        log[key] = {"submitted_count": 0, "submitted_notional": 0.0, "deferred": []}
+    return log[key]
+
+
 # ── execute_plan (scaffolded with HALT only; caps/large-order added in later tasks)
 
 def execute_plan(plan: OrderPlan, *, broker, reason: str) -> ExecutionResult:
@@ -271,10 +302,27 @@ def execute_plan(plan: OrderPlan, *, broker, reason: str) -> ExecutionResult:
             result.skipped.append((i, "HALT file present"))
         return result
 
-    for i in intents:
-        # Caps + large-order gate added in later tasks
-        _submit_intent(broker, i, result)
+    log = _load_daily_log()
+    bucket = _today_bucket(log)
 
+    for i in intents:
+        # Daily cap enforcement
+        if bucket["submitted_count"] >= DAILY_MAX_ORDERS:
+            result.deferred.append(i)
+            bucket["deferred"].append(asdict(i))
+            continue
+        if bucket["submitted_notional"] + i.notional > DAILY_MAX_NOTIONAL:
+            result.deferred.append(i)
+            bucket["deferred"].append(asdict(i))
+            continue
+
+        before = len(result.submitted)
+        _submit_intent(broker, i, result)
+        if len(result.submitted) > before:
+            bucket["submitted_count"] += 1
+            bucket["submitted_notional"] += i.notional
+
+    _save_daily_log(log)
     return result
 
 

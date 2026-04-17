@@ -244,3 +244,72 @@ def test_halt_blocks_all_orders(tmp_path, monkeypatch):
     assert result.submitted == []
     assert len(result.skipped) == 1
     assert "HALT" in result.skipped[0][1]
+
+
+# ── Daily caps ──────────────────────────────────────────────────
+
+def _intent(sym, notional, side="buy"):
+    from orders import OrderIntent
+    return OrderIntent(
+        symbol=sym, notional=notional, side=side,
+        reason="test", tranche="core",
+        client_order_id=f"core-test-{sym}-20260417-abcdef",
+        stop_pct=0.08 if side == "buy" else None,
+        trail_pct=0.12 if side == "buy" else None,
+    )
+
+
+def test_daily_max_orders_cap(tmp_path, monkeypatch):
+    _safety_paths(tmp_path, monkeypatch)
+    _portfolio_cache(tmp_path, monkeypatch, None)
+    monkeypatch.setattr("orders.DAILY_MAX_ORDERS", 2)
+    monkeypatch.setattr("orders.DAILY_MAX_NOTIONAL", 100_000)
+    monkeypatch.setattr("orders.LARGE_ORDER_THRESHOLD", 10_000)
+
+    from orders import OrderPlan, execute_plan
+    plan = OrderPlan(
+        buys=[_intent("A", 100), _intent("B", 100), _intent("C", 100)],
+        sells=[], holds=[],
+    )
+    fb = FakeBroker()
+    result = execute_plan(plan, broker=fb, reason="test")
+    assert len(result.submitted) == 2
+    assert len(result.deferred) == 1
+
+
+def test_daily_max_notional_cap(tmp_path, monkeypatch):
+    _safety_paths(tmp_path, monkeypatch)
+    _portfolio_cache(tmp_path, monkeypatch, None)
+    monkeypatch.setattr("orders.DAILY_MAX_ORDERS", 100)
+    monkeypatch.setattr("orders.DAILY_MAX_NOTIONAL", 500)
+    monkeypatch.setattr("orders.LARGE_ORDER_THRESHOLD", 10_000)
+
+    from orders import OrderPlan, execute_plan
+    plan = OrderPlan(
+        buys=[_intent("A", 300), _intent("B", 300)],
+        sells=[], holds=[],
+    )
+    fb = FakeBroker()
+    result = execute_plan(plan, broker=fb, reason="test")
+    assert len(result.submitted) == 1
+    assert len(result.deferred) == 1
+
+
+def test_caps_persist_across_calls(tmp_path, monkeypatch):
+    _safety_paths(tmp_path, monkeypatch)
+    _portfolio_cache(tmp_path, monkeypatch, None)
+    monkeypatch.setattr("orders.DAILY_MAX_ORDERS", 2)
+    monkeypatch.setattr("orders.DAILY_MAX_NOTIONAL", 100_000)
+    monkeypatch.setattr("orders.LARGE_ORDER_THRESHOLD", 10_000)
+
+    from orders import OrderPlan, execute_plan
+    fb = FakeBroker()
+    execute_plan(OrderPlan(buys=[_intent("A", 100)], sells=[], holds=[]),
+                 broker=fb, reason="t1")
+    execute_plan(OrderPlan(buys=[_intent("B", 100)], sells=[], holds=[]),
+                 broker=fb, reason="t2")
+    # Third call should defer — already at 2 submitted today
+    r3 = execute_plan(OrderPlan(buys=[_intent("C", 100)], sells=[], holds=[]),
+                       broker=fb, reason="t3")
+    assert r3.submitted == []
+    assert len(r3.deferred) == 1
