@@ -264,6 +264,7 @@ def reconcile_to_targets(
 DAILY_MAX_ORDERS = config.DAILY_MAX_ORDERS
 DAILY_MAX_NOTIONAL = config.DAILY_MAX_NOTIONAL
 LARGE_ORDER_THRESHOLD = config.LARGE_ORDER_THRESHOLD
+PENDING_ORDER_TTL_HOURS = config.PENDING_ORDER_TTL_HOURS
 
 
 def _today_key(now: Optional[dt.datetime] = None) -> str:
@@ -290,12 +291,10 @@ def _today_bucket(log: dict) -> dict:
     return log[key]
 
 
-# ── execute_plan (scaffolded with HALT only; caps/large-order added in later tasks)
-
 def execute_plan(plan: OrderPlan, *, broker, reason: str) -> ExecutionResult:
     """Runs every intent through: HALT → market-open → daily caps → large-order gate."""
     result = ExecutionResult()
-    intents = list(plan.sells) + list(plan.buys)   # sells first: free up buying power
+    intents = list(plan.sells) + list(plan.buys)
 
     if os.path.exists(HALT_PATH):
         for i in intents:
@@ -304,9 +303,11 @@ def execute_plan(plan: OrderPlan, *, broker, reason: str) -> ExecutionResult:
 
     log = _load_daily_log()
     bucket = _today_bucket(log)
+    pending = _load_pending()
+    now = dt.datetime.now(dt.timezone.utc)
 
     for i in intents:
-        # Daily cap enforcement
+        # Daily cap first — deferred doesn't waste a pending slot
         if bucket["submitted_count"] >= DAILY_MAX_ORDERS:
             result.deferred.append(i)
             bucket["deferred"].append(asdict(i))
@@ -316,6 +317,12 @@ def execute_plan(plan: OrderPlan, *, broker, reason: str) -> ExecutionResult:
             bucket["deferred"].append(asdict(i))
             continue
 
+        # Large-order gate
+        if i.notional >= LARGE_ORDER_THRESHOLD:
+            pending.append(_intent_to_pending(i, now))
+            result.queued.append(i)
+            continue
+
         before = len(result.submitted)
         _submit_intent(broker, i, result)
         if len(result.submitted) > before:
@@ -323,6 +330,7 @@ def execute_plan(plan: OrderPlan, *, broker, reason: str) -> ExecutionResult:
             bucket["submitted_notional"] += i.notional
 
     _save_daily_log(log)
+    _save_pending(pending)
     return result
 
 
@@ -349,3 +357,93 @@ def _submit_intent(broker, i: OrderIntent, result: ExecutionResult):
         result.submitted.append(o)
     except BrokerError as e:
         result.skipped.append((i, f"BrokerError: {e}"))
+
+
+# ── Large-order pending queue ───────────────────────────────────
+
+def _load_pending() -> list[dict]:
+    if not os.path.exists(PENDING_ORDERS_PATH):
+        return []
+    with open(PENDING_ORDERS_PATH) as f:
+        return json.load(f)
+
+
+def _save_pending(items: list[dict]):
+    with open(PENDING_ORDERS_PATH, "w") as f:
+        json.dump(items, f, indent=2)
+
+
+def _intent_to_pending(i: OrderIntent, now: dt.datetime) -> dict:
+    return {
+        "id": f"pend_{i.client_order_id}",
+        "symbol": i.symbol,
+        "notional": i.notional,
+        "side": i.side,
+        "stop_pct": i.stop_pct,
+        "trail_pct": i.trail_pct,
+        "reason": i.reason,
+        "tranche": i.tranche,
+        "client_order_id": i.client_order_id,
+        "created": now.isoformat(),
+        "expires": (now + dt.timedelta(hours=PENDING_ORDER_TTL_HOURS)).isoformat(),
+    }
+
+
+def _pending_to_intent(p: dict) -> OrderIntent:
+    return OrderIntent(
+        symbol=p["symbol"], notional=p["notional"], side=p["side"],
+        reason=p["reason"], tranche=p["tranche"],
+        client_order_id=p["client_order_id"],
+        stop_pct=p.get("stop_pct"), trail_pct=p.get("trail_pct"),
+    )
+
+
+def list_pending() -> list[dict]:
+    return _load_pending()
+
+
+def reject_pending(pending_id: str) -> None:
+    items = _load_pending()
+    _save_pending([p for p in items if p["id"] != pending_id])
+
+
+def approve_pending(pending_id: str, *, broker) -> ExecutionResult:
+    """Re-runs HALT + daily cap checks before submitting."""
+    result = ExecutionResult()
+    items = _load_pending()
+    target = next((p for p in items if p["id"] == pending_id), None)
+    if target is None:
+        result.skipped.append((None, f"pending id not found: {pending_id}"))  # type: ignore[arg-type]
+        return result
+
+    # Remove from queue immediately — win or lose, it leaves the queue.
+    _save_pending([p for p in items if p["id"] != pending_id])
+
+    now = dt.datetime.now(dt.timezone.utc)
+    expires = dt.datetime.fromisoformat(target["expires"])
+    intent = _pending_to_intent(target)
+
+    if now > expires:
+        result.skipped.append((intent, "pending order expired"))
+        return result
+
+    if os.path.exists(HALT_PATH):
+        result.skipped.append((intent, "HALT file present"))
+        return result
+
+    log = _load_daily_log()
+    bucket = _today_bucket(log)
+    if bucket["submitted_count"] >= DAILY_MAX_ORDERS or \
+       bucket["submitted_notional"] + intent.notional > DAILY_MAX_NOTIONAL:
+        bucket["deferred"].append(asdict(intent))
+        _save_daily_log(log)
+        result.deferred.append(intent)
+        return result
+
+    before = len(result.submitted)
+    _submit_intent(broker, intent, result)
+    if len(result.submitted) > before:
+        bucket["submitted_count"] += 1
+        bucket["submitted_notional"] += intent.notional
+    _save_daily_log(log)
+    return result

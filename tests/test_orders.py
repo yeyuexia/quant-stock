@@ -313,3 +313,76 @@ def test_caps_persist_across_calls(tmp_path, monkeypatch):
                        broker=fb, reason="t3")
     assert r3.submitted == []
     assert len(r3.deferred) == 1
+
+
+# ── Large-order gate ────────────────────────────────────────────
+
+def test_large_order_queued_not_submitted(tmp_path, monkeypatch):
+    _safety_paths(tmp_path, monkeypatch)
+    _portfolio_cache(tmp_path, monkeypatch, None)
+    monkeypatch.setattr("orders.DAILY_MAX_ORDERS", 100)
+    monkeypatch.setattr("orders.DAILY_MAX_NOTIONAL", 100_000)
+    monkeypatch.setattr("orders.LARGE_ORDER_THRESHOLD", 1_000)
+
+    from orders import OrderPlan, execute_plan
+    plan = OrderPlan(
+        buys=[_intent("SMALL", 500), _intent("BIG", 2_500)],
+        sells=[], holds=[],
+    )
+    fb = FakeBroker()
+    result = execute_plan(plan, broker=fb, reason="test")
+    assert [o.symbol for o in result.submitted] == ["SMALL"]
+    assert [i.symbol for i in result.queued] == ["BIG"]
+
+    pending = json.loads((tmp_path / "pending_orders.json").read_text())
+    assert len(pending) == 1 and pending[0]["symbol"] == "BIG"
+    assert "expires" in pending[0]
+
+
+def test_approve_pending_submits(tmp_path, monkeypatch):
+    _safety_paths(tmp_path, monkeypatch)
+    _portfolio_cache(tmp_path, monkeypatch, None)
+    monkeypatch.setattr("orders.DAILY_MAX_ORDERS", 100)
+    monkeypatch.setattr("orders.DAILY_MAX_NOTIONAL", 100_000)
+    monkeypatch.setattr("orders.LARGE_ORDER_THRESHOLD", 1_000)
+
+    from orders import OrderPlan, execute_plan, approve_pending, list_pending
+    fb = FakeBroker()
+    execute_plan(OrderPlan(buys=[_intent("BIG", 2_500)], sells=[], holds=[]),
+                 broker=fb, reason="test")
+    pending = list_pending()
+    assert len(pending) == 1
+    result = approve_pending(pending[0]["id"], broker=fb)
+    assert len(result.submitted) == 1
+    assert list_pending() == []
+
+
+def test_reject_pending_removes(tmp_path, monkeypatch):
+    _safety_paths(tmp_path, monkeypatch)
+    _portfolio_cache(tmp_path, monkeypatch, None)
+    monkeypatch.setattr("orders.LARGE_ORDER_THRESHOLD", 1_000)
+
+    from orders import OrderPlan, execute_plan, reject_pending, list_pending
+    fb = FakeBroker()
+    execute_plan(OrderPlan(buys=[_intent("BIG", 2_500)], sells=[], holds=[]),
+                 broker=fb, reason="test")
+    pending = list_pending()
+    reject_pending(pending[0]["id"])
+    assert list_pending() == []
+
+
+def test_approve_expired_rejected(tmp_path, monkeypatch):
+    _safety_paths(tmp_path, monkeypatch)
+    _portfolio_cache(tmp_path, monkeypatch, None)
+    monkeypatch.setattr("orders.LARGE_ORDER_THRESHOLD", 1_000)
+    monkeypatch.setattr("orders.PENDING_ORDER_TTL_HOURS", 0)  # expires instantly
+
+    from orders import OrderPlan, execute_plan, approve_pending, list_pending
+    fb = FakeBroker()
+    execute_plan(OrderPlan(buys=[_intent("BIG", 2_500)], sells=[], holds=[]),
+                 broker=fb, reason="test")
+    pending = list_pending()
+    result = approve_pending(pending[0]["id"], broker=fb)
+    assert result.submitted == []
+    assert any("expired" in msg.lower() for _, msg in result.skipped)
+    assert list_pending() == []
