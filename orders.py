@@ -32,11 +32,10 @@ class OrderIntent:
     client_order_id: str
     stop_pct: Optional[float] = None     # set on entries
     trail_pct: Optional[float] = None    # set on entries
-    # NEW fields (intraday execution layer):
-    tier: Optional[str] = None           # "HIGH" | "MED" — None = legacy path
-    decision_price: Optional[float] = None   # price at plan time
-    max_price: Optional[float] = None    # ceiling (buys) / floor (sells)
-    slice_count: Optional[int] = None    # 1 | 2 | 4
+    tier: Optional[str] = None
+    decision_price: Optional[float] = None
+    max_price: Optional[float] = None
+    slice_count: Optional[int] = None
 
 
 @dataclass(frozen=True)

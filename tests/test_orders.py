@@ -7,6 +7,7 @@ import pytest
 
 from broker import BrokerError
 from tests.fakes import FakeBroker, FakeClock
+from orders import OrderIntent
 
 
 def test_make_cid_format():
@@ -651,7 +652,6 @@ def test_ensure_trailing_stops_respects_halt(tmp_path, monkeypatch):
 # ── OrderIntent new fields (Task 2: intraday execution layer) ────
 
 def test_order_intent_accepts_new_fields():
-    from orders import OrderIntent
     i = OrderIntent(
         symbol="SPY", notional=1000.0, side="buy",
         reason="test", tranche="core", client_order_id="x-1",
@@ -665,7 +665,6 @@ def test_order_intent_accepts_new_fields():
 
 
 def test_order_intent_new_fields_default_to_none():
-    from orders import OrderIntent
     # Backwards-compatible construction (existing paths don't set the new fields).
     i = OrderIntent(
         symbol="SPY", notional=1000.0, side="buy",
