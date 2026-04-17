@@ -386,3 +386,54 @@ def test_approve_expired_rejected(tmp_path, monkeypatch):
     assert result.submitted == []
     assert any("expired" in msg.lower() for _, msg in result.skipped)
     assert list_pending() == []
+
+
+# ── submit_exit ─────────────────────────────────────────────────
+
+def test_submit_exit_sells_full_position(tmp_path, monkeypatch):
+    _safety_paths(tmp_path, monkeypatch)
+    old = {
+        "synced_at": "2026-04-16T14:00:00+00:00", "alpaca_env": "paper",
+        "cash": 0.0, "equity": 0.0,
+        "positions": [
+            {"symbol": "TQQQ", "shares": 50.0, "avg_entry": 60.0,
+             "market_value": 3000.0, "unrealized_pl": 0.0,
+             "tranche": "aggressive", "entry_reason": "x",
+             "stop_order_id": None, "trail_order_id": None},
+        ],
+        "tranches": {"core": {"last_rebalance": None},
+                     "aggressive": {"last_rebalance": None}},
+    }
+    _portfolio_cache(tmp_path, monkeypatch, old)
+    monkeypatch.setattr("orders.LARGE_ORDER_THRESHOLD", 10_000)
+
+    from orders import submit_exit
+    fb = FakeBroker()
+    fb.seed_position("TQQQ", qty=50, avg_entry=60, mv=3000)
+
+    result = submit_exit("TQQQ", reason="macro→contraction", broker=fb)
+    assert len(result.submitted) == 1
+    o = result.submitted[0]
+    assert o.symbol == "TQQQ" and o.side == "sell"
+
+
+def test_submit_exit_respects_halt(tmp_path, monkeypatch):
+    _safety_paths(tmp_path, monkeypatch)
+    _portfolio_cache(tmp_path, monkeypatch, {
+        "synced_at": "x", "alpaca_env": "paper", "cash": 0, "equity": 0,
+        "positions": [
+            {"symbol": "TQQQ", "shares": 50.0, "avg_entry": 60.0,
+             "market_value": 3000.0, "unrealized_pl": 0.0,
+             "tranche": "aggressive", "entry_reason": "x",
+             "stop_order_id": None, "trail_order_id": None},
+        ],
+        "tranches": {"core": {"last_rebalance": None},
+                     "aggressive": {"last_rebalance": None}},
+    })
+    (tmp_path / "HALT").touch()
+
+    from orders import submit_exit
+    fb = FakeBroker()
+    result = submit_exit("TQQQ", reason="macro→contraction", broker=fb)
+    assert result.submitted == []
+    assert any("HALT" in msg for _, msg in result.skipped)

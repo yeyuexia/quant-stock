@@ -447,3 +447,26 @@ def approve_pending(pending_id: str, *, broker) -> ExecutionResult:
         bucket["submitted_notional"] += intent.notional
     _save_daily_log(log)
     return result
+
+
+# ── submit_exit ─────────────────────────────────────────────────
+
+def submit_exit(symbol: str, *, reason: str, broker) -> ExecutionResult:
+    """Full-position exit routed through the same safety rails as a plan."""
+    cache = _load_portfolio_cache()
+    meta = next((p for p in cache.get("positions", []) if p["symbol"] == symbol), None)
+    if meta is None:
+        result = ExecutionResult()
+        result.skipped.append((None, f"no cached metadata for {symbol}"))  # type: ignore[arg-type]
+        return result
+
+    tranche = meta.get("tranche", "unknown")
+    notional = float(meta["market_value"])
+    cid = _make_cid(tranche, f"exit-{reason[:16]}", symbol, dt.date.today())
+    intent = OrderIntent(
+        symbol=symbol, notional=notional, side="sell",
+        reason=reason, tranche=tranche, client_order_id=cid,
+    )
+    # Wrap in a one-buy plan so HALT + caps + large-order logic fires uniformly.
+    return execute_plan(OrderPlan(buys=[], sells=[intent], holds=[]),
+                        broker=broker, reason=reason)
