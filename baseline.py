@@ -31,11 +31,18 @@ def _fetch_spy() -> float:
 
 
 def _fetch_vix() -> float:
+    """VIX spot via yfinance. Prefers intraday 5-min bars so tick-level
+    evaluation (in executor) can see moves within the day; falls back to
+    daily bars when intraday is unavailable (e.g., pre-market)."""
     import yfinance as yf
-    hist = yf.Ticker("^VIX").history(period="5d", interval="1d")
-    if hist.empty:
+    ticker = yf.Ticker("^VIX")
+    intraday = ticker.history(period="1d", interval="5m")
+    if not intraday.empty:
+        return float(intraday["Close"].iloc[-1])
+    daily = ticker.history(period="5d", interval="1d")
+    if daily.empty:
         raise RuntimeError("VIX history empty")
-    return float(hist["Close"].iloc[-1])
+    return float(daily["Close"].iloc[-1])
 
 
 def _fetch_macro_score() -> float:
