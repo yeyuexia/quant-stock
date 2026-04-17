@@ -104,6 +104,29 @@ Every order goes through four checks in `orders.py`, in this order:
 
 All four checks apply uniformly to scheduled rebalances, stop-loss exits, and signal-driven macro exits. Nothing bypasses them.
 
+## Intraday Execution Layer
+
+Rebalance orders are **not** submitted in a single burst at plan time. Instead:
+
+1. **Planner** (`rebalancer.py`) builds a priced, ranked plan and writes it to `.cache/pending_plan.json`. Each intent carries a `tier` (HIGH/MED), `max_price` (buys) / `min_price` (sells), and a `slice_count` (2 or 4).
+2. **Executor** (`executor.py`) fires every 10 min during market hours (10:00–15:50 ET). For each intent, it cancels the prior unfilled limit, evaluates five circuit breakers against the plan-time baseline, and submits the next slice as a marketable limit — if the ask (buy) or bid (sell) respects the price ceiling/floor.
+3. **Circuit breakers** abort unexecuted work when the market stresses during the day:
+   - **A: SPY drop** — −1.5% from baseline → abort all buys
+   - **B: VIX spike** — >50% above baseline OR ≥25 absolute → abort all buys
+   - **C: Single-name shock** — −5% on a symbol in the plan → abort that symbol only
+   - **D: News shock** — keyword hit + SPY moved >0.5% in last 15 min → abort all buys
+   - **E: Macro regime flip** — macro score drops ≥ 0.3 → abort risk-on buys (defensive BIL/SHY/IEF/TLT continue)
+   Breakers are sticky: once tripped, the affected scope stays aborted for the rest of the day.
+4. **End of day:** at 15:50 ET, any unfilled intent is canceled and marked `deferred`. Tomorrow's rebalancer re-validates against current signals.
+
+See `docs/superpowers/specs/2026-04-17-intraday-execution-design.md` for the full design, thresholds, and rationale.
+
+### Phased rollout
+
+1. **Shadow mode** (`EXECUTOR_SHADOW_MODE = True` in `config.py`). Executor logs what it would submit without placing orders. Run 1–2 weeks on paper.
+2. **Live on paper** (`EXECUTOR_SHADOW_MODE = False`). Executor submits to the paper account. Run 2–4 weeks; tune circuit-breaker thresholds from real trips.
+3. **Flip to live.** Follow the existing paper→live protocol (ramp `DAILY_MAX_NOTIONAL`).
+
 ## State Model
 
 **Alpaca is the source of truth** for cash, positions, market value, and unrealized P&L.
@@ -166,16 +189,22 @@ Set mode via environment variable:
 export PORTFOLIO_MODE=growth
 ```
 
-## Automation (cron, weekdays 8:30 AM ET)
+## Automation (cron, weekdays)
 
 ```bash
 crontab -e
-30 8 * * 1-5 cd /Users/zl/works/stock && python3 watchdog.py   >> .cache/watchdog.log 2>&1
-0  9 * * 1-5 cd /Users/zl/works/stock && python3 rebalancer.py --tranche core       >> .cache/rebalance.log 2>&1
-0  9 * * 1   cd /Users/zl/works/stock && python3 rebalancer.py --tranche aggressive >> .cache/rebalance.log 2>&1
+# Watchdog — 8:30 AM ET
+30 8 * * 1-5 cd /Users/zl/works/stock && python3 watchdog.py                        >> .cache/watchdog.log 2>&1
+
+# Rebalancer — 9:35 AM ET (post-open so baseline SPY/VIX reflect live levels)
+35 9 * * 1-5 cd /Users/zl/works/stock && python3 rebalancer.py --tranche core       >> .cache/rebalance.log 2>&1
+35 9 * * 1   cd /Users/zl/works/stock && python3 rebalancer.py --tranche aggressive >> .cache/rebalance.log 2>&1
+
+# Executor — every 10 min, 10:00–15:50 ET
+*/10 10-15 * * 1-5 cd /Users/zl/works/stock && python3 executor.py                  >> .cache/executor.log 2>&1
 ```
 
-`rebalancer.py` no-ops unless the cadence threshold is reached, so running daily is safe.
+`rebalancer.py` writes `.cache/pending_plan.json` for orders ≥ $500 and direct-submits orders below that threshold. `executor.py` picks up the pending plan on the next 10-min tick, evaluates five circuit breakers, and slices orders across the day. Both scripts are safe to run daily: rebalancer no-ops unless the cadence threshold is reached, and executor no-ops if the pending plan is empty.
 
 ## Switching to live
 
