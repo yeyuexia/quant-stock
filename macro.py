@@ -357,6 +357,15 @@ def macro_regime_score():
     }
 
 
+def macro_composite_score() -> float:
+    """Raw composite macro score in [-1, +1] without the risk-adjustment mapping.
+
+    Used by baseline.py to capture the macro regime at plan time and by
+    breakers.py to detect intra-day regime flips.
+    """
+    return float(macro_regime_score()["score"])
+
+
 def macro_risk_adjustment(base_equity_pct: float) -> float:
     """Adjust equity allocation based on macro regime.
 
