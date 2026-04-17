@@ -37,3 +37,52 @@ def test_breaker_result_has_scope():
     result = check_spy_drop(bl, spy_now=470.0)
     assert result.scope == "buys"
     assert result.affected_symbols is None
+
+
+from breakers import check_vix_spike, check_single_name_shock
+
+
+def test_vix_spike_trips_on_multiplier():
+    bl = _baseline()
+    bl = Baseline(spy=bl.spy, vix=18.0, macro_score=bl.macro_score,
+                  news_cursor_at=bl.news_cursor_at)
+    # multiplier 1.5 → 27.0, absolute floor 25.0 → threshold max is 27.0
+    result = check_vix_spike(bl, vix_now=27.1)
+    assert result.tripped is True
+    assert result.scope == "buys"
+
+
+def test_vix_spike_does_not_trip_below_absolute_floor():
+    bl = Baseline(spy=480.0, vix=10.0, macro_score=0.0,
+                  news_cursor_at=dt.datetime(2026, 4, 17, tzinfo=dt.timezone.utc))
+    # multiplier 1.5 → 15.0, but absolute floor 25.0 not reached
+    result = check_vix_spike(bl, vix_now=20.0)
+    assert result.tripped is False
+
+
+def test_vix_spike_trips_on_absolute_with_large_baseline():
+    bl = Baseline(spy=480.0, vix=30.0, macro_score=0.0,
+                  news_cursor_at=dt.datetime(2026, 4, 17, tzinfo=dt.timezone.utc))
+    # Multiplier: 45.0, absolute 25.0 → max = 45.0
+    result = check_vix_spike(bl, vix_now=46.0)
+    assert result.tripped is True
+
+
+def test_single_name_shock_affects_only_one_symbol():
+    bl = _baseline()
+    prices = {"AAPL": 170.0, "MSFT": 390.0}
+    baselines = {"AAPL": 180.0, "MSFT": 400.0}   # AAPL -5.56%, MSFT -2.5%
+    results = check_single_name_shock(bl, baselines, prices)
+    tripped = [r for r in results if r.tripped]
+    assert len(tripped) == 1
+    assert tripped[0].affected_symbols == ["AAPL"]
+    assert tripped[0].scope == "symbol"
+    assert tripped[0].breaker == "C"
+
+
+def test_single_name_shock_no_trip_if_all_above_threshold():
+    bl = _baseline()
+    prices = {"AAPL": 178.0, "MSFT": 395.0}
+    baselines = {"AAPL": 180.0, "MSFT": 400.0}
+    results = check_single_name_shock(bl, baselines, prices)
+    assert all(not r.tripped for r in results)
