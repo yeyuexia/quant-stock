@@ -275,11 +275,22 @@ _OVERRIDES_PATH = os.path.join(os.path.dirname(__file__), ".cache", "strategy_ov
 # The applier enforces relative-pct bounds (±20%, ±50%); this layer enforces
 # absolute bounds as a second line of defense.
 _OVERRIDE_SCHEMA = {
+    # Low-risk (auto-applied by the quant review applier)
     "WATCHLIST":            (list,  None, None),
     "NEWS_SHOCK_KEYWORDS":  (list,  None, None),
     "STOP_LOSS_PCT":        (float, 0.04, 0.20),
     "TRAILING_STOP_PCT":    (float, 0.06, 0.25),
     "CASH_BUFFER_PCT":      (float, 0.02, 0.20),
+    # High-risk (require TG approval; applied here only after the bot
+    # writes them to strategy_overrides.json on /strategy-approve)
+    "MOMENTUM_TOP_N":            (int,   1,    10),
+    "ETF_ALLOCATION_PCT":        (float, 0.0,  1.0),
+    "STOCK_ALLOCATION_PCT":      (float, 0.0,  1.0),
+    "SCREEN_MIN_ROE":            (float, 0.0,  1.0),
+    "SCREEN_MAX_PE":             (float, 5.0,  100.0),
+    "SCREEN_MAX_DEBT_EQUITY":    (float, 0.0,  10.0),
+    "MOMENTUM_LOOKBACK_MONTHS":  (list,  None, None),
+    "SAFE_HAVEN":                (str,   None, None),
 }
 
 def _apply_overrides():

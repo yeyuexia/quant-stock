@@ -70,3 +70,42 @@ def test_watchlist_and_keywords_lists_apply(tmp_path, monkeypatch):
     assert "PLTR" in config.WATCHLIST
     assert "SMCI" in config.WATCHLIST
     assert "nvda" in config.NEWS_SHOCK_KEYWORDS
+
+
+def test_momentum_top_n_override_applies(tmp_path, monkeypatch):
+    """High-risk keys must be accepted by config.py once written to overrides."""
+    import config
+    original = config.MOMENTUM_TOP_N
+    _reload_config(tmp_path, monkeypatch, {"MOMENTUM_TOP_N": 3})
+    assert config.MOMENTUM_TOP_N == 3
+    config.MOMENTUM_TOP_N = original
+
+
+def test_momentum_top_n_out_of_bounds_ignored(tmp_path, monkeypatch):
+    import config
+    original = config.MOMENTUM_TOP_N
+    _reload_config(tmp_path, monkeypatch, {"MOMENTUM_TOP_N": 99})  # way too high
+    assert config.MOMENTUM_TOP_N == original
+
+
+def test_etf_allocation_pct_override_applies(tmp_path, monkeypatch):
+    import config
+    original = config.ETF_ALLOCATION_PCT
+    _reload_config(tmp_path, monkeypatch, {"ETF_ALLOCATION_PCT": 0.75})
+    assert config.ETF_ALLOCATION_PCT == 0.75
+    config.ETF_ALLOCATION_PCT = original
+
+
+def test_safe_haven_override_applies(tmp_path, monkeypatch):
+    import config
+    original = config.SAFE_HAVEN
+    _reload_config(tmp_path, monkeypatch, {"SAFE_HAVEN": "SHY"})
+    assert config.SAFE_HAVEN == "SHY"
+    config.SAFE_HAVEN = original
+
+
+def test_safe_haven_wrong_type_ignored(tmp_path, monkeypatch):
+    import config
+    original = config.SAFE_HAVEN
+    _reload_config(tmp_path, monkeypatch, {"SAFE_HAVEN": 42})
+    assert config.SAFE_HAVEN == original
