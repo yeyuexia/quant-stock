@@ -106,3 +106,37 @@ def test_fetch_reddit_trending_handles_network_failure():
         sig = fetch_reddit_trending()
     assert sig.data == []
     assert sig.error is not None
+
+
+def test_fetch_etf_holdings_normalizes_rows():
+    from quant.data_sources import fetch_popular_etf_holdings
+    from quant.schema import ExternalSignal
+    from unittest.mock import patch
+    import pandas as pd
+
+    fake_holdings = pd.DataFrame({
+        "symbol": ["AAPL", "MSFT", "NVDA"],
+        "holdingPercent": [0.15, 0.12, 0.08],
+    })
+    with patch("quant.data_sources._fetch_etf_top_holdings", return_value=fake_holdings):
+        sig = fetch_popular_etf_holdings()
+    assert isinstance(sig, ExternalSignal)
+    assert sig.source == "etf-holdings"
+    first = sig.data[0]
+    assert "etf" in first and "ticker" in first and "weight" in first
+
+
+def test_fetch_etf_holdings_tolerates_missing_etfs():
+    from quant.data_sources import fetch_popular_etf_holdings
+    from unittest.mock import patch
+
+    def fake_fetch(symbol):
+        if symbol == "ARKK":
+            raise RuntimeError("not found")
+        import pandas as pd
+        return pd.DataFrame({"symbol": ["FOO"], "holdingPercent": [0.1]})
+
+    with patch("quant.data_sources._fetch_etf_top_holdings", side_effect=fake_fetch):
+        sig = fetch_popular_etf_holdings()
+    assert any(row["ticker"] == "FOO" for row in sig.data)
+    assert sig.error is None or "ARKK" in sig.error

@@ -221,3 +221,62 @@ def fetch_reddit_trending() -> ExternalSignal:
         as_of=dt.datetime.now(dt.timezone.utc),
         data=rows[:20],
     )
+
+
+# ── Popular ETFs ────────────────────────────────────────────────
+
+_TRACKED_ETFS = ["MAGS", "ARKK", "QQQ", "ICLN", "VGT"]
+
+
+def _fetch_etf_top_holdings(symbol: str):
+    """Return a DataFrame of top holdings for an ETF via yfinance.
+    yfinance exposes holdings through Ticker(...).funds_data.top_holdings in
+    recent versions; falls back to Ticker(...).info['holdings'] for older
+    versions."""
+    import yfinance as yf
+    ticker = yf.Ticker(symbol)
+    funds_data = getattr(ticker, "funds_data", None)
+    if funds_data is not None:
+        th = getattr(funds_data, "top_holdings", None)
+        if th is not None and not th.empty:
+            return th.reset_index()
+    info = ticker.info or {}
+    holdings = info.get("holdings")
+    if holdings:
+        import pandas as pd
+        return pd.DataFrame(holdings)
+    raise RuntimeError(f"no holdings data for {symbol}")
+
+
+def fetch_popular_etf_holdings() -> ExternalSignal:
+    """Top ~25 holdings of each tracked thematic/broad ETF."""
+    rows = []
+    skipped = []
+    for etf in _TRACKED_ETFS:
+        try:
+            df = _fetch_etf_top_holdings(etf)
+        except Exception as e:
+            skipped.append(f"{etf}: {e}")
+            continue
+        if df is None or df.empty:
+            skipped.append(f"{etf}: empty")
+            continue
+        symbol_col = next((c for c in df.columns if c.lower() in ("symbol", "ticker")), None)
+        weight_col = next((c for c in df.columns
+                           if "percent" in c.lower() or c.lower() == "weight"), None)
+        if symbol_col is None:
+            skipped.append(f"{etf}: no symbol column")
+            continue
+        for _, row in df.head(25).iterrows():
+            rows.append({
+                "etf": etf,
+                "ticker": str(row.get(symbol_col, "")).upper(),
+                "weight": float(row.get(weight_col, 0.0)) if weight_col else 0.0,
+            })
+    error = "; ".join(skipped[:3]) if not rows and skipped else None
+    return ExternalSignal(
+        source="etf-holdings",
+        as_of=dt.datetime.now(dt.timezone.utc),
+        data=rows,
+        error=error,
+    )
