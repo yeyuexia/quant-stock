@@ -11,6 +11,7 @@ orchestrator.
 from __future__ import annotations
 import datetime as dt
 import logging
+import os
 import urllib.error
 import urllib.request
 import xml.etree.ElementTree as ET
@@ -33,7 +34,12 @@ _TRACKED_13F_FUNDS = {
 
 _SEC_BASE = "https://data.sec.gov"
 # SEC requires a specific User-Agent with contact info.
-_SEC_USER_AGENT = "stock-tracker research contact@example.com"
+# SEC requires a specific User-Agent with real contact info. Read from env
+# so ops can set the actual address; default is the project's primary contact.
+_SEC_USER_AGENT = os.environ.get(
+    "SEC_CONTACT_EMAIL_UA",
+    "stock-tracker research yyxworld@gmail.com",
+)
 
 
 def _sec_get(url: str, *, timeout: int = 20) -> bytes:
