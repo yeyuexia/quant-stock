@@ -127,6 +127,66 @@ See `docs/superpowers/specs/2026-04-17-intraday-execution-design.md` for the ful
 2. **Live on paper** (`EXECUTOR_SHADOW_MODE = False`). Executor submits to the paper account. Run 2–4 weeks; tune circuit-breaker thresholds from real trips.
 3. **Flip to live.** Follow the existing paper→live protocol (ramp `DAILY_MAX_NOTIONAL`).
 
+## Quant Review Subagent
+
+A daily LLM-driven strategy reviewer that runs via a Claude Code scheduled
+remote trigger 3 hours after US-market close. Reviews portfolio state against
+five external positioning signals, proposes parameter changes within a
+risk-tiered allowlist, and reports everything via Telegram.
+
+### Architecture
+
+Single Claude Code remote trigger runs the workflow end-to-end:
+
+1. `scripts/quant_fetch_portfolio.py` — dumps current portfolio state
+2. `scripts/quant_fetch_externals.py` — fetches 5 external signals in parallel
+   (13F filings, Reddit trending, popular ETF holdings, ARK daily trades,
+   Congress/Pelosi STOCK Act disclosures)
+3. Agent reasons, produces `.cache/proposed_changes.json`
+4. `scripts/quant_apply.py` — classifies per risk tier, writes overrides/queue
+   /Telegram notification/audit log
+
+Low-risk changes (small stop-loss tweaks, watchlist additions) auto-apply.
+High-risk changes (concentration shifts, screener filter changes) queue in
+`.cache/strategy_proposals.json` for Telegram approval. Forbidden keys
+(safety rails, credentials) are hard-rejected at two independent layers
+(applier + `config.py` override loader).
+
+### Setup
+
+The trigger is created once via Claude Code's `schedule` skill:
+
+```
+/schedule create
+```
+
+Use the content of `quant/trigger_prompt.md` as the trigger prompt. Cron
+schedule: `0 7 * * 2-6` (7 AM local Tue-Sat = 7 PM ET Mon-Fri, market
+close + 3h). No `ANTHROPIC_API_KEY` needed — uses your CC subscription.
+
+### Phased rollout
+
+1. **Phase 0 — Dry-run** (~1 week). Trigger prompt includes `DRY_RUN=True`.
+   Agent calls `quant_apply.py --dry-run` which writes
+   `.cache/quant_review_dry.json` instead of the live files. TG report
+   still sends. Review daily.
+2. **Phase 1 — Live** (~2-4 weeks). Remove `DRY_RUN` from trigger prompt.
+   Low-risk auto-applies; high-risk queues. Approve via direct JSON edit
+   or (if bot ready) TG commands.
+3. **Phase 2 — TG bot approval handlers** (separate repo).
+
+### Files
+
+| File | Purpose |
+|---|---|
+| `.cache/strategy_overrides.json` | Active overrides; read by `config.py` at module-load time |
+| `.cache/strategy_proposals.json` | Pending high-risk queue; written by applier, consumed by TG bot |
+| `.cache/telegram_notifications.json` | TG message queue (shared with executor-breaker notifications) |
+| `.cache/proposed_changes.json` | Agent's intermediate output |
+| `.cache/quant_review_dry.json` | Phase-0 dry-run artifact |
+| `.cache/quant_review.log` | Append-only audit log |
+| `quant/trigger_prompt.md` | Canonical version-controlled trigger prompt |
+
 ## State Model
 
 **Alpaca is the source of truth** for cash, positions, market value, and unrealized P&L.
