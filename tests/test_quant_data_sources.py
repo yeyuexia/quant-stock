@@ -172,3 +172,47 @@ def test_fetch_ark_trades_handles_fetch_failure():
         sig = fetch_ark_trades()
     assert sig.data == []
     assert sig.error is not None
+
+
+def test_fetch_congress_trades_parses_json():
+    from quant.data_sources import fetch_congress_trades
+    from quant.schema import ExternalSignal
+    from unittest.mock import patch
+    import datetime as _dt
+
+    today = _dt.date.today()
+    recent = (today - _dt.timedelta(days=2)).isoformat()
+    traded = (today - _dt.timedelta(days=4)).isoformat()
+
+    fake_json = {
+        "data": [
+            {"politician": {"firstName": "Nancy", "lastName": "Pelosi"},
+             "traded": traded, "disclosed": recent,
+             "asset": {"ticker": "TSLA"},
+             "type": "buy",
+             "value": "$1,000,001 - $5,000,000"},
+            {"politician": {"firstName": "Josh", "lastName": "Gottheimer"},
+             "traded": traded, "disclosed": recent,
+             "asset": {"ticker": "NVDA"},
+             "type": "sell",
+             "value": "$50,001 - $100,000"},
+        ]
+    }
+    with patch("quant.data_sources._fetch_capitoltrades_json", return_value=fake_json):
+        sig = fetch_congress_trades()
+    assert isinstance(sig, ExternalSignal)
+    assert sig.source == "congress"
+    tickers = {row["ticker"] for row in sig.data}
+    assert tickers == {"TSLA", "NVDA"}
+    pelosi_row = next(r for r in sig.data if r["member"] == "Nancy Pelosi")
+    assert pelosi_row["direction"] == "buy"
+
+
+def test_fetch_congress_trades_handles_network_error():
+    from quant.data_sources import fetch_congress_trades
+    from unittest.mock import patch
+    with patch("quant.data_sources._fetch_capitoltrades_json",
+               side_effect=RuntimeError("timeout")):
+        sig = fetch_congress_trades()
+    assert sig.data == []
+    assert sig.error is not None

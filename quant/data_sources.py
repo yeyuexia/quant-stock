@@ -334,3 +334,58 @@ def fetch_ark_trades() -> ExternalSignal:
     as_of = (dt.datetime.combine(latest, dt.time()).replace(tzinfo=dt.timezone.utc)
              if latest else dt.datetime.now(dt.timezone.utc))
     return ExternalSignal(source="ark", as_of=as_of, data=rows)
+
+
+# ── Congress / Pelosi ────────────────────────────────────────────
+
+_CAPITOLTRADES_API = "https://bff.capitoltrades.com/trades"
+
+
+def _fetch_capitoltrades_json(days: int = 14) -> dict:
+    """Fetch recent disclosed trades from capitoltrades' public endpoint.
+    Sorted newest first; 100 items is plenty for a 14-day window."""
+    url = f"{_CAPITOLTRADES_API}?page=1&pageSize=100"
+    req = urllib.request.Request(url, headers={
+        "User-Agent": "stock-tracker/1.0 (research)",
+        "Accept": "application/json",
+    })
+    with urllib.request.urlopen(req, timeout=15) as resp:
+        if resp.status != 200:
+            raise RuntimeError(f"capitoltrades returned {resp.status}")
+        return _json.loads(resp.read())
+
+
+def fetch_congress_trades() -> ExternalSignal:
+    """Disclosed congressional trades from the last ~14 days."""
+    try:
+        blob = _fetch_capitoltrades_json()
+    except Exception as e:
+        return ExternalSignal(source="congress",
+                              as_of=dt.datetime.now(dt.timezone.utc),
+                              data=[], error=str(e))
+    cutoff = dt.date.today() - dt.timedelta(days=14)
+    rows = []
+    latest_disclosed = None
+    for item in blob.get("data", []) or []:
+        try:
+            disclosed_date = dt.date.fromisoformat(item["disclosed"])
+        except (KeyError, ValueError):
+            continue
+        if disclosed_date < cutoff:
+            continue
+        latest_disclosed = disclosed_date if latest_disclosed is None \
+            else max(latest_disclosed, disclosed_date)
+        politician = item.get("politician") or {}
+        member = f"{politician.get('firstName', '')} {politician.get('lastName', '')}".strip()
+        asset = item.get("asset") or {}
+        rows.append({
+            "member": member,
+            "ticker": (asset.get("ticker") or "").upper(),
+            "direction": (item.get("type") or "").lower(),
+            "amount_range": item.get("value", ""),
+            "trade_date": item.get("traded", ""),
+            "disclosed_date": item.get("disclosed", ""),
+        })
+    as_of = (dt.datetime.combine(latest_disclosed, dt.time()).replace(tzinfo=dt.timezone.utc)
+             if latest_disclosed else dt.datetime.now(dt.timezone.utc))
+    return ExternalSignal(source="congress", as_of=as_of, data=rows)
