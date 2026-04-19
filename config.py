@@ -263,3 +263,49 @@ PENDING_PLAN_PATH = os.path.join(os.path.dirname(__file__), ".cache", "pending_p
 NEWS_SHOCK_LOG    = os.path.join(os.path.dirname(__file__), ".cache", "news_shock_log.csv")
 TELEGRAM_NOTIFY_PATH = os.path.join(os.path.dirname(__file__), ".cache",
                                     "telegram_notifications.json")
+
+# ── Strategy overrides (written by quant review subagent) ────────
+import json
+import logging as _logging
+
+_OVERRIDES_PATH = os.path.join(os.path.dirname(__file__), ".cache", "strategy_overrides.json")
+
+# Allowlist: key → (expected_type, lower_bound, upper_bound)
+# Bounds of None mean unbounded (for lists).
+# The applier enforces relative-pct bounds (±20%, ±50%); this layer enforces
+# absolute bounds as a second line of defense.
+_OVERRIDE_SCHEMA = {
+    "WATCHLIST":            (list,  None, None),
+    "NEWS_SHOCK_KEYWORDS":  (list,  None, None),
+    "STOP_LOSS_PCT":        (float, 0.04, 0.20),
+    "TRAILING_STOP_PCT":    (float, 0.06, 0.25),
+    "CASH_BUFFER_PCT":      (float, 0.02, 0.20),
+}
+
+def _apply_overrides():
+    """Load and apply strategy overrides. Silent on missing/corrupt files."""
+    if not os.path.exists(_OVERRIDES_PATH):
+        return
+    try:
+        with open(_OVERRIDES_PATH) as f:
+            overrides = json.load(f)
+    except (OSError, json.JSONDecodeError) as e:
+        _logging.warning(f"config: strategy_overrides.json unreadable ({e}); using defaults")
+        return
+    if not isinstance(overrides, dict):
+        _logging.warning("config: strategy_overrides.json not an object; using defaults")
+        return
+    for key, value in overrides.items():
+        if key not in _OVERRIDE_SCHEMA:
+            _logging.warning(f"config: ignoring override for unknown/forbidden key {key!r}")
+            continue
+        expected_type, lo, hi = _OVERRIDE_SCHEMA[key]
+        if not isinstance(value, expected_type):
+            _logging.warning(f"config: override for {key!r} has wrong type {type(value).__name__}")
+            continue
+        if lo is not None and not (lo <= value <= hi):
+            _logging.warning(f"config: override for {key!r}={value} out of bounds [{lo},{hi}]")
+            continue
+        globals()[key] = value
+
+_apply_overrides()
