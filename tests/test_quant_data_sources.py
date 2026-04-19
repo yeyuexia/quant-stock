@@ -142,7 +142,7 @@ def test_fetch_etf_holdings_tolerates_missing_etfs():
     assert sig.error is None or "ARKK" in sig.error
 
 
-def test_fetch_ark_trades_parses_csv():
+def test_fetch_ark_trades_uses_arkfunds_io_json():
     from quant.data_sources import fetch_ark_trades
     from quant.schema import ExternalSignal
     from unittest.mock import patch
@@ -150,12 +150,26 @@ def test_fetch_ark_trades_parses_csv():
 
     today = _dt.date.today()
     yesterday = today - _dt.timedelta(days=1)
-    fake_csv = (
-        "date,fund,direction,ticker,company,shares,weight(%)\n"
-        f"{today.month}/{today.day}/{today.year},ARKK,Buy,TSLA,TESLA INC,12345,0.8\n"
-        f"{yesterday.month}/{yesterday.day}/{yesterday.year},ARKG,Sell,CRSP,CRISPR THERA,5000,0.3\n"
-    )
-    with patch("quant.data_sources._fetch_ark_csv", return_value=fake_csv):
+    # arkfunds.io returns per-symbol trades, so the orchestrator fetches
+    # across all ARK funds and combines.
+    fake_responses = {
+        "ARKK": {"trades": [
+            {"fund": "ARKK", "date": today.isoformat(), "ticker": "TSLA",
+             "direction": "Buy", "shares": 12345, "etf_percent": 0.8},
+        ]},
+        "ARKG": {"trades": [
+            {"fund": "ARKG", "date": yesterday.isoformat(), "ticker": "CRSP",
+             "direction": "Sell", "shares": 5000, "etf_percent": 0.3},
+        ]},
+        "ARKQ": {"trades": []},
+        "ARKW": {"trades": []},
+        "ARKF": {"trades": []},
+    }
+
+    def fake_fetch(symbol):
+        return fake_responses.get(symbol, {"trades": []})
+
+    with patch("quant.data_sources._fetch_arkfunds_io_trades", side_effect=fake_fetch):
         sig = fetch_ark_trades()
     assert isinstance(sig, ExternalSignal)
     assert sig.source == "ark"
@@ -165,10 +179,12 @@ def test_fetch_ark_trades_parses_csv():
     assert tickers == {"TSLA", "CRSP"}
 
 
-def test_fetch_ark_trades_handles_fetch_failure():
+def test_fetch_ark_trades_handles_all_symbols_failing():
+    """If every ARK fund's arkfunds.io call fails, stamp error."""
     from quant.data_sources import fetch_ark_trades
     from unittest.mock import patch
-    with patch("quant.data_sources._fetch_ark_csv", side_effect=RuntimeError("404")):
+    with patch("quant.data_sources._fetch_arkfunds_io_trades",
+               side_effect=RuntimeError("arkfunds.io 500")):
         sig = fetch_ark_trades()
     assert sig.data == []
     assert sig.error is not None

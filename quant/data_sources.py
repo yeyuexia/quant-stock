@@ -311,54 +311,66 @@ def fetch_popular_etf_holdings() -> ExternalSignal:
 
 
 # ── ARK / Cathie Wood ────────────────────────────────────────────
+#
+# ark-funds.com no longer publishes the daily trades CSV publicly.
+# We use arkfunds.io (unofficial aggregator) which offers a free JSON
+# API: /api/v2/etf/trades?symbol={SYMBOL}&limit={N}.
 
-_ARK_CSV_URL = "https://ark-funds.com/wp-content/uploads/funds-etf-csv/ARK_Trades.csv"
+_ARK_FUNDS = ["ARKK", "ARKG", "ARKQ", "ARKW", "ARKF"]
+_ARKFUNDS_IO_URL = "https://arkfunds.io/api/v2/etf/trades"
 
 
-def _fetch_ark_csv() -> str:
-    """Download the live ARK trades CSV. Raises on non-200."""
-    req = urllib.request.Request(_ARK_CSV_URL, headers={
+def _fetch_arkfunds_io_trades(symbol: str, limit: int = 50) -> dict:
+    """Fetch recent trades for a single ARK fund from arkfunds.io."""
+    import json as _j
+    url = f"{_ARKFUNDS_IO_URL}?symbol={symbol}&limit={limit}"
+    req = urllib.request.Request(url, headers={
         "User-Agent": "stock-tracker/1.0 (research)",
+        "Accept": "application/json",
     })
-    with urllib.request.urlopen(req, timeout=20) as resp:
+    with urllib.request.urlopen(req, timeout=15) as resp:
         if resp.status != 200:
-            raise RuntimeError(f"ARK CSV returned {resp.status}")
-        return resp.read().decode("utf-8", errors="replace")
+            raise RuntimeError(f"arkfunds.io /{symbol} returned {resp.status}")
+        return _j.loads(resp.read())
 
 
 def fetch_ark_trades() -> ExternalSignal:
     """Last 7 days of ARK trades across their ETF family."""
-    import csv
-    import io
-    try:
-        blob = _fetch_ark_csv()
-    except Exception as e:
-        return ExternalSignal(source="ark", as_of=dt.datetime.now(dt.timezone.utc),
-                              data=[], error=str(e))
-    reader = csv.DictReader(io.StringIO(blob))
     cutoff = dt.date.today() - dt.timedelta(days=7)
     rows = []
+    errors = []
     latest = None
-    for raw in reader:
-        date_str = (raw.get("date") or raw.get("Date") or "").strip()
-        if not date_str:
-            continue
+    for symbol in _ARK_FUNDS:
         try:
-            row_date = dt.datetime.strptime(date_str, "%m/%d/%Y").date()
-        except ValueError:
+            blob = _fetch_arkfunds_io_trades(symbol)
+        except Exception as e:
+            errors.append(f"{symbol}: {e}")
             continue
-        if row_date < cutoff:
-            continue
-        latest = row_date if latest is None else max(latest, row_date)
-        direction = (raw.get("direction") or raw.get("Direction") or "").strip().lower()
-        rows.append({
-            "date": row_date.isoformat(),
-            "fund": (raw.get("fund") or raw.get("Fund") or "").strip(),
-            "direction": "buy" if "buy" in direction else ("sell" if "sell" in direction else direction),
-            "ticker": (raw.get("ticker") or raw.get("Ticker") or "").strip().upper(),
-            "shares": raw.get("shares") or raw.get("Shares") or "",
-            "weight_pct": raw.get("weight(%)") or raw.get("Weight(%)") or "",
-        })
+        for raw in blob.get("trades", []) or []:
+            date_str = (raw.get("date") or "").strip()
+            try:
+                row_date = dt.date.fromisoformat(date_str)
+            except ValueError:
+                continue
+            if row_date < cutoff:
+                continue
+            latest = row_date if latest is None else max(latest, row_date)
+            direction = (raw.get("direction") or "").strip().lower()
+            rows.append({
+                "date": row_date.isoformat(),
+                "fund": (raw.get("fund") or symbol).strip(),
+                "direction": "buy" if "buy" in direction else ("sell" if "sell" in direction else direction),
+                "ticker": (raw.get("ticker") or "").strip().upper(),
+                "shares": raw.get("shares") or "",
+                "weight_pct": raw.get("etf_percent") or "",
+            })
+    if not rows and errors:
+        return ExternalSignal(
+            source="ark",
+            as_of=dt.datetime.now(dt.timezone.utc),
+            data=[],
+            error="; ".join(errors[:3]),
+        )
     as_of = (dt.datetime.combine(latest, dt.time()).replace(tzinfo=dt.timezone.utc)
              if latest else dt.datetime.now(dt.timezone.utc))
     return ExternalSignal(source="ark", as_of=as_of, data=rows)
