@@ -389,3 +389,46 @@ def fetch_congress_trades() -> ExternalSignal:
     as_of = (dt.datetime.combine(latest_disclosed, dt.time()).replace(tzinfo=dt.timezone.utc)
              if latest_disclosed else dt.datetime.now(dt.timezone.utc))
     return ExternalSignal(source="congress", as_of=as_of, data=rows)
+
+
+# ── Orchestrator ─────────────────────────────────────────────────
+
+from concurrent.futures import ThreadPoolExecutor, as_completed
+
+
+def fetch_all_externals(timeout_per_source: int = 30) -> list:
+    """Fetch all five external signals in parallel. Returns a list of
+    ExternalSignal objects — always length 5, even if some failed.
+    Each fetcher is also internally defensive (returns error-signals rather
+    than raising), but this layer adds an outer catch-all."""
+    fetchers = [
+        ("13F", fetch_13f_filings),
+        ("reddit", fetch_reddit_trending),
+        ("etf-holdings", fetch_popular_etf_holdings),
+        ("ark", fetch_ark_trades),
+        ("congress", fetch_congress_trades),
+    ]
+    results: dict = {}
+    with ThreadPoolExecutor(max_workers=5) as pool:
+        futures = {pool.submit(fn): name for name, fn in fetchers}
+        for future in as_completed(futures, timeout=timeout_per_source * 2):
+            name = futures[future]
+            try:
+                results[name] = future.result(timeout=timeout_per_source)
+            except Exception as e:
+                results[name] = ExternalSignal(
+                    source=name,
+                    as_of=dt.datetime.now(dt.timezone.utc),
+                    data=[],
+                    error=str(e),
+                )
+    # Ensure all 5 are present even if some futures didn't complete
+    for name, _ in fetchers:
+        if name not in results:
+            results[name] = ExternalSignal(
+                source=name,
+                as_of=dt.datetime.now(dt.timezone.utc),
+                data=[],
+                error="timed out",
+            )
+    return [results[name] for name, _ in fetchers]

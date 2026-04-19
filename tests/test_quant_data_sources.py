@@ -216,3 +216,48 @@ def test_fetch_congress_trades_handles_network_error():
         sig = fetch_congress_trades()
     assert sig.data == []
     assert sig.error is not None
+
+
+def test_fetch_all_externals_returns_five_signals():
+    from quant.data_sources import fetch_all_externals
+    from quant.schema import ExternalSignal
+    from unittest.mock import patch
+    import datetime as _dt
+
+    def stub(source):
+        return lambda: ExternalSignal(
+            source=source,
+            as_of=_dt.datetime.now(_dt.timezone.utc),
+            data=[{"row": source}],
+        )
+
+    with patch("quant.data_sources.fetch_13f_filings", side_effect=stub("13F")), \
+         patch("quant.data_sources.fetch_reddit_trending", side_effect=stub("reddit")), \
+         patch("quant.data_sources.fetch_popular_etf_holdings",
+               side_effect=stub("etf-holdings")), \
+         patch("quant.data_sources.fetch_ark_trades", side_effect=stub("ark")), \
+         patch("quant.data_sources.fetch_congress_trades", side_effect=stub("congress")):
+        signals = fetch_all_externals()
+    assert len(signals) == 5
+    sources = {s.source for s in signals}
+    assert sources == {"13F", "reddit", "etf-holdings", "ark", "congress"}
+
+
+def test_fetch_all_externals_catches_fetcher_crash():
+    """If a fetcher raises (not just returns an error signal), we still get
+    back 5 signals — the crashed one has error populated."""
+    from quant.data_sources import fetch_all_externals
+    from unittest.mock import patch
+    with patch("quant.data_sources.fetch_13f_filings", side_effect=RuntimeError("boom")), \
+         patch("quant.data_sources.fetch_reddit_trending",
+               side_effect=RuntimeError("boom")), \
+         patch("quant.data_sources.fetch_popular_etf_holdings",
+               side_effect=RuntimeError("boom")), \
+         patch("quant.data_sources.fetch_ark_trades", side_effect=RuntimeError("boom")), \
+         patch("quant.data_sources.fetch_congress_trades",
+               side_effect=RuntimeError("boom")):
+        signals = fetch_all_externals()
+    assert len(signals) == 5
+    for s in signals:
+        assert s.error is not None
+        assert s.data == []
