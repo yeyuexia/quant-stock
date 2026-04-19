@@ -371,3 +371,38 @@ def test_fetch_congress_gracefully_handles_service_outage():
     assert sig.data == []
     assert sig.error is not None
     assert "503" in sig.error or "service" in sig.error.lower() or "unavailable" in sig.error.lower()
+
+
+def test_fetch_all_externals_survives_hung_fetcher():
+    """If one fetcher hangs past the timeout, the orchestrator must still
+    return 5 signals — not raise concurrent.futures.TimeoutError (regression
+    from live smoke test 2026-04-19)."""
+    import time
+    from quant import data_sources
+    from quant.schema import ExternalSignal
+
+    def slow():
+        time.sleep(10)   # much longer than our 1s budget below
+        return ExternalSignal(source="slow", as_of=dt.datetime.now(dt.timezone.utc), data=[])
+
+    def fast(name):
+        return lambda: ExternalSignal(
+            source=name, as_of=dt.datetime.now(dt.timezone.utc), data=[]
+        )
+
+    with patch.object(data_sources, "fetch_13f_filings", slow), \
+         patch.object(data_sources, "fetch_reddit_trending", fast("reddit")), \
+         patch.object(data_sources, "fetch_popular_etf_holdings", fast("etf-holdings")), \
+         patch.object(data_sources, "fetch_ark_trades", fast("ark")), \
+         patch.object(data_sources, "fetch_congress_trades", fast("congress")):
+        signals = data_sources.fetch_all_externals(timeout_per_source=1)
+
+    assert len(signals) == 5
+    by_source = {s.source: s for s in signals}
+    # The hung fetcher's slot is present with error="timed out"
+    assert "13F" in by_source
+    assert by_source["13F"].error is not None
+    assert "timed out" in by_source["13F"].error.lower() or "timeout" in by_source["13F"].error.lower()
+    # Fast fetchers returned cleanly
+    for src in ("reddit", "etf-holdings", "ark", "congress"):
+        assert by_source[src].error is None

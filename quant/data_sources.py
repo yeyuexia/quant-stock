@@ -463,19 +463,34 @@ def fetch_all_externals(timeout_per_source: int = 30) -> list:
         ("congress", fetch_congress_trades),
     ]
     results: dict = {}
-    with ThreadPoolExecutor(max_workers=5) as pool:
+    # cancel_futures=False + shutdown(wait=False) so a hung fetcher can't
+    # block the whole orchestrator — we abandon it and return the rest.
+    pool = ThreadPoolExecutor(max_workers=5)
+    try:
         futures = {pool.submit(fn): name for name, fn in fetchers}
-        for future in as_completed(futures, timeout=timeout_per_source * 2):
-            name = futures[future]
-            try:
-                results[name] = future.result(timeout=timeout_per_source)
-            except Exception as e:
-                results[name] = ExternalSignal(
-                    source=name,
-                    as_of=dt.datetime.now(dt.timezone.utc),
-                    data=[],
-                    error=str(e),
-                )
+        # as_completed raises TimeoutError if not all futures finish in time;
+        # catch it so slow fetchers don't crash the run — post-loop fill
+        # stamps them as errored.
+        import concurrent.futures as _cf
+        try:
+            for future in as_completed(futures, timeout=timeout_per_source * 2):
+                name = futures[future]
+                try:
+                    results[name] = future.result(timeout=timeout_per_source)
+                except Exception as e:
+                    results[name] = ExternalSignal(
+                        source=name,
+                        as_of=dt.datetime.now(dt.timezone.utc),
+                        data=[],
+                        error=str(e),
+                    )
+        except _cf.TimeoutError:
+            # At least one fetcher didn't complete within the window;
+            # post-loop fill handles it.
+            pass
+    finally:
+        # Don't wait on hung fetchers — abandon them.
+        pool.shutdown(wait=False, cancel_futures=True)
     # Ensure all 5 are present even if some futures didn't complete
     for name, _ in fetchers:
         if name not in results:
