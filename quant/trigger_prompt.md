@@ -106,15 +106,20 @@ Your `proposed_changes.json` must match this shape:
 
 If `proposed_changes` is empty, `no_changes_reason` must be a non-empty string.
 
-## PHASE 0 DRY-RUN
+## ROLLOUT MODE
 
-If this prompt contains the directive `DRY_RUN=True`, run step 6 with the
-`--dry-run` flag:
+Look for an `ACTIVE_MODE=...` directive near the end of this prompt.
+
+- `ACTIVE_MODE=LIVE` — run step 6 normally: low-risk changes auto-apply,
+  high-risk changes queue for user approval, Telegram report sends.
+
+- `ACTIVE_MODE=DRY_RUN` — run step 6 with the `--dry-run` flag:
 
 ```
 python3 /Users/zl/works/stock/scripts/quant_apply.py --dry-run /Users/zl/works/stock/.cache/proposed_changes.json
 ```
 
-This writes to `.cache/quant_review_dry.json` instead of the live files.
+  Writes `.cache/quant_review_dry.json` instead of the live overrides /
+  proposals files. TG notification still sends.
 
-<!-- DRY_RUN=True -->
+<!-- ACTIVE_MODE=LIVE -->
