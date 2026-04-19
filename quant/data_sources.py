@@ -280,3 +280,57 @@ def fetch_popular_etf_holdings() -> ExternalSignal:
         data=rows,
         error=error,
     )
+
+
+# ── ARK / Cathie Wood ────────────────────────────────────────────
+
+_ARK_CSV_URL = "https://ark-funds.com/wp-content/uploads/funds-etf-csv/ARK_Trades.csv"
+
+
+def _fetch_ark_csv() -> str:
+    """Download the live ARK trades CSV. Raises on non-200."""
+    req = urllib.request.Request(_ARK_CSV_URL, headers={
+        "User-Agent": "stock-tracker/1.0 (research)",
+    })
+    with urllib.request.urlopen(req, timeout=20) as resp:
+        if resp.status != 200:
+            raise RuntimeError(f"ARK CSV returned {resp.status}")
+        return resp.read().decode("utf-8", errors="replace")
+
+
+def fetch_ark_trades() -> ExternalSignal:
+    """Last 7 days of ARK trades across their ETF family."""
+    import csv
+    import io
+    try:
+        blob = _fetch_ark_csv()
+    except Exception as e:
+        return ExternalSignal(source="ark", as_of=dt.datetime.now(dt.timezone.utc),
+                              data=[], error=str(e))
+    reader = csv.DictReader(io.StringIO(blob))
+    cutoff = dt.date.today() - dt.timedelta(days=7)
+    rows = []
+    latest = None
+    for raw in reader:
+        date_str = (raw.get("date") or raw.get("Date") or "").strip()
+        if not date_str:
+            continue
+        try:
+            row_date = dt.datetime.strptime(date_str, "%m/%d/%Y").date()
+        except ValueError:
+            continue
+        if row_date < cutoff:
+            continue
+        latest = row_date if latest is None else max(latest, row_date)
+        direction = (raw.get("direction") or raw.get("Direction") or "").strip().lower()
+        rows.append({
+            "date": row_date.isoformat(),
+            "fund": (raw.get("fund") or raw.get("Fund") or "").strip(),
+            "direction": "buy" if "buy" in direction else ("sell" if "sell" in direction else direction),
+            "ticker": (raw.get("ticker") or raw.get("Ticker") or "").strip().upper(),
+            "shares": raw.get("shares") or raw.get("Shares") or "",
+            "weight_pct": raw.get("weight(%)") or raw.get("Weight(%)") or "",
+        })
+    as_of = (dt.datetime.combine(latest, dt.time()).replace(tzinfo=dt.timezone.utc)
+             if latest else dt.datetime.now(dt.timezone.utc))
+    return ExternalSignal(source="ark", as_of=as_of, data=rows)

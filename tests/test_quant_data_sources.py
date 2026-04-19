@@ -140,3 +140,35 @@ def test_fetch_etf_holdings_tolerates_missing_etfs():
         sig = fetch_popular_etf_holdings()
     assert any(row["ticker"] == "FOO" for row in sig.data)
     assert sig.error is None or "ARKK" in sig.error
+
+
+def test_fetch_ark_trades_parses_csv():
+    from quant.data_sources import fetch_ark_trades
+    from quant.schema import ExternalSignal
+    from unittest.mock import patch
+    import datetime as _dt
+
+    today = _dt.date.today()
+    yesterday = today - _dt.timedelta(days=1)
+    fake_csv = (
+        "date,fund,direction,ticker,company,shares,weight(%)\n"
+        f"{today.month}/{today.day}/{today.year},ARKK,Buy,TSLA,TESLA INC,12345,0.8\n"
+        f"{yesterday.month}/{yesterday.day}/{yesterday.year},ARKG,Sell,CRSP,CRISPR THERA,5000,0.3\n"
+    )
+    with patch("quant.data_sources._fetch_ark_csv", return_value=fake_csv):
+        sig = fetch_ark_trades()
+    assert isinstance(sig, ExternalSignal)
+    assert sig.source == "ark"
+    dirs = {row["direction"] for row in sig.data}
+    assert dirs == {"buy", "sell"}
+    tickers = {row["ticker"] for row in sig.data}
+    assert tickers == {"TSLA", "CRSP"}
+
+
+def test_fetch_ark_trades_handles_fetch_failure():
+    from quant.data_sources import fetch_ark_trades
+    from unittest.mock import patch
+    with patch("quant.data_sources._fetch_ark_csv", side_effect=RuntimeError("404")):
+        sig = fetch_ark_trades()
+    assert sig.data == []
+    assert sig.error is not None
