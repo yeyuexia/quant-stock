@@ -76,8 +76,8 @@ def classify_change(change: ProposedChange) -> str:
             return "rejected_out_of_bounds"
         current_set = set(current)
         proposed_set = set(proposed)
-        if proposed_set < current_set:
-            # Strict subset = removal detected → high-risk
+        if not proposed_set.issuperset(current_set):
+            # Anything missing from proposed that was in current = removal → high-risk
             return "high"
         return "low"
 

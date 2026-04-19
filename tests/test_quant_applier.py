@@ -163,3 +163,21 @@ def test_tg_notification_contains_all_sections(tmp_path, monkeypatch):
     assert "AUTO-APPLIED" in msg
     assert "NEEDS YOUR APPROVAL" in msg
     assert "REJECTED" in msg
+
+
+def test_classify_watchlist_swap_is_high():
+    """A simultaneous add+remove (replacement) contains a removal and must
+    be classified high-risk, not treated as a pure addition."""
+    from quant.applier import classify_change
+    current = ["SPY", "QQQ", "IWM"]
+    proposed = ["SPY", "QQQ", "ARKK"]  # removed IWM, added ARKK
+    c = _change(key="WATCHLIST", current_value=current, proposed_value=proposed)
+    assert classify_change(c) == "high"
+
+
+def test_classify_keywords_swap_is_high():
+    from quant.applier import classify_change
+    current = ["tariff", "fed"]
+    proposed = ["tariff", "fomc"]  # removed fed, added fomc
+    c = _change(key="NEWS_SHOCK_KEYWORDS", current_value=current, proposed_value=proposed)
+    assert classify_change(c) == "high"
