@@ -140,3 +140,84 @@ def fetch_13f_filings() -> ExternalSignal:
     as_of = (dt.datetime.combine(latest_date, dt.time()).replace(tzinfo=dt.timezone.utc)
              if latest_date else dt.datetime.now(dt.timezone.utc))
     return ExternalSignal(source="13F", as_of=as_of, data=rows)
+
+
+# ── Reddit trending ──────────────────────────────────────────────
+
+import json as _json
+import re
+
+
+def _fetch_reddit_hot_posts(subreddits: tuple = ("wallstreetbets", "stocks", "investing"),
+                            limit: int = 25) -> list:
+    """Pull hot posts from each subreddit via Reddit's free JSON API."""
+    posts = []
+    for sub in subreddits:
+        url = f"https://www.reddit.com/r/{sub}/hot.json?limit={limit}"
+        req = urllib.request.Request(
+            url, headers={"User-Agent": "stock-tracker/1.0 (research)"}
+        )
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            if resp.status != 200:
+                raise RuntimeError(f"reddit /r/{sub} returned {resp.status}")
+            data = _json.loads(resp.read())
+        for child in data.get("data", {}).get("children", []):
+            d = child.get("data", {})
+            posts.append({
+                "title": d.get("title", ""),
+                "score": d.get("score", 0),
+                "ts": d.get("created_utc", 0),
+                "subreddit": sub,
+            })
+    return posts
+
+
+_TICKER_RE = re.compile(r"\$?([A-Z]{2,5})\b")
+
+# Words that look like tickers but aren't — filter false positives.
+_TICKER_STOPWORDS = {
+    "CEO", "CFO", "CTO", "IPO", "ETF", "GDP", "CPI", "FBI", "SEC", "FDA",
+    "FED", "IMF", "NYSE", "AMEX", "OTC", "USA", "THE", "AND", "FOR", "BUT",
+    "NOT", "YOU", "ALL", "CAN", "HER", "WAS", "ONE", "OUR", "OUT", "HAS",
+    "HIS", "HOW", "ITS", "MAY", "NEW", "NOW", "OLD", "ANY", "WHO", "DID",
+    "GOT", "SAY", "SHE", "USE", "RUN", "BIG", "TOP", "LOW", "USD", "PM",
+    "AM", "DD", "YOLO", "HODL", "FOMO", "ATH", "ATL", "DCA", "PE", "ROI",
+    "EV", "AI", "US", "UK", "EU",
+}
+
+
+def _extract_tickers(title: str) -> set:
+    """Pull candidate tickers from post title. Heuristic — false positives
+    are filtered via the stopword set."""
+    matches = _TICKER_RE.findall(title)
+    return {m for m in matches if m not in _TICKER_STOPWORDS}
+
+
+def fetch_reddit_trending() -> ExternalSignal:
+    """Top tickers mentioned in hot posts across finance subreddits, with
+    per-ticker mention count and sample titles."""
+    try:
+        posts = _fetch_reddit_hot_posts()
+    except Exception as e:
+        return ExternalSignal(
+            source="reddit",
+            as_of=dt.datetime.now(dt.timezone.utc),
+            data=[],
+            error=str(e),
+        )
+    counts: dict = {}
+    for post in posts:
+        title = post.get("title", "")
+        for ticker in _extract_tickers(title):
+            rec = counts.setdefault(ticker, {"count": 0, "titles": []})
+            rec["count"] += 1
+            if len(rec["titles"]) < 3:
+                rec["titles"].append(title[:100])
+    rows = [{"ticker": t, "mentions": rec["count"], "sample_titles": rec["titles"]}
+            for t, rec in counts.items()]
+    rows.sort(key=lambda r: r["mentions"], reverse=True)
+    return ExternalSignal(
+        source="reddit",
+        as_of=dt.datetime.now(dt.timezone.utc),
+        data=rows[:20],
+    )

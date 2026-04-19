@@ -74,3 +74,35 @@ def test_fetch_13f_returns_error_signal_on_total_failure():
         sig = fetch_13f_filings()
     assert sig.data == []
     assert sig.error is not None
+
+
+def test_fetch_reddit_trending_returns_tickers():
+    from quant.data_sources import fetch_reddit_trending
+    from quant.schema import ExternalSignal
+
+    fake_posts = [
+        {"title": "NVDA to the moon!", "score": 500, "ts": 1713500000,
+         "subreddit": "wallstreetbets"},
+        {"title": "Bought more $TSLA calls, going long", "score": 200, "ts": 1713500100,
+         "subreddit": "wallstreetbets"},
+        {"title": "Shorting AAPL before earnings", "score": 50, "ts": 1713500200,
+         "subreddit": "stocks"},
+    ]
+    from unittest.mock import patch
+    with patch("quant.data_sources._fetch_reddit_hot_posts", return_value=fake_posts):
+        sig = fetch_reddit_trending()
+    assert isinstance(sig, ExternalSignal)
+    assert sig.source == "reddit"
+    tickers = {row["ticker"] for row in sig.data}
+    assert "NVDA" in tickers
+    assert "TSLA" in tickers
+
+
+def test_fetch_reddit_trending_handles_network_failure():
+    from quant.data_sources import fetch_reddit_trending
+    from unittest.mock import patch
+    with patch("quant.data_sources._fetch_reddit_hot_posts",
+               side_effect=RuntimeError("blocked")):
+        sig = fetch_reddit_trending()
+    assert sig.data == []
+    assert sig.error is not None
