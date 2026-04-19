@@ -5,6 +5,8 @@ own `risk_tier` field is a hint, not a decision. Applier always re-classifies
 from scratch using the same rules config.py's override loader enforces.
 """
 from __future__ import annotations
+import datetime as dt
+import json
 import logging
 import os
 from typing import Any, Optional
@@ -85,3 +87,244 @@ def classify_change(change: ProposedChange) -> str:
 
     # 4. Everything else: forbidden
     return "forbidden"
+
+
+# ── File paths (overridable for tests) ───────────────────────────
+
+_CACHE_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), ".cache")
+OVERRIDES_PATH = os.path.join(_CACHE_DIR, "strategy_overrides.json")
+PROPOSALS_PATH = os.path.join(_CACHE_DIR, "strategy_proposals.json")
+TG_NOTIFY_PATH = os.path.join(_CACHE_DIR, "telegram_notifications.json")
+AUDIT_LOG_PATH = os.path.join(_CACHE_DIR, "quant_review.log")
+DRY_RUN_PATH   = os.path.join(_CACHE_DIR, "quant_review_dry.json")
+
+
+# ── Public API ───────────────────────────────────────────────────
+
+def apply(
+    changes: list,
+    *,
+    dry_run: bool = False,
+    review_context: Optional[dict] = None,
+) -> ApplierResult:
+    """Classify + apply/queue/reject each proposed change.
+
+    `review_context` is an optional dict with portfolio_summary, macro_read,
+    reasoning_summary, data_gaps — used to enrich the TG report.
+
+    In dry-run mode, nothing is written to strategy_overrides.json or
+    strategy_proposals.json; instead a combined artifact goes to
+    .cache/quant_review_dry.json. TG notification is still written so the
+    user can see what would have happened."""
+    result = ApplierResult()
+    for change in changes:
+        if not isinstance(change, ProposedChange):
+            result.rejected_malformed.append({"raw": repr(change)})
+            continue
+        tier = classify_change(change)
+        if tier == "low":
+            result.applied_low.append(change)
+        elif tier == "high":
+            result.queued_high.append(change)
+        elif tier == "forbidden":
+            result.rejected_forbidden.append(change)
+        else:
+            result.rejected_out_of_bounds.append(change)
+
+    if dry_run:
+        _write_dry_run(changes, result)
+    else:
+        if result.applied_low:
+            _merge_overrides(result.applied_low)
+        if result.queued_high:
+            _append_proposals(result.queued_high)
+
+    _write_tg_notification(result, review_context)
+    _append_audit_log(result, review_context, dry_run=dry_run)
+
+    return result
+
+
+# ── Helpers ──────────────────────────────────────────────────────
+
+def _merge_overrides(low_changes: list) -> None:
+    """Merge applied-low changes into strategy_overrides.json."""
+    os.makedirs(os.path.dirname(OVERRIDES_PATH), exist_ok=True)
+    existing = {}
+    if os.path.exists(OVERRIDES_PATH):
+        try:
+            with open(OVERRIDES_PATH) as f:
+                existing = json.load(f)
+        except Exception:
+            existing = {}
+    for c in low_changes:
+        existing[c.key] = c.proposed_value
+    with open(OVERRIDES_PATH, "w") as f:
+        json.dump(existing, f, indent=2, default=str)
+
+
+def _append_proposals(high_changes: list) -> None:
+    """Append high-risk changes to strategy_proposals.json with expiry."""
+    os.makedirs(os.path.dirname(PROPOSALS_PATH), exist_ok=True)
+    existing = []
+    if os.path.exists(PROPOSALS_PATH):
+        try:
+            with open(PROPOSALS_PATH) as f:
+                existing = json.load(f)
+        except Exception:
+            existing = []
+    now = dt.datetime.now(dt.timezone.utc)
+    # Expire at 21:35 local today (= 13:35 UTC in +08). If that's already past,
+    # roll to next day.
+    expires = now.replace(hour=13, minute=35, second=0, microsecond=0)
+    if expires < now:
+        expires = expires + dt.timedelta(days=1)
+    today_slug = now.date().isoformat()
+    for idx, c in enumerate(high_changes, start=1 + len(existing)):
+        existing.append({
+            "id": f"prop_{today_slug}_{idx:02d}",
+            "key": c.key,
+            "current": c.current_value,
+            "proposed": c.proposed_value,
+            "rationale": c.rationale,
+            "detailed_plan": c.detailed_plan,
+            "expected_effect": c.expected_effect,
+            "confidence": c.confidence,
+            "created_at": now.isoformat(),
+            "expires_at": expires.isoformat(),
+        })
+    with open(PROPOSALS_PATH, "w") as f:
+        json.dump(existing, f, indent=2, default=str)
+
+
+def _write_dry_run(changes: list, result: ApplierResult) -> None:
+    os.makedirs(os.path.dirname(DRY_RUN_PATH), exist_ok=True)
+    data = {
+        "run_at": dt.datetime.now(dt.timezone.utc).isoformat(),
+        "dry_run": True,
+        "proposed": [_change_to_dict(c) for c in changes if isinstance(c, ProposedChange)],
+        "classification": {
+            "applied_low": [_change_to_dict(c) for c in result.applied_low],
+            "queued_high": [_change_to_dict(c) for c in result.queued_high],
+            "rejected_forbidden": [_change_to_dict(c) for c in result.rejected_forbidden],
+            "rejected_out_of_bounds": [_change_to_dict(c) for c in result.rejected_out_of_bounds],
+        },
+    }
+    with open(DRY_RUN_PATH, "w") as f:
+        json.dump(data, f, indent=2, default=str)
+
+
+def _change_to_dict(c: ProposedChange) -> dict:
+    return {
+        "key": c.key,
+        "current_value": c.current_value,
+        "proposed_value": c.proposed_value,
+        "rationale": c.rationale,
+        "detailed_plan": c.detailed_plan,
+        "expected_effect": c.expected_effect,
+        "risk_tier": c.risk_tier,
+        "confidence": c.confidence,
+    }
+
+
+def _write_tg_notification(result: ApplierResult,
+                           review_context: Optional[dict]) -> None:
+    """Append a formatted TG message to telegram_notifications.json."""
+    os.makedirs(os.path.dirname(TG_NOTIFY_PATH), exist_ok=True)
+    existing = []
+    if os.path.exists(TG_NOTIFY_PATH):
+        try:
+            with open(TG_NOTIFY_PATH) as f:
+                existing = json.load(f)
+        except Exception:
+            existing = []
+    message = _format_tg_message(result, review_context)
+    existing.append({
+        "ts": dt.datetime.now(dt.timezone.utc).isoformat(),
+        "source": "quant-review",
+        "message": message,
+    })
+    with open(TG_NOTIFY_PATH, "w") as f:
+        json.dump(existing, f, indent=2, default=str)
+
+
+def _format_tg_message(result: ApplierResult,
+                       ctx: Optional[dict]) -> str:
+    """Compose the multi-section daily review message."""
+    lines = []
+    today = dt.date.today().isoformat()
+    lines.append(f"📊 Daily Strategy Review — {today}")
+    lines.append("")
+    if ctx:
+        if "portfolio_summary" in ctx:
+            lines.append(f"Portfolio: {ctx['portfolio_summary']}")
+        if "macro_read" in ctx:
+            lines.append(f"Macro read: {ctx['macro_read']}")
+        if "data_gaps" in ctx:
+            gaps = ctx["data_gaps"] or []
+            lines.append(f"Data gaps: {', '.join(gaps) if gaps else 'none'}")
+        if "reasoning_summary" in ctx:
+            lines.append("")
+            lines.append(f"Summary: {ctx['reasoning_summary']}")
+        lines.append("")
+
+    def _fmt_change(c: ProposedChange, idx: int, prop_id: Optional[str] = None) -> list:
+        header = f"{idx}. {c.key}: {c.current_value} → {c.proposed_value}"
+        if prop_id:
+            header = f"[{prop_id}] " + header
+        out = [header,
+               f"   Why: {c.rationale}",
+               f"   Plan: {c.detailed_plan}",
+               f"   Effect: {c.expected_effect}",
+               f"   Confidence: {c.confidence:.2f}"]
+        if prop_id:
+            out.append(f"   Approve: /strategy-approve {prop_id}")
+            out.append(f"   Reject:  /strategy-reject  {prop_id}")
+        return out
+
+    if result.applied_low:
+        lines.append("━" * 31)
+        lines.append("✅ AUTO-APPLIED (low-risk)")
+        for i, c in enumerate(result.applied_low, 1):
+            lines.extend(_fmt_change(c, i))
+            lines.append("")
+    if result.queued_high:
+        lines.append("━" * 31)
+        lines.append("⏳ NEEDS YOUR APPROVAL (high-risk)")
+        for i, c in enumerate(result.queued_high, 1):
+            pid = f"prop_{today}_{i:02d}"
+            lines.extend(_fmt_change(c, i, prop_id=pid))
+            lines.append("")
+    if result.rejected_forbidden or result.rejected_out_of_bounds or result.rejected_malformed:
+        lines.append("━" * 31)
+        lines.append("🚫 REJECTED")
+        for c in result.rejected_forbidden:
+            lines.append(f"   (forbidden) {c.key}: {c.current_value} → {c.proposed_value}")
+        for c in result.rejected_out_of_bounds:
+            lines.append(f"   (out of bounds) {c.key}: {c.current_value} → {c.proposed_value}")
+        for m in result.rejected_malformed:
+            lines.append(f"   (malformed) {m}")
+
+    if not (result.applied_low or result.queued_high
+            or result.rejected_forbidden or result.rejected_out_of_bounds):
+        lines.append("No changes proposed today.")
+
+    return "\n".join(lines)
+
+
+def _append_audit_log(result: ApplierResult,
+                      ctx: Optional[dict],
+                      dry_run: bool) -> None:
+    os.makedirs(os.path.dirname(AUDIT_LOG_PATH), exist_ok=True)
+    record = {
+        "ts": dt.datetime.now(dt.timezone.utc).isoformat(),
+        "dry_run": dry_run,
+        "applied_low_count": len(result.applied_low),
+        "queued_high_count": len(result.queued_high),
+        "rejected_forbidden_count": len(result.rejected_forbidden),
+        "rejected_out_of_bounds_count": len(result.rejected_out_of_bounds),
+        "rejected_malformed_count": len(result.rejected_malformed),
+        "context": ctx or {},
+    }
+    with open(AUDIT_LOG_PATH, "a") as f:
+        f.write(json.dumps(record, default=str) + "\n")
