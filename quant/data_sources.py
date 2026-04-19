@@ -377,6 +377,20 @@ def fetch_ark_trades() -> ExternalSignal:
 
 
 # ── Congress / Pelosi ────────────────────────────────────────────
+#
+# NOTE: As of 2026-04-19, bff.capitoltrades.com returns 503 (CloudFront
+# Lambda execution errors). Known-broken service-side, not a client-side
+# bug. Left in place so the fetcher auto-recovers when their backend
+# returns; meanwhile the error is visible in `data_gaps` so the LLM
+# reasoning doesn't quietly skip this signal.
+#
+# Free alternatives considered (all fail as of smoke test):
+#   - housestockwatcher S3 public JSON (403)
+#   - quiverquant.com/api/beta/bulk/congresstrading (401)
+#   - stocknear.com/api/congress-trades (403)
+#
+# Revisit if capitoltrades stays broken — HouseStockWatcher or QuiverQuant
+# with a free token may be options later.
 
 _CAPITOLTRADES_API = "https://bff.capitoltrades.com/trades"
 

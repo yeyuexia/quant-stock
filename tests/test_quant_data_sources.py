@@ -356,3 +356,18 @@ def test_fetch_latest_13f_finds_info_table_via_index_json():
     assert result is not None
     assert result["top_20"][0]["ticker"] == "APPLE INC"
     assert result["top_20"][0]["value"] == 150_000_000 * 1000   # 13F reports in thousands
+
+
+def test_fetch_congress_gracefully_handles_service_outage():
+    """CapitolTrades' backend has periods of instability (CloudFront Lambda
+    errors). The fetcher must surface the error clearly in data_gaps rather
+    than silently returning empty data."""
+    from quant.data_sources import fetch_congress_trades
+    from unittest.mock import patch
+    from urllib.error import HTTPError
+    with patch("quant.data_sources._fetch_capitoltrades_json",
+               side_effect=HTTPError("url", 503, "Service Unavailable", {}, None)):
+        sig = fetch_congress_trades()
+    assert sig.data == []
+    assert sig.error is not None
+    assert "503" in sig.error or "service" in sig.error.lower() or "unavailable" in sig.error.lower()
