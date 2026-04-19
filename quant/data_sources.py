@@ -450,7 +450,7 @@ def fetch_congress_trades() -> ExternalSignal:
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 
-def fetch_all_externals(timeout_per_source: int = 30) -> list:
+def fetch_all_externals(timeout_per_source: int = 90) -> list:
     """Fetch all five external signals in parallel. Returns a list of
     ExternalSignal objects — always length 5, even if some failed.
     Each fetcher is also internally defensive (returns error-signals rather
