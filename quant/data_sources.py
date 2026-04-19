@@ -58,7 +58,11 @@ def _fetch_latest_13f_for_cik(cik: str) -> Optional[dict]:
     """Fetch the most recent 13F-HR filing for a given CIK.
 
     Returns {"period_of_report": date, "top_20": [{"ticker", "value", "weight"}]}
-    or None if no 13F found. Raises on unrecoverable errors (caller catches).
+    or None if no 13F found. Raises on unrecoverable errors.
+
+    Info-table filenames are arbitrary (e.g. "50240.xml" — filer/preparer
+    specific). We discover it by listing the accession directory's index.json
+    and picking the XML that isn't `primary_doc.xml`.
     """
     import json as _json
     submissions_url = f"{_SEC_BASE}/submissions/CIK{cik.zfill(10)}.json"
@@ -67,31 +71,43 @@ def _fetch_latest_13f_for_cik(cik: str) -> Optional[dict]:
     recent = submissions["filings"]["recent"]
     form_types = recent["form"]
     accession_numbers = recent["accessionNumber"]
-    primary_docs = recent["primaryDocument"]
     report_dates = recent["reportDate"]
     for idx, form in enumerate(form_types):
-        if form == "13F-HR":
-            accession = accession_numbers[idx].replace("-", "")
-            doc = primary_docs[idx]
-            # The holdings are in a separate info-table XML alongside the
-            # primary doc. Try common filename patterns.
-            base = f"{_SEC_BASE}/Archives/edgar/data/{int(cik)}/{accession}"
-            for candidate in ("form13fInfoTable.xml", "infotable.xml",
-                              doc.replace(".htm", ".xml")):
-                try:
-                    xml_bytes = _sec_get(f"{base}/{candidate}", timeout=20)
-                    holdings = _parse_13f_info_table(xml_bytes)
-                    total = sum(h["value"] for h in holdings)
-                    for h in holdings:
-                        h["weight"] = h["value"] / total if total else 0.0
-                    holdings.sort(key=lambda h: h["value"], reverse=True)
-                    return {
-                        "period_of_report": dt.date.fromisoformat(report_dates[idx]),
-                        "top_20": holdings[:20],
-                    }
-                except urllib.error.HTTPError:
+        if form != "13F-HR":
+            continue
+        accession = accession_numbers[idx].replace("-", "")
+        base = f"{_SEC_BASE}/Archives/edgar/data/{int(cik)}/{accession}"
+        try:
+            index_raw = _sec_get(f"{base}/index.json", timeout=20)
+            index = _json.loads(index_raw)
+        except Exception:
+            continue
+        items = index.get("directory", {}).get("item", []) or []
+        # Find the info-table XML: .xml file, not primary_doc.xml, not
+        # the submission's own index files.
+        candidates = [
+            f["name"] for f in items
+            if f.get("name", "").lower().endswith(".xml")
+            and f.get("name") != "primary_doc.xml"
+        ]
+        for fname in candidates:
+            try:
+                xml_bytes = _sec_get(f"{base}/{fname}", timeout=20)
+                holdings = _parse_13f_info_table(xml_bytes)
+                if not holdings:
                     continue
-            return None
+                total = sum(h["value"] for h in holdings)
+                for h in holdings:
+                    h["weight"] = h["value"] / total if total else 0.0
+                holdings.sort(key=lambda h: h["value"], reverse=True)
+                return {
+                    "period_of_report": dt.date.fromisoformat(report_dates[idx]),
+                    "top_20": holdings[:20],
+                }
+            except (urllib.error.HTTPError, ET.ParseError):
+                continue
+        # No info-table file parsed successfully — try next 13F
+        return None
     return None
 
 
@@ -136,12 +152,18 @@ def fetch_13f_filings() -> ExternalSignal:
                 "value_usd": holding.get("value", 0),
                 "weight": round(holding.get("weight", 0.0), 4),
             })
-    if not rows and errors:
+    if not rows:
+        # All funds either errored or returned None — treat as error signal
+        # so data_gaps captures it clearly.
+        if errors:
+            err_msg = "; ".join(errors[:3])
+        else:
+            err_msg = f"no 13F filings found (all {len(_TRACKED_13F_FUNDS)} tracked funds returned none)"
         return ExternalSignal(
             source="13F",
             as_of=dt.datetime.now(dt.timezone.utc),
             data=[],
-            error="; ".join(errors[:3]),
+            error=err_msg,
         )
     as_of = (dt.datetime.combine(latest_date, dt.time()).replace(tzinfo=dt.timezone.utc)
              if latest_date else dt.datetime.now(dt.timezone.utc))

@@ -278,3 +278,65 @@ def test_sec_user_agent_reads_from_env(monkeypatch):
     # this test is documentational; actual behavior is at import time.
     import os
     assert os.environ.get("SEC_CONTACT_EMAIL_UA") == "test research me@mycompany.com"
+
+
+def test_fetch_13f_returns_error_when_all_funds_silently_return_none():
+    """If every fund's _fetch_latest_13f_for_cik returns None (no filings
+    discoverable), the signal must be stamped with an error — silent empty
+    is a bug (from live-data smoke test)."""
+    from quant.data_sources import fetch_13f_filings
+    from unittest.mock import patch
+    with patch("quant.data_sources._fetch_latest_13f_for_cik", return_value=None):
+        sig = fetch_13f_filings()
+    assert sig.data == []
+    assert sig.error is not None
+    assert "no 13F filings" in sig.error.lower() or "none" in sig.error.lower()
+
+
+def test_fetch_latest_13f_finds_info_table_via_index_json():
+    """The info-table filename is arbitrary (e.g. '50240.xml'). We must
+    discover it by listing the accession directory's index.json, not
+    guessing hardcoded names."""
+    from quant.data_sources import _fetch_latest_13f_for_cik
+    from unittest.mock import patch, MagicMock
+
+    # Mock _sec_get to return different content per URL
+    submissions = {
+        "filings": {"recent": {
+            "form": ["13F-HR"],
+            "accessionNumber": ["0001193125-26-054580"],
+            "primaryDocument": ["primary_doc.xml"],
+            "reportDate": ["2026-03-31"],
+        }}
+    }
+    index_json = {
+        "directory": {"item": [
+            {"name": "primary_doc.xml", "size": "5556"},
+            {"name": "50240.xml", "size": "55376"},
+            {"name": "0001193125-26-054580-index.html", "size": "100"},
+        ]}
+    }
+    info_table_xml = b'''<?xml version="1.0"?>
+<informationTable xmlns="http://www.sec.gov/edgar/document/thirteenf/informationtable">
+  <infoTable>
+    <nameOfIssuer>APPLE INC</nameOfIssuer>
+    <cusip>037833100</cusip>
+    <value>150000000</value>
+  </infoTable>
+</informationTable>'''
+
+    import json as _json
+    def fake_sec_get(url, *, timeout=20):
+        if url.endswith(".json") and "submissions" in url:
+            return _json.dumps(submissions).encode()
+        if url.endswith("/index.json"):
+            return _json.dumps(index_json).encode()
+        if url.endswith("50240.xml"):
+            return info_table_xml
+        raise RuntimeError(f"unexpected url: {url}")
+
+    with patch("quant.data_sources._sec_get", side_effect=fake_sec_get):
+        result = _fetch_latest_13f_for_cik("0001067983")
+    assert result is not None
+    assert result["top_20"][0]["ticker"] == "APPLE INC"
+    assert result["top_20"][0]["value"] == 150_000_000 * 1000   # 13F reports in thousands
