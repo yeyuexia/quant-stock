@@ -1,0 +1,142 @@
+"""External data-signal fetchers for the quant review subagent.
+
+Five sources; each returns a normalized ExternalSignal. Fetchers never raise —
+network errors, parsing failures, empty responses all yield a signal with
+`error` populated and `data=[]`.
+
+Built incrementally: Task 3 adds fetch_13f_filings; Tasks 4-7 add reddit /
+etf-holdings / ark / congress; Task 8 adds fetch_all_externals as a parallel
+orchestrator.
+"""
+from __future__ import annotations
+import datetime as dt
+import logging
+import urllib.error
+import urllib.request
+import xml.etree.ElementTree as ET
+from typing import Optional
+
+from quant.schema import ExternalSignal
+
+
+# ── 13F filings ─────────────────────────────────────────────────
+
+# SEC CIKs for funds we track. Add/remove to tune the "smart money" roster.
+_TRACKED_13F_FUNDS = {
+    "0001067983": "Berkshire Hathaway",
+    "0001336528": "Bridgewater",
+    "0001167483": "Tiger Global Management",
+    "0001037389": "Renaissance Technologies",
+    "0001423053": "Citadel Advisors",
+    "0001040273": "Third Point",
+}
+
+_SEC_BASE = "https://data.sec.gov"
+# SEC requires a specific User-Agent with contact info.
+_SEC_USER_AGENT = "stock-tracker research contact@example.com"
+
+
+def _sec_get(url: str, *, timeout: int = 20) -> bytes:
+    """GET from SEC with required headers. Raises on non-200."""
+    req = urllib.request.Request(url, headers={
+        "User-Agent": _SEC_USER_AGENT,
+        "Accept": "application/json, text/html, */*",
+    })
+    with urllib.request.urlopen(req, timeout=timeout) as resp:
+        if resp.status != 200:
+            raise RuntimeError(f"SEC {url} returned {resp.status}")
+        return resp.read()
+
+
+def _fetch_latest_13f_for_cik(cik: str) -> Optional[dict]:
+    """Fetch the most recent 13F-HR filing for a given CIK.
+
+    Returns {"period_of_report": date, "top_20": [{"ticker", "value", "weight"}]}
+    or None if no 13F found. Raises on unrecoverable errors (caller catches).
+    """
+    import json as _json
+    submissions_url = f"{_SEC_BASE}/submissions/CIK{cik.zfill(10)}.json"
+    raw = _sec_get(submissions_url)
+    submissions = _json.loads(raw)
+    recent = submissions["filings"]["recent"]
+    form_types = recent["form"]
+    accession_numbers = recent["accessionNumber"]
+    primary_docs = recent["primaryDocument"]
+    report_dates = recent["reportDate"]
+    for idx, form in enumerate(form_types):
+        if form == "13F-HR":
+            accession = accession_numbers[idx].replace("-", "")
+            doc = primary_docs[idx]
+            # The holdings are in a separate info-table XML alongside the
+            # primary doc. Try common filename patterns.
+            base = f"{_SEC_BASE}/Archives/edgar/data/{int(cik)}/{accession}"
+            for candidate in ("form13fInfoTable.xml", "infotable.xml",
+                              doc.replace(".htm", ".xml")):
+                try:
+                    xml_bytes = _sec_get(f"{base}/{candidate}", timeout=20)
+                    holdings = _parse_13f_info_table(xml_bytes)
+                    total = sum(h["value"] for h in holdings)
+                    for h in holdings:
+                        h["weight"] = h["value"] / total if total else 0.0
+                    holdings.sort(key=lambda h: h["value"], reverse=True)
+                    return {
+                        "period_of_report": dt.date.fromisoformat(report_dates[idx]),
+                        "top_20": holdings[:20],
+                    }
+                except urllib.error.HTTPError:
+                    continue
+            return None
+    return None
+
+
+def _parse_13f_info_table(xml_bytes: bytes) -> list:
+    """Parse a form13fInfoTable.xml into [{"ticker": name, "cusip": str, "value": int}]."""
+    ns = {"n": "http://www.sec.gov/edgar/document/thirteenf/informationtable"}
+    tree = ET.fromstring(xml_bytes)
+    rows = []
+    for info in tree.findall("n:infoTable", ns):
+        name = (info.findtext("n:nameOfIssuer", default="", namespaces=ns) or "").strip()
+        cusip = (info.findtext("n:cusip", default="", namespaces=ns) or "").strip()
+        value_raw = info.findtext("n:value", default="0", namespaces=ns)
+        try:
+            # 13F reports value in thousands of dollars
+            value = int(float(value_raw)) * 1000
+        except (TypeError, ValueError):
+            value = 0
+        rows.append({"ticker": name, "cusip": cusip, "value": value})
+    return rows
+
+
+def fetch_13f_filings() -> ExternalSignal:
+    """Aggregate top holdings from tracked funds' most recent 13F-HR filings."""
+    rows = []
+    errors = []
+    latest_date = None
+    for cik, fund_name in _TRACKED_13F_FUNDS.items():
+        try:
+            result = _fetch_latest_13f_for_cik(cik)
+        except Exception as e:
+            errors.append(f"{fund_name}: {e}")
+            continue
+        if result is None:
+            continue
+        period = result["period_of_report"]
+        latest_date = period if latest_date is None else max(latest_date, period)
+        for holding in result["top_20"]:
+            rows.append({
+                "fund": fund_name,
+                "ticker": holding.get("ticker", ""),
+                "cusip": holding.get("cusip", ""),
+                "value_usd": holding.get("value", 0),
+                "weight": round(holding.get("weight", 0.0), 4),
+            })
+    if not rows and errors:
+        return ExternalSignal(
+            source="13F",
+            as_of=dt.datetime.now(dt.timezone.utc),
+            data=[],
+            error="; ".join(errors[:3]),
+        )
+    as_of = (dt.datetime.combine(latest_date, dt.time()).replace(tzinfo=dt.timezone.utc)
+             if latest_date else dt.datetime.now(dt.timezone.utc))
+    return ExternalSignal(source="13F", as_of=as_of, data=rows)
