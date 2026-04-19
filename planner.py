@@ -67,3 +67,15 @@ def _slice_count(notional: float, tier: str) -> int:
         return 1
     bucket = "small" if notional < config.SLICE_SIZE_SMALL_MAX else "large"
     return config.SLICE_COUNTS[tier][bucket]
+
+
+class RuleBasedIntentPricer:
+    """Rule-based tier assignment + max_price + slice_count.
+
+    Wraps the existing build_priced_intents() — behavior identical.
+    Implements planning.IntentPricer."""
+
+    def price(self, intents, ctx: PricingContext):
+        from planning import IntentPricerOutput
+        priced = build_priced_intents(intents, ctx)
+        return IntentPricerOutput(priced=priced, provider="rule-based")

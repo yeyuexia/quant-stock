@@ -92,9 +92,45 @@ def _build_aggressive_targets() -> tuple[dict[str, float], float]:
     return targets, capital
 
 
+class RuleBasedCoreTargetBuilder:
+    """Rule-based target builder for the core tranche.
+
+    Wraps the existing _build_core_targets() — behavior identical.
+    Implements planning.TargetBuilder."""
+
+    def build(self, *, tranche, broker):
+        from planning import TargetBuilderOutput
+        targets, capital = _build_core_targets()
+        return TargetBuilderOutput(
+            targets=targets,
+            capital=capital,
+            rationale="core: dual-momentum ETF rotation + value/quality screen + macro overlay + BIL safe-haven",
+            confidence=1.0,
+            provider="rule-based-core",
+        )
+
+
+class RuleBasedAggressiveTargetBuilder:
+    """Rule-based target builder for the aggressive tranche.
+
+    Wraps the existing _build_aggressive_targets() — behavior identical.
+    Implements planning.TargetBuilder."""
+
+    def build(self, *, tranche, broker):
+        from planning import TargetBuilderOutput
+        targets, capital = _build_aggressive_targets()
+        return TargetBuilderOutput(
+            targets=targets,
+            capital=capital,
+            rationale="aggressive: top-N leveraged ETFs by own momentum scoring, cash buffer",
+            confidence=1.0,
+            provider="rule-based-aggressive",
+        )
+
+
 _TARGET_BUILDERS = {
-    "core": _build_core_targets,
-    "aggressive": _build_aggressive_targets,
+    "core": RuleBasedCoreTargetBuilder(),
+    "aggressive": RuleBasedAggressiveTargetBuilder(),
 }
 
 
@@ -131,7 +167,12 @@ def run(
                 return None
 
     builder = target_builder or _TARGET_BUILDERS[tranche]
-    targets, tranche_capital = builder()
+    # Accept both Protocol (.build(...)) and callable (legacy tests) forms.
+    if hasattr(builder, "build"):
+        result = builder.build(tranche=tranche, broker=broker)
+        targets, tranche_capital = result.targets, result.capital
+    else:
+        targets, tranche_capital = builder()
 
     plan = orders.reconcile_to_targets(
         targets, tranche=tranche, snapshot=snap,
