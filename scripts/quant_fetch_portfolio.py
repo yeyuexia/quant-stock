@@ -1,0 +1,43 @@
+#!/usr/bin/env python3
+"""Dump current portfolio state as JSON to stdout.
+
+Used by the quant review subagent via Bash. The agent parses stdout directly.
+Set QUANT_REVIEW_FAKE_BROKER=1 in the environment to use the in-memory
+FakeBroker (for tests / smoke runs without Alpaca credentials)."""
+from __future__ import annotations
+import json
+import os
+import sys
+
+# Add project root to sys.path so we can import project modules regardless of cwd
+_HERE = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, os.path.dirname(_HERE))
+
+import config
+
+
+def main() -> int:
+    if os.environ.get("QUANT_REVIEW_FAKE_BROKER") == "1":
+        from tests.fakes import FakeBroker
+        broker = FakeBroker(cash=100_000.0, equity=100_000.0)
+    else:
+        from broker import Broker
+        broker = Broker(env=config.ALPACA_ENV)
+
+    from orders import sync_state
+    snap = sync_state(broker, alerts=[])
+
+    out = {
+        "as_of": snap.synced_at,
+        "alpaca_env": snap.alpaca_env,
+        "cash": snap.cash,
+        "equity": snap.equity,
+        "positions": snap.positions,
+        "tranches": snap.tranches,
+    }
+    print(json.dumps(out, indent=2, default=str))
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
