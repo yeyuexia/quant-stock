@@ -15,3 +15,9 @@
 
 # Executor — every 10 min, 10:00–15:50 ET weekdays
 */10 10-15 * * 1-5 /Users/zl/works/stock/scripts/cron-wrapper.sh executor.py >> /Users/zl/works/stock/.cache/executor.log 2>&1
+
+# Quant review subagent — 7 PM ET weekdays (= 3h after market close).
+# Invokes the `claude` CLI locally against the user's CC subscription;
+# writes strategy overrides + Telegram notification to .cache/.
+# Runs Mon-Fri in ET; stays on same calendar day since close + 3h is still evening.
+0 19 * * 1-5 /Users/zl/works/stock/scripts/cron-wrapper.sh scripts/quant_review_local.py >> /Users/zl/works/stock/.cache/quant.log 2>&1
