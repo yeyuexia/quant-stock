@@ -51,7 +51,24 @@ def main() -> int:
         return 1
 
     with open(_PROMPT_PATH) as f:
-        prompt = f.read()
+        trigger_content = f.read()
+
+    # Wrap with an explicit execution directive. Without this, `claude -p`
+    # treats the trigger prompt as pasted content to discuss rather than
+    # as the agent's task. The directive makes it unambiguous that the
+    # agent's job is to run the workflow, not summarize it.
+    prompt = (
+        "You are executing your assigned workflow for this run. "
+        "Do not ask what I want; do not summarize the instructions. "
+        "Run the workflow's 7 steps in sequence using your Bash/Read/Write "
+        "tools. Report back only a short final-state summary (which files "
+        "were written, what changes were applied or queued) when done.\n\n"
+        "Your role, workflow, rules, and output schema are below:\n\n"
+        "---\n\n"
+        f"{trigger_content}\n\n"
+        "---\n\n"
+        "Begin now. Start with step 1 of the WORKFLOW section."
+    )
 
     os.makedirs(_CACHE, exist_ok=True)
 
