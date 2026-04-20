@@ -55,10 +55,19 @@ def main() -> int:
 
     os.makedirs(_CACHE, exist_ok=True)
 
+    # --permission-mode bypassPermissions is required for headless runs —
+    # otherwise the agent halts on the first Bash call waiting for approval
+    # that can't be granted in non-interactive mode. Safe in our context:
+    # the agent only runs our own scripts/*.py helpers and reads/writes
+    # inside .cache/, bounded by the trigger prompt's workflow.
     _log(f"Invoking `{claude_bin}` for quant review (timeout {_TIMEOUT_SECONDS}s)")
     try:
         result = subprocess.run(
-            [claude_bin, "-p", prompt],
+            [
+                claude_bin,
+                "--permission-mode", "bypassPermissions",
+                "-p", prompt,
+            ],
             capture_output=True, text=True,
             timeout=_TIMEOUT_SECONDS, cwd=_REPO,
         )
