@@ -136,6 +136,62 @@ def test_rebalancer_direct_submits_tiny_orders(tmp_path, monkeypatch):
     assert len(b._submitted) == 1
 
 
+def test_rebalancer_writes_tg_notification_on_plan_write(tmp_path, monkeypatch):
+    """After pending_plan.json is written, a Telegram notification with
+    source='rebalancer' is appended to TELEGRAM_NOTIFY_PATH, summarising
+    the tranche, capital, and buy/sell intents."""
+    import rebalancer, orders, config as cfg
+    from tests.fakes import FakeBroker
+
+    monkeypatch.setattr(orders, "HALT_PATH", str(tmp_path / "no_halt"))
+    monkeypatch.setattr(orders, "DAILY_TRADE_LOG", str(tmp_path / "log.json"))
+    monkeypatch.setattr(orders, "PENDING_ORDERS_PATH", str(tmp_path / "pend.json"))
+    monkeypatch.setattr(orders, "PORTFOLIO_PATH", str(tmp_path / "port.json"))
+    monkeypatch.setattr("pending_plan.PENDING_PLAN_PATH", str(tmp_path / "plan.json"))
+    notify_path = tmp_path / "telegram_notifications.json"
+    monkeypatch.setattr(cfg, "TELEGRAM_NOTIFY_PATH", str(notify_path))
+    monkeypatch.setattr(cfg, "EXECUTOR_SHADOW_MODE", False)
+
+    b = FakeBroker(cash=50_000.0, equity=100_000.0)
+    b.set_latest_price("SPY", 480.0)
+
+    import baseline as bl
+    monkeypatch.setattr(bl, "_fetch_spy", lambda: 480.0)
+    monkeypatch.setattr(bl, "_fetch_vix", lambda: 14.0)
+    monkeypatch.setattr(bl, "_fetch_macro_score", lambda: 0.12)
+
+    rebalancer.run(tranche="core", dry_run=False, force=True, broker=b,
+                   target_builder=lambda: ({"SPY": 0.20}, 90_000.0))
+
+    assert notify_path.exists(), "TG notification file should be created"
+    notifications = json.loads(notify_path.read_text())
+    rebalancer_notifs = [n for n in notifications if n.get("source") == "rebalancer"]
+    assert len(rebalancer_notifs) == 1, \
+        f"expected exactly 1 rebalancer notification, got {len(rebalancer_notifs)}"
+    entry = rebalancer_notifs[0]
+    assert "ts" in entry
+    msg = entry["message"]
+    assert "core" in msg.lower()
+    assert "SPY" in msg
+
+
+def test_rebalancer_skips_tg_notification_on_dry_run(tmp_path, monkeypatch):
+    """Dry-run must not write a TG notification (no plan file is written)."""
+    import rebalancer, orders, config as cfg
+    from tests.fakes import FakeBroker
+
+    _portfolio_cache(tmp_path, monkeypatch, None)
+    _safety_paths(tmp_path, monkeypatch)
+    notify_path = tmp_path / "telegram_notifications.json"
+    monkeypatch.setattr(cfg, "TELEGRAM_NOTIFY_PATH", str(notify_path))
+
+    b = FakeBroker()
+    rebalancer.run(tranche="core", dry_run=True, force=True, broker=b,
+                   target_builder=lambda: ({"SPY": 1.0}, 10_000))
+
+    assert not notify_path.exists()
+
+
 def test_rebalancer_drops_symbol_with_missing_decision_price(tmp_path, monkeypatch, capsys):
     """If _latest_price raises, the symbol should be dropped from the pending plan
     with a warning, not silently included with decision_price=0.0."""

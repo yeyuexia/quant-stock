@@ -36,7 +36,7 @@ def test_executor_window():
     assert config.EXECUTOR_WINDOW_END == "15:50"
     assert config.EXECUTOR_TICK_MINUTES == 10
     assert config.PLANNER_DIRECT_SUBMIT_THRESHOLD == 500.0
-    assert config.EXECUTOR_SHADOW_MODE is True  # phase 0 default
+    assert config.EXECUTOR_SHADOW_MODE is False  # live submission enabled
 
 
 def test_news_shock_keywords():

@@ -258,6 +258,8 @@ def _process_slices(plan: PendingPlan, obs, result: TickResult, *, broker):
         if state.last_client_order_id:
             prior_filled = _broker_filled_notional(broker, state.last_client_order_id)
             state.notional_filled += prior_filled
+            if prior_filled > 0:
+                _notify_fill_to_telegram(state.intent, prior_filled, state.notional_filled)
             _cancel_prior(broker, state.last_client_order_id, result)
             state.last_client_order_id = None
 
@@ -391,6 +393,43 @@ def _notify_breakers(result: TickResult, plan: PendingPlan):
         json.dump(existing, f, indent=2)
 
 
+def _notify_fill_to_telegram(intent, filled_delta: float, total_filled: float) -> None:
+    """Append a fill notification to TELEGRAM_NOTIFY_PATH. No-op if unset."""
+    path = getattr(config, "TELEGRAM_NOTIFY_PATH", None)
+    if not path or filled_delta <= 0:
+        return
+    import json
+
+    pct = (total_filled / intent.notional * 100) if intent.notional else 0.0
+    message = "\n".join([
+        f"✅ Order Filled — {intent.symbol}",
+        f"{intent.side.upper()} ${filled_delta:,.0f}  "
+        f"({pct:.1f}% of ${intent.notional:,.0f})",
+        f"tranche={intent.tranche}  tier={intent.tier}",
+    ])
+
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    existing = []
+    if os.path.exists(path):
+        try:
+            with open(path) as f:
+                existing = json.load(f)
+        except Exception:
+            existing = []
+    existing.append({
+        "ts": dt.datetime.now(dt.timezone.utc).isoformat(),
+        "source": "executor-fill",
+        "symbol": intent.symbol,
+        "side": intent.side,
+        "filled_notional": filled_delta,
+        "total_filled": total_filled,
+        "intent_notional": intent.notional,
+        "message": message,
+    })
+    with open(path, "w") as f:
+        json.dump(existing, f, indent=2, default=str)
+
+
 def _process_eod(plan: PendingPlan, result: TickResult, *, broker):
     """At the last tick of the day, cancel all outstanding limits and mark
     each intent done/deferred based on fill ratio."""
@@ -404,7 +443,10 @@ def _process_eod(plan: PendingPlan, result: TickResult, *, broker):
         if state.status != "active":
             continue
         if state.last_client_order_id:
-            state.notional_filled += _broker_filled_notional(broker, state.last_client_order_id)
+            prior_filled = _broker_filled_notional(broker, state.last_client_order_id)
+            state.notional_filled += prior_filled
+            if prior_filled > 0:
+                _notify_fill_to_telegram(state.intent, prior_filled, state.notional_filled)
             _cancel_prior(broker, state.last_client_order_id, result)
             state.last_client_order_id = None
         intent = state.intent
@@ -420,6 +462,11 @@ def _process_eod(plan: PendingPlan, result: TickResult, *, broker):
 
 
 def main():
+    try:
+        from dotenv import load_dotenv
+        load_dotenv(os.path.join(os.path.dirname(__file__), ".env"))
+    except ImportError:
+        pass
     broker = Broker(env=config.ALPACA_ENV)
     result = run_tick(broker=broker)
     if result is None:

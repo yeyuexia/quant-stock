@@ -11,6 +11,7 @@ Usage:
 from __future__ import annotations
 import argparse
 import datetime as dt
+import os
 import sys
 from typing import Callable, Optional
 
@@ -262,7 +263,13 @@ def _write_pending_plan(tranche, intents, *, broker):
 
     # Only capture baseline when we're creating a brand-new plan; reuse the
     # existing baseline on merge (first-writer wins — that's the day's reference).
+    # Discard stale plans from prior trading days — prices are too outdated to merge.
     existing = load_plan()
+    if existing is not None:
+        plan_date = existing.created_at.date() if hasattr(existing.created_at, "date") \
+            else dt.date.fromisoformat(str(existing.created_at)[:10])
+        if plan_date < dt.date.today():
+            existing = None
     if existing is None:
         baseline = capture_baseline()
     else:
@@ -359,9 +366,59 @@ def _write_pending_plan(tranche, intents, *, broker):
     print(f"\n── Pending plan written: {len(plan.intents)} intents "
           f"(tranche={plan.tranche}), baseline SPY={baseline.spy:.2f} "
           f"VIX={baseline.vix:.2f} macro={baseline.macro_score:+.3f}")
+    _notify_plan_to_telegram(tranche, priced, baseline)
+
+
+def _notify_plan_to_telegram(tranche: str, intents: list, baseline) -> None:
+    """Append a new-plan summary to TELEGRAM_NOTIFY_PATH. No-op if unset."""
+    path = getattr(config, "TELEGRAM_NOTIFY_PATH", None)
+    if not path or not intents:
+        return
+    import json
+
+    lines = [f"📋 New Plan — {tranche} tranche"]
+    lines.append(
+        f"Baseline: SPY={baseline.spy:.2f}  VIX={baseline.vix:.2f}  "
+        f"macro={baseline.macro_score:+.2f}"
+    )
+    lines.append("")
+    total = 0.0
+    for i in intents:
+        lines.append(
+            f"  {i.side.upper():4s} {i.symbol:<6s} ${i.notional:>9,.0f}   "
+            f"(max {i.max_price:.2f}, slices {i.slice_count}, {i.tier})"
+        )
+        total += i.notional
+    lines.append("")
+    lines.append(f"Total: ${total:,.0f} across {len(intents)} intents")
+
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    existing = []
+    if os.path.exists(path):
+        try:
+            with open(path) as f:
+                existing = json.load(f)
+        except Exception:
+            existing = []
+    existing.append({
+        "ts": dt.datetime.now(dt.timezone.utc).isoformat(),
+        "source": "rebalancer",
+        "tranche": tranche,
+        "message": "\n".join(lines),
+    })
+    with open(path, "w") as f:
+        json.dump(existing, f, indent=2, default=str)
 
 
 def main():
+    # Load .env so ALPACA_API_KEY / ALPACA_API_SECRET are available when
+    # launched by launchd (which doesn't inherit the user's shell environment).
+    try:
+        from dotenv import load_dotenv
+        load_dotenv(os.path.join(os.path.dirname(__file__), ".env"))
+    except ImportError:
+        pass  # python-dotenv not installed; rely on env vars already being set
+
     ap = argparse.ArgumentParser()
     ap.add_argument("--tranche", required=True, choices=["core", "aggressive", "both"])
     ap.add_argument("--dry-run", action="store_true")

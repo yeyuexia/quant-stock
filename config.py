@@ -204,8 +204,10 @@ DAILY_TRADE_LOG = os.path.join(os.path.dirname(__file__), ".cache", "daily_trade
 PENDING_ORDERS_PATH = os.path.join(os.path.dirname(__file__), "pending_orders.json")
 
 DAILY_MAX_ORDERS = 40
-DAILY_MAX_NOTIONAL = 25_000
-LARGE_ORDER_THRESHOLD = 2_000
+# Paper mode: no notional cap so full portfolio deploys in one session.
+DAILY_MAX_NOTIONAL = 200_000 if ALPACA_ENV == "paper" else 25_000
+# Orders >= this notional require Telegram approval; orders < this auto-submit.
+LARGE_ORDER_THRESHOLD = 50_000
 PENDING_ORDER_TTL_HOURS = 6
 
 # ── Rebalance cadence per tranche ───────────────────────────────
@@ -220,7 +222,7 @@ REBALANCE_DAYS = {
 EXECUTOR_WINDOW_START = "10:00"         # ET (avoids 9:30 open auction)
 EXECUTOR_WINDOW_END   = "15:50"         # ET (leaves room for end-of-day cleanup)
 EXECUTOR_TICK_MINUTES = 10
-EXECUTOR_SHADOW_MODE  = True            # Phase 0: log intended submissions only
+EXECUTOR_SHADOW_MODE  = False           # live order submission enabled
 PLANNER_DIRECT_SUBMIT_THRESHOLD = 500.0  # USD: below this, planner submits immediately
 
 EXECUTION_TIERS = {
