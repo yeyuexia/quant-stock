@@ -94,6 +94,16 @@ AGGRESSIVE_PARAMS = {
 ATR_PERIOD = 14
 ATR_STOP_MULTIPLIER = 2.0
 
+# ── SEPA take-profit (Phase 1: core tranche only) ────────────────
+# R-multiple scale-out: at each tier, sell `fraction` of initial_qty.
+# After the final tier fills, the trailing-stop is cancelled and the
+# remaining position is exited when daily close < EMA(SEPA_MA_PERIOD).
+SEPA_ENABLED = True
+SEPA_R_TIERS = [(2.0, 1/3), (3.0, 1/3)]   # (R-multiple, fraction-of-initial-qty)
+SEPA_MA_PERIOD = 21
+SEPA_MA_TYPE = "ema"                       # "ema" | "sma"
+SEPA_MA_HISTORY = "6mo"                    # data.fetch_prices period for the EMA
+
 # ── Strategy 1: Dual Momentum ETF Rotation ──────────────────────
 # Concept: Hold the top-N momentum ETFs; flee to safety (BIL/SHY) when
 # all are below their moving average or absolute momentum is negative.
