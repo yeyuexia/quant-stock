@@ -236,6 +236,130 @@ def check_volume(portfolio):
     return alerts
 
 
+# ── SEPA take-profit (Phase 1) ───────────────────────────────────
+
+def _sepa_notify(message: str, lines: list) -> None:
+    """Append a Telegram message; also push to the in-process `lines` list
+    so the caller can include them in the watchdog alert summary."""
+    lines.append(message)
+    path = getattr(config, "TELEGRAM_NOTIFY_PATH", None)
+    if not path:
+        return
+    import json as _json
+    os.makedirs(os.path.dirname(path), exist_ok=True) if os.path.dirname(path) else None
+    existing = []
+    if os.path.exists(path):
+        try:
+            with open(path) as f:
+                existing = _json.load(f)
+        except Exception:
+            existing = []
+    existing.append({
+        "ts": dt.datetime.now(dt.timezone.utc).isoformat(),
+        "source": "watchdog.sepa",
+        "message": message,
+    })
+    with open(path, "w") as f:
+        _json.dump(existing, f, indent=2, default=str)
+
+
+def check_sepa_exits(snap: "orders.PortfolioSnapshot", broker) -> list:
+    """SEPA Phase 1 driver. Returns notification lines for the alert summary.
+
+    Per core position, in order:
+      1. If next R-tier reached → submit_partial_exit (1/3 of initial_qty),
+         cancel_position_trailing, re-trail at the remaining qty (unless this
+         is the final tier — in which case no re-trail).
+      2. If r_tier_filled contains the final tier label → check 21EMA;
+         if close < EMA, submit_exit (full).
+    """
+    notifications: list = []
+    if not getattr(config, "SEPA_ENABLED", False):
+        return notifications
+
+    import sepa_exits
+    import data
+
+    for pos in snap.by_tranche("core"):
+        symbol = pos["symbol"]
+        if pos.get("initial_stop_price") is None:
+            continue
+        try:
+            current_price = float(broker._latest_price(symbol))
+        except Exception as e:
+            notifications.append(f"⚠ SEPA {symbol}: no latest price ({e})")
+            continue
+
+        # 1. R-multiple scale-out
+        action = sepa_exits.next_r_tier_action(pos, current_price)
+        if action is not None:
+            # Fraction = the fraction associated with this tier label in SEPA_R_TIERS.
+            frac = next(
+                (f for (r, f) in config.SEPA_R_TIERS if f"{int(r)}R" == action),
+                None,
+            )
+            if frac is None:
+                continue
+
+            partial_result = orders.submit_partial_exit(
+                symbol, fraction_of_initial=frac,
+                reason=f"sepa-{action}", broker=broker,
+            )
+            orders.cancel_position_trailing(symbol, broker=broker)
+
+            # Re-trail unless this is the final tier label.
+            final_label = f"{int(config.SEPA_R_TIERS[-1][0])}R"
+            if action != final_label:
+                remaining_fraction = 1.0 - sum(
+                    f for (r, f) in config.SEPA_R_TIERS
+                    if f"{int(r)}R" in pos.get("r_tier_filled", []) or f"{int(r)}R" == action
+                )
+                new_qty = float(pos["initial_qty"]) * remaining_fraction
+                from orders import _make_cid
+                _, trail_pct = orders._tranche_stops("core")
+                cid = _make_cid("core", f"sepa-trail-{action}", symbol, dt.date.today())
+                try:
+                    broker.submit_trailing_stop(symbol, qty=new_qty,
+                                                trail_percent=trail_pct,
+                                                client_order_id=cid)
+                except Exception as e:
+                    notifications.append(f"⚠ SEPA {symbol}: re-trail failed: {e}")
+
+            sold_dollars = float(pos["initial_qty"]) * frac * current_price
+            sold_shares = float(pos["initial_qty"]) * frac
+            tail_msg = (" — trailing-stop removed, now MA-trailing"
+                        if action == final_label else "")
+            _sepa_notify(
+                f"🎯 SEPA {action} hit — {symbol}\n"
+                f"Sold ~{sold_shares:.2f} shares ≈ ${sold_dollars:,.0f} at ${current_price:.2f}"
+                f"{tail_msg}",
+                notifications,
+            )
+            continue  # Don't also check MA on the same run; next watchdog observes qty drop.
+
+        # 2. 21EMA trail (only when final tier already filled)
+        final_label = f"{int(config.SEPA_R_TIERS[-1][0])}R"
+        if final_label not in (pos.get("r_tier_filled") or []):
+            continue
+        try:
+            prices = data.fetch_prices([symbol], period=config.SEPA_MA_HISTORY)
+            closes = (prices[symbol] if symbol in prices.columns
+                      else prices.iloc[:, 0]).dropna()
+        except Exception as e:
+            notifications.append(f"⚠ SEPA {symbol}: closes fetch failed: {e}")
+            continue
+        if sepa_exits.ma_trail_should_exit(pos, closes):
+            orders.submit_exit(symbol, reason="sepa-21EMA-break", broker=broker)
+            _sepa_notify(
+                f"📉 SEPA 21EMA break — {symbol}\n"
+                f"Last close ${float(closes.iloc[-1]):.2f} below 21EMA; "
+                f"exiting remaining shares.",
+                notifications,
+            )
+
+    return notifications
+
+
 # ── Macro-flip action ─────────────────────────────────────────
 
 def act_on_macro_flip(snap: orders.PortfolioSnapshot, regime: str) -> list:
