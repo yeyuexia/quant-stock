@@ -831,6 +831,33 @@ def submit_partial_exit(symbol: str, *, fraction_of_initial: float,
     return result
 
 
+def cancel_position_trailing(symbol: str, *, broker) -> ExecutionResult:
+    """Cancel any open trailing_stop orders on `symbol`. No-op when absent.
+
+    Respects HALT. Bypasses daily-cap and large-order gates — cancellations
+    carry no notional and should never queue for approval.
+    """
+    result = ExecutionResult()
+    if os.path.exists(HALT_PATH):
+        result.skipped.append((None, f"{symbol}: HALT file present, not cancelling trailing"))  # type: ignore[arg-type]
+        return result
+
+    try:
+        open_orders = broker.get_open_orders()
+    except BrokerError as e:
+        result.skipped.append((None, f"cancel_position_trailing({symbol}): {e}"))  # type: ignore[arg-type]
+        return result
+
+    for o in open_orders:
+        if o.symbol != symbol or o.type != "trailing_stop":
+            continue
+        try:
+            broker.cancel_order(o.id)
+        except BrokerError as e:
+            result.skipped.append((None, f"cancel {o.id}: {e}"))  # type: ignore[arg-type]
+    return result
+
+
 # ── tag_position ────────────────────────────────────────────────
 
 def tag_position(symbol: str, tranche: str, entry_reason: str = "manual") -> None:

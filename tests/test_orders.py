@@ -1271,3 +1271,60 @@ def test_submit_partial_exit_respects_halt(tmp_path, monkeypatch):
     assert result.submitted == []
     assert result.queued == []
     assert any("HALT" in msg for _, msg in result.skipped)
+
+
+# ── cancel_position_trailing ───────────────────────────────────
+
+def test_cancel_position_trailing_cancels_open_trailing_order(tmp_path, monkeypatch):
+    from orders import cancel_position_trailing
+    from broker import Order
+
+    monkeypatch.setattr("orders.HALT_PATH", str(tmp_path / "no_halt"))
+    fb = FakeBroker()
+    fb.seed_open_order(Order(
+        id="ord_trail_1", symbol="AAPL", side="sell", type="trailing_stop",
+        qty=30.0, notional=None, status="accepted",
+        client_order_id="trail-cid", parent_order_id=None,
+    ))
+    # Also a stop order — should NOT be cancelled.
+    fb.seed_open_order(Order(
+        id="ord_stop_1", symbol="AAPL", side="sell", type="stop",
+        qty=30.0, notional=None, status="accepted",
+        client_order_id="stop-cid", parent_order_id=None, stop_price=92.0,
+    ))
+
+    result = cancel_position_trailing("AAPL", broker=fb)
+    assert "ord_trail_1" in fb._canceled
+    assert "ord_stop_1" not in fb._canceled
+    assert result.skipped == []
+
+
+def test_cancel_position_trailing_noop_when_no_trailing(tmp_path, monkeypatch):
+    from orders import cancel_position_trailing
+
+    monkeypatch.setattr("orders.HALT_PATH", str(tmp_path / "no_halt"))
+    fb = FakeBroker()
+    result = cancel_position_trailing("AAPL", broker=fb)
+    assert fb._canceled == []
+    assert result.submitted == []
+    assert result.skipped == []
+
+
+def test_cancel_position_trailing_respects_halt(tmp_path, monkeypatch):
+    from orders import cancel_position_trailing
+    from broker import Order
+
+    halt = tmp_path / "HALT"
+    halt.write_text("paused")
+    monkeypatch.setattr("orders.HALT_PATH", str(halt))
+
+    fb = FakeBroker()
+    fb.seed_open_order(Order(
+        id="ord_trail_1", symbol="AAPL", side="sell", type="trailing_stop",
+        qty=30.0, notional=None, status="accepted",
+        client_order_id="trail-cid", parent_order_id=None,
+    ))
+
+    result = cancel_position_trailing("AAPL", broker=fb)
+    assert fb._canceled == []  # HALT prevented the cancel
+    assert any("HALT" in msg for _, msg in result.skipped)
