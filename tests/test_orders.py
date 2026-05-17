@@ -923,3 +923,221 @@ def test_reconcile_aggressive_buy_uses_fixed_stop(tmp_path, monkeypatch):
     assert len(plan.buys) == 1
     assert abs(plan.buys[0].stop_pct
                - config.AGGRESSIVE_PARAMS["stop_loss_pct"]) < 1e-9
+
+
+# ── sync_state SEPA fields ──────────────────────────────────────
+
+def _seed_stop_order(fb, symbol: str, stop_price: float, qty: float = 30.0,
+                     parent_id: str = "parent_1"):
+    """Attach a fake bracket stop-loss leg for symbol."""
+    from broker import Order
+    fb.seed_open_order(Order(
+        id=f"stop_{symbol}", symbol=symbol, side="sell", type="stop",
+        qty=qty, notional=None, status="accepted",
+        client_order_id=f"stop-cid-{symbol}", parent_order_id=parent_id,
+        stop_price=stop_price,
+    ))
+
+
+def test_sync_state_snapshots_initial_fields_on_first_seen_core_position(tmp_path, monkeypatch):
+    from orders import sync_state
+
+    _portfolio_cache(tmp_path, monkeypatch, {
+        "synced_at": "2026-05-10T14:00:00+00:00",
+        "alpaca_env": "paper",
+        "cash": 0.0, "equity": 0.0,
+        "positions": [
+            {"symbol": "AAPL", "shares": 30.0, "avg_entry": 100.0,
+             "market_value": 3000.0, "unrealized_pl": 0.0,
+             "tranche": "core", "entry_reason": "core rebalance",
+             "stop_order_id": None, "trail_order_id": None},
+        ],
+        "tranches": {"core": {"last_rebalance": "2026-05-10"},
+                     "aggressive": {"last_rebalance": None}},
+    })
+
+    fb = FakeBroker()
+    fb.seed_position("AAPL", qty=30, avg_entry=100.0, mv=3000.0)
+    _seed_stop_order(fb, "AAPL", stop_price=92.0)
+
+    snap = sync_state(fb, alerts=[])
+    p = snap.positions[0]
+    assert p["initial_entry_price"] == 100.0
+    assert p["initial_qty"] == 30.0
+    assert p["initial_stop_price"] == 92.0
+    assert p["r_tier_filled"] == []
+
+
+def test_sync_state_preserves_initial_fields_across_runs(tmp_path, monkeypatch):
+    """Once snapshotted, initial_* fields are never re-written."""
+    from orders import sync_state
+
+    _portfolio_cache(tmp_path, monkeypatch, {
+        "synced_at": "2026-05-10T14:00:00+00:00",
+        "alpaca_env": "paper",
+        "cash": 0.0, "equity": 0.0,
+        "positions": [
+            {"symbol": "AAPL", "shares": 30.0, "avg_entry": 100.0,
+             "market_value": 3000.0, "unrealized_pl": 0.0,
+             "tranche": "core", "entry_reason": "core rebalance",
+             "stop_order_id": None, "trail_order_id": None,
+             "initial_entry_price": 100.0, "initial_qty": 30,
+             "initial_stop_price": 92.0, "r_tier_filled": []},
+        ],
+        "tranches": {"core": {"last_rebalance": "2026-05-10"},
+                     "aggressive": {"last_rebalance": None}},
+    })
+
+    fb = FakeBroker()
+    # avg_entry has drifted to 105 (added to position), stop replaced at 95.
+    fb.seed_position("AAPL", qty=40, avg_entry=105.0, mv=4200.0)
+    _seed_stop_order(fb, "AAPL", stop_price=95.0)
+
+    snap = sync_state(fb, alerts=[])
+    p = snap.positions[0]
+    # Initial fields are immutable:
+    assert p["initial_entry_price"] == 100.0
+    assert p["initial_qty"] == 30
+    assert p["initial_stop_price"] == 92.0
+
+
+def test_sync_state_initial_stop_none_when_no_open_stop_order(tmp_path, monkeypatch):
+    from orders import sync_state
+
+    _portfolio_cache(tmp_path, monkeypatch, {
+        "synced_at": "2026-05-10T14:00:00+00:00",
+        "alpaca_env": "paper",
+        "cash": 0.0, "equity": 0.0,
+        "positions": [
+            {"symbol": "AAPL", "shares": 30.0, "avg_entry": 100.0,
+             "market_value": 3000.0, "unrealized_pl": 0.0,
+             "tranche": "core", "entry_reason": "core rebalance",
+             "stop_order_id": None, "trail_order_id": None},
+        ],
+        "tranches": {"core": {"last_rebalance": "2026-05-10"},
+                     "aggressive": {"last_rebalance": None}},
+    })
+
+    fb = FakeBroker()
+    fb.seed_position("AAPL", qty=30, avg_entry=100.0, mv=3000.0)
+    # No stop order seeded.
+
+    snap = sync_state(fb, alerts=[])
+    p = snap.positions[0]
+    assert p["initial_entry_price"] == 100.0
+    assert p["initial_qty"] == 30.0
+    assert p["initial_stop_price"] is None
+    assert p["r_tier_filled"] == []
+
+
+def test_sync_state_appends_r_tier_when_qty_drops_to_two_thirds(tmp_path, monkeypatch):
+    from orders import sync_state
+
+    _portfolio_cache(tmp_path, monkeypatch, {
+        "synced_at": "2026-05-10T14:00:00+00:00",
+        "alpaca_env": "paper",
+        "cash": 0.0, "equity": 0.0,
+        "positions": [
+            {"symbol": "AAPL", "shares": 30.0, "avg_entry": 100.0,
+             "market_value": 3000.0, "unrealized_pl": 0.0,
+             "tranche": "core", "entry_reason": "core rebalance",
+             "stop_order_id": None, "trail_order_id": None,
+             "initial_entry_price": 100.0, "initial_qty": 30,
+             "initial_stop_price": 92.0, "r_tier_filled": []},
+        ],
+        "tranches": {"core": {"last_rebalance": "2026-05-10"},
+                     "aggressive": {"last_rebalance": None}},
+    })
+
+    fb = FakeBroker()
+    fb.seed_position("AAPL", qty=20, avg_entry=100.0, mv=2400.0)  # 2/3 of 30
+    _seed_stop_order(fb, "AAPL", stop_price=92.0)
+
+    snap = sync_state(fb, alerts=[])
+    p = snap.positions[0]
+    assert p["r_tier_filled"] == ["2R"]
+
+
+def test_sync_state_appends_r_tier_3R_when_qty_drops_to_one_third(tmp_path, monkeypatch):
+    from orders import sync_state
+
+    _portfolio_cache(tmp_path, monkeypatch, {
+        "synced_at": "2026-05-10T14:00:00+00:00",
+        "alpaca_env": "paper",
+        "cash": 0.0, "equity": 0.0,
+        "positions": [
+            {"symbol": "AAPL", "shares": 20.0, "avg_entry": 100.0,
+             "market_value": 2400.0, "unrealized_pl": 0.0,
+             "tranche": "core", "entry_reason": "core rebalance",
+             "stop_order_id": None, "trail_order_id": None,
+             "initial_entry_price": 100.0, "initial_qty": 30,
+             "initial_stop_price": 92.0, "r_tier_filled": ["2R"]},
+        ],
+        "tranches": {"core": {"last_rebalance": "2026-05-10"},
+                     "aggressive": {"last_rebalance": None}},
+    })
+
+    fb = FakeBroker()
+    fb.seed_position("AAPL", qty=10, avg_entry=100.0, mv=1200.0)  # 1/3 of 30
+    _seed_stop_order(fb, "AAPL", stop_price=92.0)
+
+    snap = sync_state(fb, alerts=[])
+    p = snap.positions[0]
+    assert p["r_tier_filled"] == ["2R", "3R"]
+
+
+def test_sync_state_appends_both_tiers_when_qty_drops_in_one_step(tmp_path, monkeypatch):
+    """Gap-up partial-sell scenario: r_tier_filled went [] → ["2R", "3R"] in one sync."""
+    from orders import sync_state
+
+    _portfolio_cache(tmp_path, monkeypatch, {
+        "synced_at": "2026-05-10T14:00:00+00:00",
+        "alpaca_env": "paper",
+        "cash": 0.0, "equity": 0.0,
+        "positions": [
+            {"symbol": "AAPL", "shares": 30.0, "avg_entry": 100.0,
+             "market_value": 3000.0, "unrealized_pl": 0.0,
+             "tranche": "core", "entry_reason": "core rebalance",
+             "stop_order_id": None, "trail_order_id": None,
+             "initial_entry_price": 100.0, "initial_qty": 30,
+             "initial_stop_price": 92.0, "r_tier_filled": []},
+        ],
+        "tranches": {"core": {"last_rebalance": "2026-05-10"},
+                     "aggressive": {"last_rebalance": None}},
+    })
+
+    fb = FakeBroker()
+    fb.seed_position("AAPL", qty=10, avg_entry=100.0, mv=1200.0)  # straight to 1/3
+    _seed_stop_order(fb, "AAPL", stop_price=92.0)
+
+    snap = sync_state(fb, alerts=[])
+    p = snap.positions[0]
+    assert p["r_tier_filled"] == ["2R", "3R"]
+
+
+def test_sync_state_does_not_append_r_tier_on_full_qty(tmp_path, monkeypatch):
+    from orders import sync_state
+
+    _portfolio_cache(tmp_path, monkeypatch, {
+        "synced_at": "2026-05-10T14:00:00+00:00",
+        "alpaca_env": "paper",
+        "cash": 0.0, "equity": 0.0,
+        "positions": [
+            {"symbol": "AAPL", "shares": 30.0, "avg_entry": 100.0,
+             "market_value": 3000.0, "unrealized_pl": 0.0,
+             "tranche": "core", "entry_reason": "core rebalance",
+             "stop_order_id": None, "trail_order_id": None,
+             "initial_entry_price": 100.0, "initial_qty": 30,
+             "initial_stop_price": 92.0, "r_tier_filled": []},
+        ],
+        "tranches": {"core": {"last_rebalance": "2026-05-10"},
+                     "aggressive": {"last_rebalance": None}},
+    })
+
+    fb = FakeBroker()
+    fb.seed_position("AAPL", qty=30, avg_entry=100.0, mv=3000.0)  # unchanged
+    _seed_stop_order(fb, "AAPL", stop_price=92.0)
+
+    snap = sync_state(fb, alerts=[])
+    p = snap.positions[0]
+    assert p["r_tier_filled"] == []

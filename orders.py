@@ -138,6 +138,13 @@ def sync_state(broker, *, alerts: Optional[list] = None) -> PortfolioSnapshot:
         elif o.type == "trailing_stop":
             trails_by_symbol[o.symbol] = o.id
 
+    # Index stop orders for initial_stop_price lookup. The bracket's stop-loss
+    # leg type is "stop"; standalone "stop_loss" type maps the same way.
+    stop_orders_by_symbol: dict[str, Order] = {}
+    for o in open_orders:
+        if o.type in ("stop", "stop_loss"):
+            stop_orders_by_symbol[o.symbol] = o
+
     positions: list[dict] = []
     live_symbols = {p.symbol for p in live}
 
@@ -158,6 +165,42 @@ def sync_state(broker, *, alerts: Optional[list] = None) -> PortfolioSnapshot:
             alerts.append(f"No bracket/trailing stop attached to {p.symbol} — "
                           "stop protection inactive.")
 
+        # ── SEPA initial-field snapshot ─────────────────────────
+        existing_initial = (meta or {}).get("initial_entry_price")
+        if existing_initial is None:
+            # First sight (or pre-SEPA cache): snapshot now.
+            initial_entry_price = float(p.avg_entry)
+            initial_qty = float(p.qty)
+            stop_ord = stop_orders_by_symbol.get(p.symbol)
+            initial_stop_price = (
+                float(stop_ord.stop_price)
+                if stop_ord is not None and stop_ord.stop_price is not None
+                else None
+            )
+            r_tier_filled: list[str] = []
+        else:
+            # Immutable: preserve initial_*; check r_tier_filled appends below.
+            initial_entry_price = (meta or {}).get("initial_entry_price")
+            initial_qty = (meta or {}).get("initial_qty")
+            initial_stop_price = (meta or {}).get("initial_stop_price")
+            r_tier_filled = list((meta or {}).get("r_tier_filled", []))
+
+            if (initial_qty and float(initial_qty) > 0
+                    and initial_stop_price is not None
+                    and tranche == "core"):
+                EPS = 1.0  # 1-share tolerance for fractional shares
+                cumulative_frac = 0.0
+                for r, frac in config.SEPA_R_TIERS:
+                    cumulative_frac += frac
+                    label = f"{int(r)}R"
+                    if label in r_tier_filled:
+                        continue
+                    threshold = float(initial_qty) * (1.0 - cumulative_frac) + EPS
+                    if float(p.qty) <= threshold:
+                        r_tier_filled.append(label)
+                    else:
+                        break
+
         positions.append({
             "symbol": p.symbol,
             "shares": p.qty,
@@ -168,6 +211,10 @@ def sync_state(broker, *, alerts: Optional[list] = None) -> PortfolioSnapshot:
             "entry_reason": entry_reason,
             "stop_order_id": stop_id,
             "trail_order_id": trail_id,
+            "initial_entry_price": initial_entry_price,
+            "initial_qty": initial_qty,
+            "initial_stop_price": initial_stop_price,
+            "r_tier_filled": r_tier_filled,
         })
 
     # Emit "closed" events for cached positions that vanished
