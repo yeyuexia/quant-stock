@@ -45,6 +45,7 @@ class Order:
     status: str                     # "accepted" | "filled" | "canceled" | ...
     client_order_id: str
     parent_order_id: Optional[str]  # for legs of a bracket order
+    stop_price: Optional[float] = None  # set for stop / stop_loss orders
 
 
 from alpaca.trading.client import TradingClient
@@ -357,4 +358,5 @@ def _to_order(o, parent_id: Optional[str] = None) -> Order:
         status=str(o.status.value if hasattr(o.status, "value") else o.status).lower(),
         client_order_id=o.client_order_id or "",
         parent_order_id=parent_id,
+        stop_price=float(o.stop_price) if getattr(o, "stop_price", None) is not None else None,
     )

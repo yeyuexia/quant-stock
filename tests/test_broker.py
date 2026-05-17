@@ -68,3 +68,26 @@ def test_submit_limit_constructs_limit_order_request(monkeypatch):
     assert captured["req"].notional == 1000.0
     assert out.symbol == "SPY"
     assert out.type == "limit"
+
+
+def test_order_dataclass_has_stop_price_field():
+    """broker.Order exposes stop_price for stop orders."""
+    from broker import Order
+    o = Order(
+        id="ord_1", symbol="AAPL", side="sell", type="stop",
+        qty=30.0, notional=None, status="accepted",
+        client_order_id="cid", parent_order_id="parent_1",
+        stop_price=92.0,
+    )
+    assert o.stop_price == 92.0
+
+
+def test_order_stop_price_defaults_to_none():
+    """stop_price is optional with None default for non-stop orders."""
+    from broker import Order
+    o = Order(
+        id="ord_2", symbol="AAPL", side="buy", type="market",
+        qty=None, notional=1000.0, status="accepted",
+        client_order_id="cid2", parent_order_id=None,
+    )
+    assert o.stop_price is None
