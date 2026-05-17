@@ -46,7 +46,13 @@ Run these commands in order using your Bash tool:
 - **Low-risk allowlist** (auto-applies if within bounds):
   - `WATCHLIST` — additions only, ≤100 total
   - `NEWS_SHOCK_KEYWORDS` — additions only, ≤30 total
-  - `STOP_LOSS_PCT` — within ±20% of current AND in [0.04, 0.20]
+  - `STOP_LOSS_PCT` — within ±20% of current AND in [0.04, 0.20]. Note: this
+    is now an **upper bound** on the per-symbol initial stop; the effective
+    stop is `min(STOP_LOSS_PCT, ATR_STOP_MULTIPLIER × ATR(14) / last_close)`
+    for core entries.
+  - `ATR_STOP_MULTIPLIER` — within ±25% of current AND in [1.0, 4.0]. Scales
+    the ATR contribution to the core-tranche initial stop. Lower = tighter
+    stops on volatile names; higher = more breathing room.
   - `TRAILING_STOP_PCT` — within ±20% AND in [0.06, 0.25]
   - `CASH_BUFFER_PCT` — within ±50% AND in [0.02, 0.20]
 

@@ -21,9 +21,10 @@ LOG = logging.getLogger(__name__)
 # Low-risk numeric keys: auto-applied if within relative band AND absolute bounds.
 # key → (absolute_lo, absolute_hi, relative_pct_band)
 _LOW_RISK_NUMERIC = {
-    "STOP_LOSS_PCT":     (0.04, 0.20, 0.20),
-    "TRAILING_STOP_PCT": (0.06, 0.25, 0.20),
-    "CASH_BUFFER_PCT":   (0.02, 0.20, 0.50),
+    "STOP_LOSS_PCT":       (0.04, 0.20, 0.20),
+    "ATR_STOP_MULTIPLIER": (1.0,  4.0,  0.25),
+    "TRAILING_STOP_PCT":   (0.06, 0.25, 0.20),
+    "CASH_BUFFER_PCT":     (0.02, 0.20, 0.50),
 }
 
 # Low-risk list keys: auto-applied on ADDITIONS only (removals bumped to high).

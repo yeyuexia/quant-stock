@@ -88,6 +88,12 @@ AGGRESSIVE_PARAMS = {
     "cash_buffer_pct": 0.05,        # keep $500 in cash as reserve
 }
 
+# ── Stop-loss ATR scaling (core tranche only) ───────────────────
+# Initial stop = min(STOP_LOSS_PCT, ATR_STOP_MULTIPLIER × ATR(ATR_PERIOD) / last_close).
+# Aggressive tranche keeps the fixed AGGRESSIVE_PARAMS["stop_loss_pct"].
+ATR_PERIOD = 14
+ATR_STOP_MULTIPLIER = 2.0
+
 # ── Strategy 1: Dual Momentum ETF Rotation ──────────────────────
 # Concept: Hold the top-N momentum ETFs; flee to safety (BIL/SHY) when
 # all are below their moving average or absolute momentum is negative.
@@ -295,6 +301,7 @@ _OVERRIDE_SCHEMA = {
     "WATCHLIST":            (list,  None, None),
     "NEWS_SHOCK_KEYWORDS":  (list,  None, None),
     "STOP_LOSS_PCT":        (float, 0.04, 0.20),
+    "ATR_STOP_MULTIPLIER":  (float, 1.0,  4.0),
     "TRAILING_STOP_PCT":    (float, 0.06, 0.25),
     "CASH_BUFFER_PCT":      (float, 0.02, 0.20),
     # High-risk (require TG approval; applied here only after the bot
