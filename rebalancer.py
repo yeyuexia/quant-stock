@@ -266,9 +266,12 @@ def _write_pending_plan(tranche, intents, *, broker):
     # Discard stale plans from prior trading days — prices are too outdated to merge.
     existing = load_plan()
     if existing is not None:
+        # created_at is stored as UTC; compare in UTC so the discard threshold
+        # doesn't flip across UTC midnight when local-time != UTC-date (e.g.
+        # HKT 00:00–08:00 local is still the previous UTC date).
         plan_date = existing.created_at.date() if hasattr(existing.created_at, "date") \
             else dt.date.fromisoformat(str(existing.created_at)[:10])
-        if plan_date < dt.date.today():
+        if plan_date < dt.datetime.now(dt.timezone.utc).date():
             existing = None
     if existing is None:
         baseline = capture_baseline()
