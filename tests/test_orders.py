@@ -881,3 +881,45 @@ def test_effective_stop_pct_fallback_on_zero_atr(monkeypatch):
 
     result = _effective_stop_pct("SHV", "core")
     assert abs(result - config.STOP_LOSS_PCT) < 1e-9
+
+
+def test_reconcile_buy_uses_effective_stop(tmp_path, monkeypatch):
+    """Buy intent's stop_pct comes from _effective_stop_pct, not _tranche_stops."""
+    from orders import reconcile_to_targets
+
+    # Force _effective_stop_pct to return a recognizable value.
+    monkeypatch.setattr("orders._effective_stop_pct",
+                        lambda sym, tranche: 0.037 if tranche == "core" else 0.10)
+
+    snap = _snap(positions=[], cash=90_000, equity=90_000)
+    plan = reconcile_to_targets(
+        {"SPY": 1.0},
+        tranche="core",
+        snapshot=snap,
+        tranche_capital=90_000,
+        today=dt.date(2026, 4, 17),
+    )
+    assert len(plan.buys) == 1
+    assert plan.buys[0].symbol == "SPY"
+    assert abs(plan.buys[0].stop_pct - 0.037) < 1e-9
+    # trail_pct unchanged: still from _tranche_stops("core")
+    import config
+    assert abs(plan.buys[0].trail_pct - config.TRAILING_STOP_PCT) < 1e-9
+
+
+def test_reconcile_aggressive_buy_uses_fixed_stop(tmp_path, monkeypatch):
+    """Aggressive tranche keeps the fixed stop_loss_pct."""
+    from orders import reconcile_to_targets
+    import config
+
+    snap = _snap(positions=[], cash=10_000, equity=10_000)
+    plan = reconcile_to_targets(
+        {"TQQQ": 1.0},
+        tranche="aggressive",
+        snapshot=snap,
+        tranche_capital=10_000,
+        today=dt.date(2026, 4, 17),
+    )
+    assert len(plan.buys) == 1
+    assert abs(plan.buys[0].stop_pct
+               - config.AGGRESSIVE_PARAMS["stop_loss_pct"]) < 1e-9

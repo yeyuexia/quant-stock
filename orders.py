@@ -272,10 +272,11 @@ def reconcile_to_targets(
         reason = f"{tranche} rebalance"
         if diff > 0:
             cid = _make_cid(tranche, "rebalance", sym, today)
+            buy_stop_pct = _effective_stop_pct(sym, tranche)
             buys.append(OrderIntent(
                 symbol=sym, notional=round(diff, 2), side="buy",
                 reason=reason, tranche=tranche, client_order_id=cid,
-                stop_pct=stop_pct, trail_pct=trail_pct,
+                stop_pct=buy_stop_pct, trail_pct=trail_pct,
             ))
         elif diff < 0:
             # Selling: notional is the amount to reduce by.
