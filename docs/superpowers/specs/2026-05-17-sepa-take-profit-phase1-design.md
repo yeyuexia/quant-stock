@@ -82,32 +82,36 @@ Per-position fields added by `orders.sync_state`:
   "symbol": "AAPL",
   "shares": 30,
   "avg_entry": 100.0,                  // existing — updates if you add to position
-  "stop_pct": 0.08,                    // existing
-  "trail_pct": 0.12,                   // existing
   "market_value": 3500.0,              // existing
   "tranche": "core",                   // existing
+  "stop_order_id": "ord_…",            // existing
+  "trail_order_id": "ord_…",           // existing
 
   // NEW — immutable after first sync_state encounter:
   "initial_entry_price": 100.0,
   "initial_qty": 30,
-  "initial_stop_price": 92.0,          // = avg_entry × (1 − stop_pct) at first sight
-                                       // null if stop_pct unknown → SEPA skips
+  "initial_stop_price": 92.0,          // pulled from the bracket's stop-loss leg
+                                       // null if no open stop order at first sight
+                                       // → SEPA skips that position permanently
 
   // NEW — append-only by sync_state when observed qty drops:
   "r_tier_filled": []                  // ["2R"] or ["2R", "3R"]
 }
 ```
 
+**Source of `initial_stop_price`:** the bracket's stop-loss leg, which Alpaca exposes as the `stop_price` field on the open stop order. `broker.Order` currently does not surface this — Phase 1 adds an `Optional[float]` `stop_price` field to the `Order` dataclass and `_to_order` reads it from the SDK response. (Tiny plumbing change; covered as a sub-task in the plan.)
+
 **Initialization rules in `sync_state`:**
-- New position first seen with `tranche="core"` and known `stop_pct`:
+- For each live position, index open stop-type orders by symbol (extends the existing `stops_by_symbol` indexing).
+- New position first seen with `tranche="core"` and a non-null `stop_price` on its open stop order:
   - `initial_entry_price = avg_entry`
   - `initial_qty = current_qty`
-  - `initial_stop_price = avg_entry × (1 − stop_pct)`
+  - `initial_stop_price = open_stop_order.stop_price`
   - `r_tier_filled = []`
-- New position with unknown `stop_pct` (external / pre-SEPA legacy):
-  - `initial_stop_price = None` → SEPA permanently skips this position
-  - Other initial fields still snapshotted for visibility
-- Subsequent runs: if `initial_*` already set, **never touched again** (immutability).
+- New position with no open stop order (external / pre-SEPA legacy, or bracket failed to attach):
+  - `initial_entry_price = avg_entry`, `initial_qty = current_qty`, but `initial_stop_price = None`
+  - SEPA permanently skips this position (until operator manually edits or re-bracket attaches and a fresh sync re-snapshots — see edge case in §6).
+- Subsequent runs: if `initial_entry_price` already set, all three initial fields are **never touched again** (immutability — even if the bracket gets re-issued at a new stop price later).
 - `r_tier_filled` mutation: for each tier `(R, f)` in `config.SEPA_R_TIERS` order, if its label is not yet in `r_tier_filled`:
   - `cumulative_fraction = sum(frac for (_, frac) in SEPA_R_TIERS[:i+1])` — fractions through this tier inclusive
   - `threshold = initial_qty × (1 − cumulative_fraction) + ε` (ε = 1 share, for fractional-share rounding tolerance)
@@ -286,7 +290,7 @@ orders.submit_exit(sym, reason="sepa-21EMA-break")
 | Position price gaps from below 2R to above 3R in one day | Day-N watchdog submits 2R partial. Day-N+1 watchdog observes qty drop, appends "2R", and submits 3R partial. Two-day scale-out by design (idempotency via observed qty). |
 | 2R partial submitted but executor defers (HALT / cap / market closed) | Pending intent stays in pending_plan. Next watchdog: pending_plan still has intent → `next_r_tier_action` returns None → no double-submit. When the deferred intent finally clears and qty drops, sync_state appends "2R". |
 | Broker stop-loss triggers before 2R | Position closes at broker. Next sync_state drops the closed position. SEPA never runs for it. |
-| `initial_stop_price = None` (unknown-tranche or legacy position) | `initial_r` returns None → `next_r_tier_action` returns None → SEPA silently skips. |
+| `initial_stop_price = None` (legacy position, or bracket failed to attach at entry) | `initial_r` returns None → `next_r_tier_action` returns None → SEPA silently skips. Operator can re-attach a bracket and manually clear `initial_entry_price` from `portfolio.json` to force a re-snapshot on the next sync. |
 | User manually adds to position after entry | `initial_*` fields are immutable — already snapshotted on first sight. SEPA computes R against the original entry. The added shares get the same scale-out treatment proportionally (partial sells use `initial_qty × fraction`, so over-adds lead to over-selling: 30 + 30 = 60 current; 2R partial sells `30 × 1/3 = 10`, leaving 50 of 60). Documented; not auto-corrected in v1. |
 | Position growth via rebalancer (not user) | Same as manual add. Future Phase 2/3 may handle DCA semantics; out of scope here. |
 | Aggressive-tranche position | `snap.by_tranche("core")` doesn't include it. Full bypass. |
@@ -353,12 +357,13 @@ Submitting full exit on remaining 10 shares
 
 ### 8.3 `tests/test_orders.py` — `sync_state` (extend)
 
-- `test_sync_state_snapshots_initial_fields_on_first_seen_core_position`
+- `test_sync_state_snapshots_initial_fields_on_first_seen_core_position` (with seeded stop order on FakeBroker → `initial_stop_price == seeded stop_price`)
 - `test_sync_state_preserves_initial_fields_across_runs`
-- `test_sync_state_initial_stop_none_when_stop_pct_missing`
+- `test_sync_state_initial_stop_none_when_no_open_stop_order`
 - `test_sync_state_appends_r_tier_when_qty_drops_to_two_thirds`
 - `test_sync_state_appends_r_tier_3R_when_qty_drops_to_one_third`
 - `test_sync_state_does_not_append_r_tier_on_full_qty`
+- `test_sync_state_appends_both_tiers_when_qty_drops_to_one_third_in_one_step` (gap-up bypass)
 
 ### 8.4 `tests/test_watchdog.py` (new or extend)
 
