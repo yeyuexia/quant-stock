@@ -556,6 +556,15 @@ def run_watchdog(quick=False):
             sym = pair[0].symbol if pair[0] is not None else "?"
             print(f"    ! Could not attach trailing stop on {sym}: {pair[1]}")
 
+    # SEPA Phase 1 take-profit checks (R-multiple scale-out + 21EMA trail)
+    header("SEPA EXITS")
+    sepa_lines = check_sepa_exits(snap, broker)
+    if not sepa_lines:
+        print("  No SEPA actions today.")
+    else:
+        for line in sepa_lines:
+            print(f"  {line}")
+
     # Portfolio status
     header("PORTFOLIO STATUS")
     rows, total_value, total_pnl, total_pnl_pct, cash = check_portfolio_status(portfolio)
