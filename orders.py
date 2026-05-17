@@ -749,6 +749,88 @@ def submit_exit(symbol: str, *, reason: str, broker) -> ExecutionResult:
     return result
 
 
+def submit_partial_exit(symbol: str, *, fraction_of_initial: float,
+                        reason: str, broker) -> ExecutionResult:
+    """Partial-position exit. Notional = initial_qty × fraction × current_price.
+
+    Writes a HIGH-tier intent (150 bps tolerance) to pending_plan.json so
+    executor.py slices it through circuit breakers. Conflict with an
+    existing pending_plan intent for the same symbol → falls back to
+    direct execute_plan (mirrors submit_exit).
+
+    No-ops (records skipped) when:
+      - HALT file present
+      - position metadata missing in cache
+      - initial_qty missing (legacy / unsnapshotted)
+    """
+    from dataclasses import replace as _replace
+    from pending_plan import load_plan, write_plan, IntentState, PendingPlan
+    from baseline import capture_baseline
+
+    result = ExecutionResult()
+    if os.path.exists(HALT_PATH):
+        intent = OrderIntent(
+            symbol=symbol, notional=0.0, side="sell",
+            reason=reason, tranche="core",
+            client_order_id=_make_cid("core", f"partial-{reason[:12]}", symbol, dt.date.today()),
+        )
+        result.skipped.append((intent, "HALT file present"))
+        return result
+
+    cache = _load_portfolio_cache()
+    meta = next((p for p in cache.get("positions", []) if p["symbol"] == symbol), None)
+    if meta is None:
+        result.skipped.append((None, f"no cached metadata for {symbol}"))  # type: ignore[arg-type]
+        return result
+
+    initial_qty = meta.get("initial_qty")
+    if initial_qty is None or float(initial_qty) <= 0:
+        result.skipped.append((None, f"{symbol}: initial_qty missing — cannot size partial"))  # type: ignore[arg-type]
+        return result
+
+    try:
+        current_price = float(broker._latest_price(symbol))
+    except Exception as e:
+        result.skipped.append((None, f"{symbol}: latest price unavailable: {e}"))  # type: ignore[arg-type]
+        return result
+
+    notional = round(float(initial_qty) * float(fraction_of_initial) * current_price, 2)
+    tranche = meta.get("tranche", "core")
+    cid = _make_cid(tranche, f"partial-{reason[:12]}", symbol, dt.date.today())
+    raw = OrderIntent(
+        symbol=symbol, notional=notional, side="sell",
+        reason=reason, tranche=tranche, client_order_id=cid,
+    )
+
+    existing = load_plan()
+    if existing is not None and any(s.intent.symbol == symbol for s in existing.intents):
+        return execute_plan(
+            OrderPlan(buys=[], sells=[raw], holds=[]),
+            broker=broker, reason=reason,
+        )
+
+    tolerance = config.MACRO_EXIT_TOLERANCE_BPS / 10_000.0
+    floor = round(current_price * (1 - tolerance), 4)
+    priced = _replace(raw, tier="HIGH", decision_price=current_price,
+                      max_price=floor, slice_count=2)
+
+    if existing is None:
+        baseline = capture_baseline()
+        existing = PendingPlan(
+            plan_id=f"sepa-{dt.date.today().isoformat()}",
+            tranche=tranche,
+            created_at=dt.datetime.now(dt.timezone.utc),
+            baseline=baseline,
+            intents=[IntentState(intent=priced)],
+        )
+    else:
+        existing.intents.append(IntentState(intent=priced))
+
+    write_plan(existing)
+    result.queued.append(priced)
+    return result
+
+
 # ── tag_position ────────────────────────────────────────────────
 
 def tag_position(symbol: str, tranche: str, entry_reason: str = "manual") -> None:
