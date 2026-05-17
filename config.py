@@ -135,15 +135,29 @@ MOMENTUM_LOOKBACK_MONTHS = [1, 3, 6, 12]
 MOMENTUM_TOP_N = _params["momentum_top_n"]
 SMA_FILTER_PERIOD = 200          # 200-day SMA trend filter
 
-# ── Strategy 2: Value + Quality Stock Screen ────────────────────
-# Small-cap value + quality for satellite allocation (20% of portfolio)
+# ── Strategy 2: CANSLIM Technical Stock Screen ──────────────────
+# Satellite allocation (20% of portfolio): momentum + base pattern filter.
 
-SCREEN_MIN_MARKET_CAP = 500e6    # $500M+
-SCREEN_MAX_MARKET_CAP = 20e9     # <$20B
-SCREEN_MAX_PE = 20
-SCREEN_MIN_ROE = 0.12
-SCREEN_MAX_DEBT_EQUITY = 1.5
-SCREEN_TOP_N = 10                # screen top 10, pick 2-3
+SCREEN_MIN_MARKET_CAP = 500e6    # $500M+ (liquidity floor)
+SCREEN_MAX_MARKET_CAP = 20e9     # <$20B (avoid mega-caps; focus on mid/small growth)
+SCREEN_TOP_N = 10                # return top 10, pick 2-3
+
+# Relative Strength
+SCREEN_RS_MIN = 70               # RS percentile vs universe (0-100); 70+ = leadership
+
+# Average Daily Range — volatility/tradability filter
+SCREEN_ADR_MIN = 0.04            # 4% minimum average daily range
+SCREEN_ADR_PERIOD = 20           # trading days for ADR calculation
+
+# EMA trend filter — price must be above both to pass
+SCREEN_EMA_FAST = 21
+SCREEN_EMA_SLOW = 50
+
+# Base pattern (medium sophistication: tight box + volume contraction)
+SCREEN_BASE_WEEKS_MIN = 5        # minimum consolidation weeks
+SCREEN_BASE_WEEKS_MAX = 15       # maximum consolidation weeks
+SCREEN_BASE_DEPTH_MAX = 0.30     # max drawdown within base (30%)
+SCREEN_TIGHTNESS_PCT_MAX = 0.05  # max weekly-close std dev / mean during base
 
 # ── Rebalancing ─────────────────────────────────────────────────
 REBALANCE_FREQUENCY_DAYS = _params["rebalance_days"]
@@ -288,9 +302,14 @@ _OVERRIDE_SCHEMA = {
     "MOMENTUM_TOP_N":            (int,   1,    10),
     "ETF_ALLOCATION_PCT":        (float, 0.0,  1.0),
     "STOCK_ALLOCATION_PCT":      (float, 0.0,  1.0),
-    "SCREEN_MIN_ROE":            (float, 0.0,  1.0),
-    "SCREEN_MAX_PE":             (float, 5.0,  100.0),
-    "SCREEN_MAX_DEBT_EQUITY":    (float, 0.0,  10.0),
+    "SCREEN_RS_MIN":             (float, 0.0,  100.0),
+    "SCREEN_ADR_MIN":            (float, 0.01, 0.15),
+    "SCREEN_EMA_FAST":           (int,   5,    50),
+    "SCREEN_EMA_SLOW":           (int,   20,   200),
+    "SCREEN_BASE_WEEKS_MIN":     (int,   3,    15),
+    "SCREEN_BASE_WEEKS_MAX":     (int,   8,    52),
+    "SCREEN_BASE_DEPTH_MAX":     (float, 0.10, 0.50),
+    "SCREEN_TIGHTNESS_PCT_MAX":  (float, 0.01, 0.15),
     "MOMENTUM_LOOKBACK_MONTHS":  (list,  None, None),
     "SAFE_HAVEN":                (str,   None, None),
 }

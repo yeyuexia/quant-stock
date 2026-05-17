@@ -117,33 +117,31 @@ def run_momentum_strategy():
 
 
 def run_stock_screener():
-    section("STRATEGY 2: VALUE + QUALITY STOCK SCREEN")
-    print("  Screening watchlist for value, quality, momentum, growth...\n")
+    section("STRATEGY 2: CANSLIM TECHNICAL SCREEN")
+    print("  Screening watchlist for RS leadership, trend, ADR, base pattern...\n")
 
     df = screen_stocks()
     if df.empty:
-        print("  No data available.")
+        print("  No stocks passed all filters.")
         return df
 
     table_data = []
-    for _, row in df.head(15).iterrows():
+    for _, row in df.iterrows():
         table_data.append([
             row["rank"],
             row["ticker"],
-            row.get("name", "")[:20],
             f"${row['price']:.2f}" if row["price"] else "N/A",
-            f"{row['pe']:.1f}" if row["pe"] else "N/A",
-            fmt_pct(row["roe"]) if row["roe"] else "N/A",
-            f"{row['debt_equity']:.2f}" if row["debt_equity"] else "N/A",
-            fmt_pct(row["div_yield"]),
-            fmt_pct(row["rev_growth"]),
-            fmt_pct(row["ret_3m"]),
+            f"{row['rs_score']:.0f}",
+            fmt_pct(row["adr"]),
+            "✓" if row["above_ema_fast"] else "✗",
+            "✓" if row["above_ema_slow"] else "✗",
+            "✓" if row["in_base"] else "✗",
             f"{row['composite']:.3f}",
         ])
 
     print(tabulate(table_data,
-                   headers=["#", "Tick", "Name", "Price", "P/E", "ROE", "D/E",
-                            "Div%", "RevGr", "3M Ret", "Score"],
+                   headers=["#", "Tick", "Price", "RS", "ADR",
+                            ">EMA21", ">EMA50", "Base", "Score"],
                    tablefmt="simple"))
     return df
 

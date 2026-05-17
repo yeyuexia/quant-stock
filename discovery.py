@@ -26,6 +26,8 @@ import pandas as pd
 import numpy as np
 import yfinance as yf
 
+import config
+
 CACHE_DIR = os.path.join(os.path.dirname(__file__), ".cache")
 os.makedirs(CACHE_DIR, exist_ok=True)
 
@@ -283,8 +285,8 @@ def composite_score(stock: dict) -> float:
     if stock.get("above_sma50"):
         score += 10
 
-    # Dividend bonus (0-5 pts)
-    dy = stock.get("div_yield", 0) or 0
+    # Dividend bonus (0-5 pts) — net of W-8BEN withholding
+    dy = (stock.get("div_yield", 0) or 0) * (1 - config.DIVIDEND_WITHHOLDING_RATE)
     score += min(5, dy * 100)
 
     return round(score, 2)
