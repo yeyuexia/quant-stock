@@ -205,6 +205,31 @@ def _tranche_stops(tranche: str) -> tuple[float, float]:
     return config.STOP_LOSS_PCT, config.TRAILING_STOP_PCT
 
 
+def _effective_stop_pct(symbol: str, tranche: str) -> float:
+    """Per-symbol initial stop pct. ATR-scaled for core; fixed for aggressive.
+
+    Returns min(STOP_LOSS_PCT, ATR_STOP_MULTIPLIER × ATR(ATR_PERIOD) / last_close)
+    for core entries. Any data failure falls back to the tranche's base stop pct.
+    """
+    base, _ = _tranche_stops(tranche)
+    if tranche != "core":
+        return base
+    try:
+        import data
+        import indicators
+        ohlcv = data.fetch_ohlcv([symbol], period="1y")
+        high  = ohlcv["High"][symbol].dropna()
+        low   = ohlcv["Low"][symbol].dropna()
+        close = ohlcv["Close"][symbol].dropna()
+        atr_val = indicators.atr(high, low, close, period=config.ATR_PERIOD)
+        last = float(close.iloc[-1]) if not close.empty else 0.0
+        if atr_val is None or atr_val <= 0 or last <= 0:
+            return base
+        return min(base, config.ATR_STOP_MULTIPLIER * atr_val / last)
+    except Exception:
+        return base
+
+
 # ── reconcile_to_targets ────────────────────────────────────────
 
 _REBALANCE_BAND_PCT = 0.05   # ignore drifts smaller than 5% of tranche capital

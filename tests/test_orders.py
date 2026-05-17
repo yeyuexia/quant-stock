@@ -791,3 +791,93 @@ def test_submit_limit_slice_counts_against_daily_cap(monkeypatch, tmp_path):
     r2 = submit_limit_slice(intent2, limit_price=480.60, notional=250.0, broker=b)
     assert len(r2.submitted) == 0
     assert len(r2.deferred) == 1
+
+
+# ── _effective_stop_pct (ATR-scaled core stops) ─────────────────
+
+def _ohlcv_constant(symbol: str, high: float, low: float, close: float, n: int = 30):
+    """Build a MultiIndex OHLCV frame in the shape data.fetch_ohlcv returns."""
+    import pandas as pd
+    idx = pd.date_range("2026-01-01", periods=n, freq="B")
+    df = pd.DataFrame({
+        ("High",  symbol): [high]  * n,
+        ("Low",   symbol): [low]   * n,
+        ("Close", symbol): [close] * n,
+    }, index=idx)
+    df.columns = pd.MultiIndex.from_tuples(df.columns)
+    return df
+
+
+def test_effective_stop_pct_uses_atr_when_tighter(monkeypatch):
+    """Low-vol data (ATR pct < base) → returns ATR-scaled pct."""
+    from orders import _effective_stop_pct
+    # high=100.5, low=99.5 → TR≈1, last_close=100 → ATR/close=0.01 → 2*ATR/close=0.02
+    df = _ohlcv_constant("AAPL", high=100.5, low=99.5, close=100.0, n=30)
+    monkeypatch.setattr("data.fetch_ohlcv", lambda tickers, period="1y": df)
+
+    result = _effective_stop_pct("AAPL", "core")
+    # Expect 0.02 (< STOP_LOSS_PCT of 0.08 in balanced mode default)
+    assert abs(result - 0.02) < 1e-6
+
+
+def test_effective_stop_pct_caps_at_base(monkeypatch):
+    """High-vol data (ATR pct > base) → returns STOP_LOSS_PCT."""
+    import config
+    from orders import _effective_stop_pct
+    # TR≈20 on a $100 close → 2*ATR/close = 0.40 (> any base)
+    df = _ohlcv_constant("TSLA", high=110.0, low=90.0, close=100.0, n=30)
+    monkeypatch.setattr("data.fetch_ohlcv", lambda tickers, period="1y": df)
+
+    result = _effective_stop_pct("TSLA", "core")
+    assert abs(result - config.STOP_LOSS_PCT) < 1e-9
+
+
+def test_effective_stop_pct_aggressive_unchanged(monkeypatch):
+    """Aggressive tranche short-circuits — does not call fetch_ohlcv."""
+    import config
+    from orders import _effective_stop_pct
+
+    called = {"hit": False}
+    def _trap(*a, **kw):
+        called["hit"] = True
+        raise AssertionError("fetch_ohlcv must not be called for aggressive")
+    monkeypatch.setattr("data.fetch_ohlcv", _trap)
+
+    result = _effective_stop_pct("TQQQ", "aggressive")
+    assert result == config.AGGRESSIVE_PARAMS["stop_loss_pct"]
+    assert called["hit"] is False
+
+
+def test_effective_stop_pct_fallback_on_fetch_error(monkeypatch):
+    """fetch_ohlcv raising → returns base, no exception escapes."""
+    import config
+    from orders import _effective_stop_pct
+
+    def _boom(*a, **kw):
+        raise RuntimeError("yfinance unavailable")
+    monkeypatch.setattr("data.fetch_ohlcv", _boom)
+
+    result = _effective_stop_pct("AAPL", "core")
+    assert abs(result - config.STOP_LOSS_PCT) < 1e-9
+
+
+def test_effective_stop_pct_fallback_on_insufficient_data(monkeypatch):
+    """Too few bars for ATR → returns base."""
+    import config
+    from orders import _effective_stop_pct
+    df = _ohlcv_constant("AAPL", high=100.5, low=99.5, close=100.0, n=5)
+    monkeypatch.setattr("data.fetch_ohlcv", lambda tickers, period="1y": df)
+
+    result = _effective_stop_pct("AAPL", "core")
+    assert abs(result - config.STOP_LOSS_PCT) < 1e-9
+
+
+def test_effective_stop_pct_fallback_on_zero_atr(monkeypatch):
+    """Constant prices → ATR=0 → fallback to base (not 0)."""
+    import config
+    from orders import _effective_stop_pct
+    df = _ohlcv_constant("SHV", high=100.0, low=100.0, close=100.0, n=30)
+    monkeypatch.setattr("data.fetch_ohlcv", lambda tickers, period="1y": df)
+
+    result = _effective_stop_pct("SHV", "core")
+    assert abs(result - config.STOP_LOSS_PCT) < 1e-9
