@@ -214,3 +214,98 @@ def test_failed_breakout_insufficient_closes_false():
     closes = pd.Series(dtype=float)  # empty
     assert failed_breakout(pos, pivots, closes,
                            today=dt.date(2026, 5, 18), window_days=3) is False
+
+
+# ── climax_check ─────────────────────────────────────────────────
+
+def _ohlcv_df(symbol, *, close, high=None, low=None, volume=None, start="2026-01-01"):
+    """Build a MultiIndex OHLCV frame matching data.fetch_ohlcv shape."""
+    n = len(close)
+    idx = pd.date_range(start, periods=n, freq="B")
+    if high is None:
+        high = [c + 0.5 for c in close]
+    if low is None:
+        low = [c - 0.5 for c in close]
+    if volume is None:
+        volume = [1_000_000] * n
+    df = pd.DataFrame({
+        ("High",   symbol): high,
+        ("Low",    symbol): low,
+        ("Close",  symbol): close,
+        ("Volume", symbol): volume,
+    }, index=idx)
+    df.columns = pd.MultiIndex.from_tuples(df.columns)
+    return df
+
+
+def test_climax_all_three_conditions_true():
+    """30% return over 8 days + 3× ADR + 4× volume → climax True."""
+    from sepa_exits import climax_check
+    # 50 quiet bars (close=100, narrow range, low volume), then 8 wild bars.
+    quiet_closes = [100.0] * 50
+    quiet_highs  = [100.5] * 50
+    quiet_lows   = [99.5] * 50
+    quiet_volume = [1_000_000] * 50
+
+    wild_closes  = [102, 105, 108, 112, 116, 121, 126, 130.0]
+    wild_highs   = [c + 3 for c in wild_closes]   # ~3× the quiet 1-pt range
+    wild_lows    = [c - 3 for c in wild_closes]
+    wild_volume  = [4_000_000] * 8                  # 4× the baseline 1M
+
+    df = _ohlcv_df(
+        "X",
+        close=quiet_closes + wild_closes,
+        high=quiet_highs + wild_highs,
+        low=quiet_lows + wild_lows,
+        volume=quiet_volume + wild_volume,
+    )
+    assert climax_check(
+        df,
+        return_lookback=8, return_threshold=0.25,
+        range_lookback=20, range_multiplier=2.0,
+        volume_lookback=20, volume_multiplier=2.0,
+        volume_recent_days=3,
+    ) is True
+
+
+def test_climax_return_only_false():
+    """Return high, but range and volume baseline → no climax."""
+    from sepa_exits import climax_check
+    closes = [100.0] * 50 + [102, 105, 108, 112, 116, 121, 126, 130.0]
+    df = _ohlcv_df("X", close=closes)  # default narrow range, flat volume
+    assert climax_check(df) is False
+
+
+def test_climax_range_only_false():
+    """Range expanded but return is small."""
+    from sepa_exits import climax_check
+    # close stays near 100 but daily range widens
+    quiet_close = [100.0] * 50
+    recent_close = [100.0, 100.5, 99.8, 100.2, 100.6, 100.1, 99.9, 100.3]
+    quiet_high = [100.5] * 50
+    recent_high = [c + 3 for c in recent_close]
+    quiet_low  = [99.5] * 50
+    recent_low = [c - 3 for c in recent_close]
+    df = _ohlcv_df(
+        "X",
+        close=quiet_close + recent_close,
+        high=quiet_high + recent_high,
+        low=quiet_low + recent_low,
+    )
+    assert climax_check(df) is False
+
+
+def test_climax_volume_only_false():
+    """Volume spiked, but return and range are normal."""
+    from sepa_exits import climax_check
+    closes = [100.0] * 50 + [100.5, 99.8, 100.2, 100.6, 100.1, 99.9, 100.3, 100.4]
+    volume = [1_000_000] * 50 + [4_000_000] * 8
+    df = _ohlcv_df("X", close=closes, volume=volume)
+    assert climax_check(df) is False
+
+
+def test_climax_insufficient_data_false():
+    """Fewer than 30 bars → not enough history → False."""
+    from sepa_exits import climax_check
+    df = _ohlcv_df("X", close=[100.0] * 20)
+    assert climax_check(df) is False

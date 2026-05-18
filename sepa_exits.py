@@ -126,3 +126,75 @@ def failed_breakout(position: dict, pivots: dict, closes: pd.Series,
     if in_window.empty or len(in_window) > window_days:
         return False
     return bool((in_window < pivot).any())
+
+
+def climax_check(ohlcv: pd.DataFrame, *,
+                 return_lookback: int = 8,
+                 return_threshold: float = 0.25,
+                 range_lookback: int = 20,
+                 range_multiplier: float = 2.0,
+                 volume_lookback: int = 20,
+                 volume_multiplier: float = 2.0,
+                 volume_recent_days: int = 3) -> bool:
+    """Phase 2 — Minervini climax / blow-off detection.
+
+    Returns True iff all three conditions hold:
+      1. Cumulative return over `return_lookback` bars ≥ `return_threshold`.
+      2. Mean daily range over the LAST `range_lookback` bars
+         ≥ `range_multiplier` × mean daily range over the PRIOR `range_lookback`
+         bars (i.e. bars [-2L:-L]).
+      3. Max volume over the LAST `volume_recent_days` bars
+         ≥ `volume_multiplier` × mean volume over the prior `volume_lookback`
+         bars EXCLUDING those recent days
+         (i.e. bars [-volume_lookback − volume_recent_days : -volume_recent_days]).
+
+    `ohlcv` is the MultiIndex frame returned by `data.fetch_ohlcv`. The single
+    ticker is selected from the column index automatically. Returns False on
+    insufficient data.
+    """
+    if ohlcv is None or ohlcv.empty:
+        return False
+    # Single-ticker selection from the MultiIndex.
+    try:
+        close = ohlcv["Close"].iloc[:, 0].dropna()
+        high  = ohlcv["High"].iloc[:, 0].dropna()
+        low   = ohlcv["Low"].iloc[:, 0].dropna()
+        volume = ohlcv["Volume"].iloc[:, 0].dropna()
+    except (KeyError, IndexError):
+        return False
+
+    needed = max(return_lookback + 1,
+                 2 * range_lookback,
+                 volume_lookback + volume_recent_days)
+    if len(close) < needed:
+        return False
+
+    # 1. Return
+    ret = (float(close.iloc[-1]) / float(close.iloc[-return_lookback - 1])) - 1.0
+    if ret < return_threshold:
+        return False
+
+    # 2. Range expansion
+    daily_range = (high - low).dropna()
+    if len(daily_range) < 2 * range_lookback:
+        return False
+    recent_range = daily_range.iloc[-range_lookback:].mean()
+    prior_range  = daily_range.iloc[-2 * range_lookback:-range_lookback].mean()
+    if not (prior_range > 0):
+        return False
+    if recent_range < range_multiplier * prior_range:
+        return False
+
+    # 3. Volume spike — baseline EXCLUDES the recent days under test.
+    if len(volume) < volume_lookback + volume_recent_days:
+        return False
+    recent_vol = volume.iloc[-volume_recent_days:].max()
+    baseline_vol = volume.iloc[
+        -volume_lookback - volume_recent_days : -volume_recent_days
+    ].mean()
+    if not (baseline_vol > 0):
+        return False
+    if recent_vol < volume_multiplier * baseline_vol:
+        return False
+
+    return True
