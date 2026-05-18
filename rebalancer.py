@@ -40,14 +40,31 @@ def _build_core_targets() -> tuple[dict[str, float], float]:
     for sym, w in signals["holdings"]:
         targets[sym] = targets.get(sym, 0.0) + w * etf_pct
 
-    # Stock sleeve: top-3 by composite score
+    # Stock sleeve: top-3 by composite score + entry-pivot persistence (SEPA Phase 2).
     from screener import screen_stocks
     df = screen_stocks()
     if df is not None and not df.empty:
         top = df.head(3)
         per = stock_pct / max(1, len(top))
+        # Identify currently-held symbols so we don't refresh existing pivot records.
+        cache = orders._load_portfolio_cache()
+        held = {p["symbol"] for p in cache.get("positions", [])}
+        pivots = orders._load_entry_pivots()
+        today_str = dt.datetime.now(dt.timezone.utc).date().isoformat()
+        pivots_dirty = False
+        import pandas as _pd
         for _, row in top.iterrows():
-            targets[row["ticker"]] = targets.get(row["ticker"], 0.0) + per
+            sym = row["ticker"]
+            targets[sym] = targets.get(sym, 0.0) + per
+            if sym in held:
+                continue  # Already held — keep the existing pivot record.
+            base_hi = row.get("base_hi")
+            if base_hi is None or _pd.isna(base_hi):
+                continue
+            pivots[sym] = {"pivot": float(base_hi), "entry_date": today_str}
+            pivots_dirty = True
+        if pivots_dirty:
+            orders._save_entry_pivots(pivots)
 
     if safe_pct > 0.01:
         targets[config.SAFE_HAVEN] = targets.get(config.SAFE_HAVEN, 0.0) + safe_pct
