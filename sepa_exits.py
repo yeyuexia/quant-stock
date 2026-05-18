@@ -92,3 +92,37 @@ def ma_trail_should_exit(position: dict, closes: pd.Series) -> bool:
         return False
     broke = ma_break(closes, period=config.SEPA_MA_PERIOD, ma_type=config.SEPA_MA_TYPE)
     return broke is True
+
+
+import datetime as _dt
+
+
+def failed_breakout(position: dict, pivots: dict, closes: pd.Series,
+                    *, today: _dt.date,
+                    window_days: int = 3) -> bool:
+    """Phase 2 — Minervini 3-day failed-breakout rule.
+
+    True iff:
+      - `pivots[position['symbol']]` exists with a `pivot` and `entry_date`
+      - the count of `closes` index dates strictly after entry_date and
+        ≤ today is between 1 and window_days inclusive
+      - at least one of those in-window closes is below `pivot`
+
+    The window-day count is observed bars (handles weekends/holidays
+    naturally). Returns False on any missing data.
+    """
+    symbol = position.get("symbol")
+    rec = pivots.get(symbol) if symbol else None
+    if rec is None:
+        return False
+    pivot = float(rec["pivot"])
+    entry_date = _dt.date.fromisoformat(rec["entry_date"])
+    if closes is None or closes.empty:
+        return False
+
+    # In-window bars: strictly after entry_date and on/before today.
+    idx = closes.index
+    in_window = closes[(idx.date > entry_date) & (idx.date <= today)]
+    if in_window.empty or len(in_window) > window_days:
+        return False
+    return bool((in_window < pivot).any())

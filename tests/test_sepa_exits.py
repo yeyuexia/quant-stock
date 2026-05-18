@@ -152,3 +152,65 @@ def test_ma_trail_insufficient_data_returns_false():
     p = _pos(r_tier_filled=["2R", "3R"])
     s = _closes_with_last([100.0] * 10)
     assert ma_trail_should_exit(p, s) is False
+
+
+# ── failed_breakout ──────────────────────────────────────────────
+
+import datetime as dt
+
+
+def _closes_with_dates(values, start="2026-05-15"):
+    idx = pd.date_range(start, periods=len(values), freq="B")
+    return pd.Series(values, index=idx, dtype=float)
+
+
+def test_failed_breakout_within_window_close_below_pivot_true():
+    from sepa_exits import failed_breakout
+    pos = {"symbol": "AAPL"}
+    pivots = {"AAPL": {"pivot": 200.0, "entry_date": "2026-05-15"}}
+    # entry day = Mon 2026-05-15; Day 0 close=201, Day 1 close=199 (below)
+    closes = _closes_with_dates([201.0, 199.0], start="2026-05-15")
+    assert failed_breakout(pos, pivots, closes,
+                           today=dt.date(2026, 5, 18),  # Mon of week 2
+                           window_days=3) is True
+
+
+def test_failed_breakout_within_window_all_closes_above_pivot_false():
+    from sepa_exits import failed_breakout
+    pos = {"symbol": "AAPL"}
+    pivots = {"AAPL": {"pivot": 200.0, "entry_date": "2026-05-15"}}
+    closes = _closes_with_dates([201.0, 202.0, 205.0], start="2026-05-15")
+    assert failed_breakout(pos, pivots, closes,
+                           today=dt.date(2026, 5, 19), window_days=3) is False
+
+
+def test_failed_breakout_window_expired_false():
+    from sepa_exits import failed_breakout
+    pos = {"symbol": "AAPL"}
+    pivots = {"AAPL": {"pivot": 200.0, "entry_date": "2026-05-11"}}
+    # 4 bars after entry (window=3) — past the window
+    closes = _closes_with_dates(
+        [201.0, 202.0, 203.0, 204.0, 195.0],   # Day 4 close < pivot
+        start="2026-05-11",
+    )
+    assert failed_breakout(pos, pivots, closes,
+                           today=dt.date(2026, 5, 18), window_days=3) is False
+
+
+def test_failed_breakout_no_pivot_record_false():
+    from sepa_exits import failed_breakout
+    pos = {"symbol": "AAPL"}
+    pivots = {}  # no pivot for AAPL
+    closes = _closes_with_dates([180.0, 170.0], start="2026-05-15")
+    assert failed_breakout(pos, pivots, closes,
+                           today=dt.date(2026, 5, 18), window_days=3) is False
+
+
+def test_failed_breakout_insufficient_closes_false():
+    """Closes series doesn't reach today → no in-window data → False."""
+    from sepa_exits import failed_breakout
+    pos = {"symbol": "AAPL"}
+    pivots = {"AAPL": {"pivot": 200.0, "entry_date": "2026-05-15"}}
+    closes = pd.Series(dtype=float)  # empty
+    assert failed_breakout(pos, pivots, closes,
+                           today=dt.date(2026, 5, 18), window_days=3) is False
