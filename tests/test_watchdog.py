@@ -325,3 +325,218 @@ def test_set_climax_fired_updates_portfolio_cache(tmp_path, monkeypatch):
     with open(tmp_path / "port.json") as f:
         cache = json.load(f)
     assert cache["positions"][0]["climax_fired"] is True
+
+
+# ── Phase 2 failed-breakout integration ─────────────────────────
+
+def _seed_entry_pivot(tmp_path, monkeypatch, symbol, pivot, entry_date):
+    import json
+    path = tmp_path / "pivots.json"
+    existing = {}
+    if path.exists():
+        existing = json.loads(path.read_text())
+    existing[symbol] = {"pivot": pivot, "entry_date": entry_date}
+    path.write_text(json.dumps(existing))
+    monkeypatch.setattr("orders.ENTRY_PIVOTS_PATH", str(path))
+    monkeypatch.setattr("config.ENTRY_PIVOTS_PATH", str(path))
+
+
+def _stub_fetch_ohlcv_closes(monkeypatch, symbol, closes_values, start="2026-05-15"):
+    """Stub data.fetch_ohlcv to return a MultiIndex frame with the given closes."""
+    import pandas as pd
+    n = len(closes_values)
+    idx = pd.date_range(start, periods=n, freq="B")
+    df = pd.DataFrame({
+        ("High",   symbol): [c + 0.5 for c in closes_values],
+        ("Low",    symbol): [c - 0.5 for c in closes_values],
+        ("Close",  symbol): closes_values,
+        ("Volume", symbol): [1_000_000] * n,
+    }, index=idx)
+    df.columns = pd.MultiIndex.from_tuples(df.columns)
+    monkeypatch.setattr("data.fetch_ohlcv",
+                        lambda tickers, period="1y": df)
+
+
+def test_check_sepa_exits_failed_breakout_full_exit_path(tmp_path, monkeypatch):
+    """Day 2 close < pivot within window → cancel partial + submit_exit."""
+    from watchdog import check_sepa_exits
+    import datetime as dt
+
+    monkeypatch.setattr("pending_plan.PENDING_PLAN_PATH", str(tmp_path / "plan.json"))
+    monkeypatch.setattr("config.PENDING_PLAN_PATH", str(tmp_path / "plan.json"))
+    monkeypatch.setattr("orders.PORTFOLIO_PATH", str(tmp_path / "port.json"))
+    monkeypatch.setattr("orders.HALT_PATH", str(tmp_path / "no_halt"))
+    monkeypatch.setattr("config.TELEGRAM_NOTIFY_PATH", str(tmp_path / "tg.json"))
+
+    _seed_core_position(tmp_path, monkeypatch)  # AAPL entry@100, qty=30
+    _seed_entry_pivot(tmp_path, monkeypatch, "AAPL", pivot=99.0,
+                      entry_date="2026-05-15")
+    # Closes: 100, 98 (Day 1 below pivot)
+    _stub_fetch_ohlcv_closes(monkeypatch, "AAPL", [100.0, 98.0],
+                             start="2026-05-15")
+    _stub_baseline(monkeypatch)
+
+    # Pretend "today" is 2026-05-18 (so window covers Days 1-3).
+    _real_datetime = dt.datetime
+    class _FakeNowMod(_real_datetime):
+        @classmethod
+        def now(cls, tz=None): return _real_datetime(2026, 5, 18, 14, 0, 0, tzinfo=tz)
+    monkeypatch.setattr("watchdog.dt.datetime", _FakeNowMod)
+
+    fb = FakeBroker()
+    fb.set_latest_price("AAPL", 98.0)
+
+    snap = _make_snap([{
+        "symbol": "AAPL", "shares": 30.0, "avg_entry": 100.0,
+        "market_value": 2940.0, "unrealized_pl": -60.0,
+        "tranche": "core", "entry_reason": "core rebalance",
+        "stop_order_id": None, "trail_order_id": None,
+        "initial_entry_price": 100.0, "initial_qty": 30,
+        "initial_stop_price": 92.0, "r_tier_filled": [], "climax_fired": False,
+    }])
+    notifications = check_sepa_exits(snap, fb)
+
+    from pending_plan import load_plan
+    plan = load_plan()
+    assert plan is not None
+    # The full exit landed in pending_plan with reason "sepa-failed-breakout".
+    assert any(s.intent.symbol == "AAPL" and "failed-breakout" in s.intent.reason
+               for s in plan.intents)
+    assert any("failed-breakout" in line for line in notifications)
+
+
+def test_check_sepa_exits_failed_breakout_cancels_pending_phase1_partial(tmp_path, monkeypatch):
+    """Existing sepa-2R intent on AAPL is removed when failed-breakout fires."""
+    from watchdog import check_sepa_exits
+    from pending_plan import (PENDING_PLAN_PATH as _, PendingPlan, IntentState,
+                              write_plan, load_plan, Baseline)
+    from orders import OrderIntent
+    import datetime as dt
+
+    monkeypatch.setattr("pending_plan.PENDING_PLAN_PATH", str(tmp_path / "plan.json"))
+    monkeypatch.setattr("config.PENDING_PLAN_PATH", str(tmp_path / "plan.json"))
+    monkeypatch.setattr("orders.PORTFOLIO_PATH", str(tmp_path / "port.json"))
+    monkeypatch.setattr("orders.HALT_PATH", str(tmp_path / "no_halt"))
+    monkeypatch.setattr("config.TELEGRAM_NOTIFY_PATH", str(tmp_path / "tg.json"))
+
+    _seed_core_position(tmp_path, monkeypatch)
+    _seed_entry_pivot(tmp_path, monkeypatch, "AAPL", pivot=99.0,
+                      entry_date="2026-05-15")
+    _stub_fetch_ohlcv_closes(monkeypatch, "AAPL", [100.0, 98.0],
+                             start="2026-05-15")
+    _stub_baseline(monkeypatch)
+
+    write_plan(PendingPlan(
+        plan_id="p-1", tranche="core",
+        created_at=dt.datetime(2026, 5, 18, 14, 0, 0, tzinfo=dt.timezone.utc),
+        baseline=Baseline(spy=450, vix=14, macro_score=0.0,
+                          news_cursor_at=dt.datetime(2026, 5, 18, 14, 0, 0,
+                                                     tzinfo=dt.timezone.utc)),
+        intents=[IntentState(intent=OrderIntent(
+            symbol="AAPL", notional=1000.0, side="sell",
+            reason="sepa-2R", tranche="core", client_order_id="c1",
+        ))],
+    ))
+
+    _real_datetime = dt.datetime
+    class _FakeNowMod(_real_datetime):
+        @classmethod
+        def now(cls, tz=None): return _real_datetime(2026, 5, 18, 14, 0, 0, tzinfo=tz)
+    monkeypatch.setattr("watchdog.dt.datetime", _FakeNowMod)
+
+    fb = FakeBroker()
+    fb.set_latest_price("AAPL", 98.0)
+    snap = _make_snap([{
+        "symbol": "AAPL", "shares": 30.0, "avg_entry": 100.0,
+        "market_value": 2940.0, "unrealized_pl": -60.0,
+        "tranche": "core", "entry_reason": "core rebalance",
+        "stop_order_id": None, "trail_order_id": None,
+        "initial_entry_price": 100.0, "initial_qty": 30,
+        "initial_stop_price": 92.0, "r_tier_filled": [], "climax_fired": False,
+    }])
+    check_sepa_exits(snap, fb)
+
+    plan = load_plan()
+    # The original sepa-2R intent is gone; only failed-breakout intent remains.
+    reasons = [s.intent.reason for s in plan.intents]
+    assert "sepa-2R" not in reasons
+    assert any("failed-breakout" in r for r in reasons)
+
+
+def test_check_sepa_exits_failed_breakout_window_expired_skipped(tmp_path, monkeypatch):
+    """Day 5 close below pivot → outside 3-day window → no failed-breakout."""
+    from watchdog import check_sepa_exits
+    import datetime as dt
+
+    monkeypatch.setattr("pending_plan.PENDING_PLAN_PATH", str(tmp_path / "plan.json"))
+    monkeypatch.setattr("config.PENDING_PLAN_PATH", str(tmp_path / "plan.json"))
+    monkeypatch.setattr("orders.PORTFOLIO_PATH", str(tmp_path / "port.json"))
+    monkeypatch.setattr("orders.HALT_PATH", str(tmp_path / "no_halt"))
+    monkeypatch.setattr("config.TELEGRAM_NOTIFY_PATH", str(tmp_path / "tg.json"))
+
+    _seed_core_position(tmp_path, monkeypatch)
+    _seed_entry_pivot(tmp_path, monkeypatch, "AAPL", pivot=99.0,
+                      entry_date="2026-05-11")  # 5 trading days ago
+    _stub_fetch_ohlcv_closes(monkeypatch, "AAPL",
+                             [100.0, 101.0, 102.0, 101.5, 95.0],
+                             start="2026-05-11")
+    _stub_baseline(monkeypatch)
+
+    _real_datetime = dt.datetime
+    class _FakeNowMod(_real_datetime):
+        @classmethod
+        def now(cls, tz=None): return _real_datetime(2026, 5, 18, 14, 0, 0, tzinfo=tz)
+    monkeypatch.setattr("watchdog.dt.datetime", _FakeNowMod)
+
+    fb = FakeBroker()
+    fb.set_latest_price("AAPL", 95.0)
+    snap = _make_snap([{
+        "symbol": "AAPL", "shares": 30.0, "avg_entry": 100.0,
+        "market_value": 2850.0, "unrealized_pl": -150.0,
+        "tranche": "core", "entry_reason": "core rebalance",
+        "stop_order_id": None, "trail_order_id": None,
+        "initial_entry_price": 100.0, "initial_qty": 30,
+        "initial_stop_price": 92.0, "r_tier_filled": [], "climax_fired": False,
+    }])
+    notifications = check_sepa_exits(snap, fb)
+    # No failed-breakout because window expired.
+    assert not any("failed-breakout" in line for line in notifications)
+
+
+def test_check_sepa_exits_gc_removes_exited_pivot_entries(tmp_path, monkeypatch):
+    """A pivot for a symbol no longer in the portfolio is GC'd at end of pass."""
+    from watchdog import check_sepa_exits
+    import json
+
+    monkeypatch.setattr("pending_plan.PENDING_PLAN_PATH", str(tmp_path / "plan.json"))
+    monkeypatch.setattr("config.PENDING_PLAN_PATH", str(tmp_path / "plan.json"))
+    monkeypatch.setattr("orders.PORTFOLIO_PATH", str(tmp_path / "port.json"))
+    monkeypatch.setattr("orders.HALT_PATH", str(tmp_path / "no_halt"))
+    monkeypatch.setattr("config.TELEGRAM_NOTIFY_PATH", str(tmp_path / "tg.json"))
+    monkeypatch.setattr("orders.ENTRY_PIVOTS_PATH", str(tmp_path / "pivots.json"))
+    monkeypatch.setattr("config.ENTRY_PIVOTS_PATH", str(tmp_path / "pivots.json"))
+
+    # Two pivot records — one for held AAPL, one for exited NVDA.
+    (tmp_path / "pivots.json").write_text(json.dumps({
+        "AAPL": {"pivot": 99.0, "entry_date": "2026-05-15"},
+        "NVDA": {"pivot": 150.0, "entry_date": "2026-05-10"},  # exited
+    }))
+
+    _stub_fetch_ohlcv_closes(monkeypatch, "AAPL", [100.0, 101.0],
+                             start="2026-05-15")
+
+    fb = FakeBroker()
+    fb.set_latest_price("AAPL", 101.0)
+    snap = _make_snap([{
+        "symbol": "AAPL", "shares": 30.0, "avg_entry": 100.0,
+        "market_value": 3030.0, "unrealized_pl": 30.0,
+        "tranche": "core", "entry_reason": "core rebalance",
+        "stop_order_id": None, "trail_order_id": None,
+        "initial_entry_price": 100.0, "initial_qty": 30,
+        "initial_stop_price": 92.0, "r_tier_filled": [], "climax_fired": False,
+    }])
+    check_sepa_exits(snap, fb)
+
+    pivots = json.loads((tmp_path / "pivots.json").read_text())
+    assert "AAPL" in pivots
+    assert "NVDA" not in pivots

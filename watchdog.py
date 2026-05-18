@@ -325,6 +325,35 @@ def check_sepa_exits(snap: "orders.PortfolioSnapshot", broker) -> list:
             notifications.append(f"⚠ SEPA {symbol}: no latest price ({e})")
             continue
 
+        # Phase 2 — 1. Failed-breakout (highest priority)
+        try:
+            ohlcv = data.fetch_ohlcv([symbol], period=config.SEPA_MA_HISTORY)
+            close_series = (ohlcv["Close"][symbol]
+                            if symbol in ohlcv["Close"].columns
+                            else ohlcv["Close"].iloc[:, 0]).dropna()
+        except Exception as e:
+            notifications.append(f"⚠ SEPA {symbol}: closes fetch failed: {e}")
+            continue
+
+        pivots = orders._load_entry_pivots()
+        today_date = dt.datetime.now(dt.timezone.utc).date()
+        if sepa_exits.failed_breakout(
+            pos, pivots, close_series,
+            today=today_date,
+            window_days=config.SEPA_FAILED_BREAKOUT_WINDOW_DAYS,
+        ):
+            _cancel_pending_partials(symbol)
+            orders.cancel_position_trailing(symbol, broker=broker)
+            orders.submit_exit(symbol, reason="sepa-failed-breakout", broker=broker)
+            pivot_price = float(pivots[symbol]["pivot"])
+            _sepa_notify(
+                f"⚠ SEPA failed-breakout — {symbol}\n"
+                f"Recent close ${float(close_series.iloc[-1]):.2f} < entry pivot "
+                f"${pivot_price:.2f}; full exit triggered.",
+                notifications,
+            )
+            continue
+
         # 1. R-multiple scale-out
         action = sepa_exits.next_r_tier_action(pos, current_price)
         if action is not None:
@@ -391,6 +420,13 @@ def check_sepa_exits(snap: "orders.PortfolioSnapshot", broker) -> list:
                 f"exiting remaining shares.",
                 notifications,
             )
+
+    # Phase 2 — end-of-pass GC: drop pivot records for symbols no longer held.
+    held_symbols = {p["symbol"] for p in snap.by_tranche("core")}
+    pivots_all = orders._load_entry_pivots()
+    pruned = {k: v for k, v in pivots_all.items() if k in held_symbols}
+    if len(pruned) != len(pivots_all):
+        orders._save_entry_pivots(pruned)
 
     return notifications
 
