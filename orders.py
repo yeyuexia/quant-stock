@@ -201,16 +201,19 @@ def sync_state(broker, *, alerts: Optional[list] = None) -> PortfolioSnapshot:
                 else None
             )
             r_tier_filled: list[str] = []
+            climax_fired = False
         else:
             # Immutable: preserve initial_*; check r_tier_filled appends below.
             initial_entry_price = (meta or {}).get("initial_entry_price")
             initial_qty = (meta or {}).get("initial_qty")
             initial_stop_price = (meta or {}).get("initial_stop_price")
             r_tier_filled = list((meta or {}).get("r_tier_filled", []))
+            climax_fired = bool((meta or {}).get("climax_fired", False))
 
             if (initial_qty and float(initial_qty) > 0
                     and initial_stop_price is not None
-                    and tranche == "core"):
+                    and tranche == "core"
+                    and not climax_fired):
                 EPS = 1.0  # 1-share tolerance for fractional shares
                 cumulative_frac = 0.0
                 for r, frac in config.SEPA_R_TIERS:
@@ -238,6 +241,7 @@ def sync_state(broker, *, alerts: Optional[list] = None) -> PortfolioSnapshot:
             "initial_qty": initial_qty,
             "initial_stop_price": initial_stop_price,
             "r_tier_filled": r_tier_filled,
+            "climax_fired": climax_fired,
         })
 
     # Emit "closed" events for cached positions that vanished

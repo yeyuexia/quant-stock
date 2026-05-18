@@ -1352,3 +1352,93 @@ def test_load_entry_pivots_malformed_returns_empty(tmp_path, monkeypatch):
     path.write_text("not-json")
     monkeypatch.setattr("orders.ENTRY_PIVOTS_PATH", str(path))
     assert _load_entry_pivots() == {}
+
+
+# ── sync_state climax_fired ─────────────────────────────────────
+
+def test_sync_state_initializes_climax_fired_false_on_first_seen(tmp_path, monkeypatch):
+    from orders import sync_state
+
+    _portfolio_cache(tmp_path, monkeypatch, {
+        "synced_at": "2026-05-10T14:00:00+00:00",
+        "alpaca_env": "paper",
+        "cash": 0.0, "equity": 0.0,
+        "positions": [
+            {"symbol": "AAPL", "shares": 30.0, "avg_entry": 100.0,
+             "market_value": 3000.0, "unrealized_pl": 0.0,
+             "tranche": "core", "entry_reason": "core rebalance",
+             "stop_order_id": None, "trail_order_id": None},
+        ],
+        "tranches": {"core": {"last_rebalance": "2026-05-10"},
+                     "aggressive": {"last_rebalance": None}},
+    })
+
+    fb = FakeBroker()
+    fb.seed_position("AAPL", qty=30, avg_entry=100.0, mv=3000.0)
+    _seed_stop_order(fb, "AAPL", stop_price=92.0)
+
+    snap = sync_state(fb, alerts=[])
+    p = snap.positions[0]
+    assert p["climax_fired"] is False
+
+
+def test_sync_state_preserves_climax_fired_across_runs(tmp_path, monkeypatch):
+    """Once set to True (by watchdog._set_climax_fired), sync_state preserves it."""
+    from orders import sync_state
+
+    _portfolio_cache(tmp_path, monkeypatch, {
+        "synced_at": "2026-05-10T14:00:00+00:00",
+        "alpaca_env": "paper",
+        "cash": 0.0, "equity": 0.0,
+        "positions": [
+            {"symbol": "AAPL", "shares": 15.0, "avg_entry": 100.0,
+             "market_value": 1500.0, "unrealized_pl": 0.0,
+             "tranche": "core", "entry_reason": "core rebalance",
+             "stop_order_id": None, "trail_order_id": None,
+             "initial_entry_price": 100.0, "initial_qty": 30,
+             "initial_stop_price": 92.0, "r_tier_filled": [],
+             "climax_fired": True},
+        ],
+        "tranches": {"core": {"last_rebalance": "2026-05-10"},
+                     "aggressive": {"last_rebalance": None}},
+    })
+
+    fb = FakeBroker()
+    fb.seed_position("AAPL", qty=15, avg_entry=100.0, mv=1500.0)
+    _seed_stop_order(fb, "AAPL", stop_price=92.0)
+
+    snap = sync_state(fb, alerts=[])
+    p = snap.positions[0]
+    assert p["climax_fired"] is True
+
+
+def test_sync_state_does_not_append_r_tier_when_climax_fired_true(tmp_path, monkeypatch):
+    """Climax sold 50%; qty drop must NOT trigger r_tier 2R/3R appends."""
+    from orders import sync_state
+
+    _portfolio_cache(tmp_path, monkeypatch, {
+        "synced_at": "2026-05-10T14:00:00+00:00",
+        "alpaca_env": "paper",
+        "cash": 0.0, "equity": 0.0,
+        "positions": [
+            {"symbol": "AAPL", "shares": 30.0, "avg_entry": 100.0,
+             "market_value": 3000.0, "unrealized_pl": 0.0,
+             "tranche": "core", "entry_reason": "core rebalance",
+             "stop_order_id": None, "trail_order_id": None,
+             "initial_entry_price": 100.0, "initial_qty": 30,
+             "initial_stop_price": 92.0, "r_tier_filled": [],
+             "climax_fired": True},
+        ],
+        "tranches": {"core": {"last_rebalance": "2026-05-10"},
+                     "aggressive": {"last_rebalance": None}},
+    })
+
+    fb = FakeBroker()
+    fb.seed_position("AAPL", qty=15, avg_entry=100.0, mv=1500.0)  # climax sold half
+    _seed_stop_order(fb, "AAPL", stop_price=92.0)
+
+    snap = sync_state(fb, alerts=[])
+    p = snap.positions[0]
+    # Without the gate, r_tier_filled would falsely contain "2R" (and maybe "3R").
+    assert p["r_tier_filled"] == []
+    assert p["climax_fired"] is True
