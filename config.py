@@ -119,6 +119,13 @@ SEPA_CLIMAX_VOLUME_MULTIPLIER = 2.0
 SEPA_CLIMAX_VOLUME_RECENT_DAYS = 3
 SEPA_CLIMAX_TRAIL_PCT = 0.06       # 6% — half of default core trail
 
+# ── Cash / margin policy ────────────────────────────────────────
+# When False, execute_plan rejects any group of buys whose total
+# notional exceeds available cash (i.e. would push the account into
+# margin). Set True only when you explicitly want the system to
+# take leverage. Sells are always allowed.
+ALLOW_MARGIN = False
+
 # ── Strategy 1: Dual Momentum ETF Rotation ──────────────────────
 # Concept: Hold the top-N momentum ETFs; flee to safety (BIL/SHY) when
 # all are below their moving average or absolute momentum is negative.

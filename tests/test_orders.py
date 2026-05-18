@@ -1442,3 +1442,124 @@ def test_sync_state_does_not_append_r_tier_when_climax_fired_true(tmp_path, monk
     # Without the gate, r_tier_filled would falsely contain "2R" (and maybe "3R").
     assert p["r_tier_filled"] == []
     assert p["climax_fired"] is True
+
+
+# ── cash-aware gate ─────────────────────────────────────────────
+
+def test_execute_plan_rejects_buys_when_cash_insufficient(tmp_path, monkeypatch):
+    """Total buy notional > broker.cash → buys skipped, sells still go through."""
+    _safety_paths(tmp_path, monkeypatch)
+    _portfolio_cache(tmp_path, monkeypatch, None)
+
+    from orders import OrderIntent, OrderPlan, execute_plan
+    plan = OrderPlan(
+        buys=[OrderIntent(symbol="SPY", notional=15_000, side="buy",
+                          reason="test", tranche="core",
+                          client_order_id="buy-cid",
+                          stop_pct=0.08, trail_pct=0.12)],
+        sells=[OrderIntent(symbol="QQQ", notional=2_000, side="sell",
+                           reason="test", tranche="core",
+                           client_order_id="sell-cid")],
+        holds=[],
+    )
+    fb = FakeBroker(cash=10_000.0)
+    fb.seed_position("QQQ", qty=5, avg_entry=400, mv=2000)
+
+    result = execute_plan(plan, broker=fb, reason="test")
+
+    # Buy skipped with cash-aware reason
+    buy_skips = [s for s in result.skipped if s[0].side == "buy"]
+    assert len(buy_skips) == 1
+    assert "cash-aware" in buy_skips[0][1]
+    assert "$15,000" in buy_skips[0][1]
+    # Sell unaffected
+    assert any(o.side == "sell" for o in result.submitted)
+
+
+def test_execute_plan_allows_buys_when_cash_sufficient(tmp_path, monkeypatch):
+    """Total buy notional ≤ broker.cash → buys submitted."""
+    _safety_paths(tmp_path, monkeypatch)
+    _portfolio_cache(tmp_path, monkeypatch, None)
+
+    from orders import OrderIntent, OrderPlan, execute_plan
+    plan = OrderPlan(
+        buys=[OrderIntent(symbol="SPY", notional=5_000, side="buy",
+                          reason="test", tranche="core",
+                          client_order_id="buy-cid-1",
+                          stop_pct=0.08, trail_pct=0.12)],
+        sells=[], holds=[],
+    )
+    fb = FakeBroker(cash=20_000.0)
+
+    result = execute_plan(plan, broker=fb, reason="test")
+
+    assert len(result.submitted) == 1
+    assert result.submitted[0].symbol == "SPY"
+    assert not any("cash-aware" in s[1] for s in result.skipped)
+
+
+def test_execute_plan_allows_margin_when_config_flag_true(tmp_path, monkeypatch):
+    """ALLOW_MARGIN=True bypasses the cash-aware gate."""
+    _safety_paths(tmp_path, monkeypatch)
+    _portfolio_cache(tmp_path, monkeypatch, None)
+    monkeypatch.setattr("config.ALLOW_MARGIN", True)
+
+    from orders import OrderIntent, OrderPlan, execute_plan
+    plan = OrderPlan(
+        buys=[OrderIntent(symbol="SPY", notional=15_000, side="buy",
+                          reason="test", tranche="core",
+                          client_order_id="buy-cid-2",
+                          stop_pct=0.08, trail_pct=0.12)],
+        sells=[], holds=[],
+    )
+    fb = FakeBroker(cash=10_000.0)  # would normally reject
+
+    result = execute_plan(plan, broker=fb, reason="test")
+
+    assert len(result.submitted) == 1
+    assert not any("cash-aware" in s[1] for s in result.skipped)
+
+
+def test_execute_plan_rejects_buys_when_account_fetch_fails(tmp_path, monkeypatch):
+    """Broker account fetch raises → defensive default rejects all buys."""
+    _safety_paths(tmp_path, monkeypatch)
+    _portfolio_cache(tmp_path, monkeypatch, None)
+
+    from orders import OrderIntent, OrderPlan, execute_plan
+    plan = OrderPlan(
+        buys=[OrderIntent(symbol="SPY", notional=5_000, side="buy",
+                          reason="test", tranche="core",
+                          client_order_id="buy-cid-3",
+                          stop_pct=0.08, trail_pct=0.12)],
+        sells=[], holds=[],
+    )
+    fb = FakeBroker(cash=20_000.0)
+    monkeypatch.setattr(fb, "get_account", lambda: (_ for _ in ()).throw(
+        __import__("broker").BrokerError("account fetch failed")))
+
+    result = execute_plan(plan, broker=fb, reason="test")
+
+    assert result.submitted == []
+    assert len(result.skipped) == 1
+    assert "broker account fetch failed" in result.skipped[0][1]
+
+
+def test_execute_plan_cash_aware_does_not_affect_sell_only_plan(tmp_path, monkeypatch):
+    """A plan with only sells doesn't trigger get_account."""
+    _safety_paths(tmp_path, monkeypatch)
+    _portfolio_cache(tmp_path, monkeypatch, None)
+
+    from orders import OrderIntent, OrderPlan, execute_plan
+    plan = OrderPlan(
+        buys=[],
+        sells=[OrderIntent(symbol="QQQ", notional=2_000, side="sell",
+                           reason="test", tranche="core",
+                           client_order_id="sell-cid-2")],
+        holds=[],
+    )
+    fb = FakeBroker(cash=0.0)  # cash exhausted, but no buys, so irrelevant
+    fb.seed_position("QQQ", qty=5, avg_entry=400, mv=2000)
+
+    result = execute_plan(plan, broker=fb, reason="test")
+    assert any(o.side == "sell" for o in result.submitted)
+    assert not any("cash-aware" in s[1] for s in result.skipped)

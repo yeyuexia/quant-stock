@@ -407,19 +407,44 @@ def _today_bucket(log: dict) -> dict:
 
 
 def execute_plan(plan: OrderPlan, *, broker, reason: str) -> ExecutionResult:
-    """Runs every intent through: HALT → market-open → daily caps → large-order gate."""
+    """Runs every intent through: HALT → market-open → cash-aware (unless
+    config.ALLOW_MARGIN) → daily caps → large-order gate."""
     result = ExecutionResult()
-    intents = list(plan.sells) + list(plan.buys)
 
     if os.path.exists(HALT_PATH):
-        for i in intents:
+        for i in list(plan.sells) + list(plan.buys):
             result.skipped.append((i, "HALT file present"))
         return result
 
     if not broker.is_market_open():
-        for i in intents:
+        for i in list(plan.sells) + list(plan.buys):
             result.skipped.append((i, "market closed — defer to next open"))
         return result
+
+    # Cash-aware gate: reject buys (collectively) when their total notional
+    # would push the account into negative cash. Sells are always allowed.
+    # Defensive default: if the broker account fetch fails, reject buys too.
+    buys = list(plan.buys)
+    if buys and not getattr(config, "ALLOW_MARGIN", False):
+        try:
+            acc = broker.get_account()
+            available_cash = float(acc.cash)
+        except BrokerError:
+            available_cash = None
+        total_buy = sum(i.notional for i in buys)
+        if available_cash is None:
+            for i in buys:
+                result.skipped.append((i, "cash-aware gate: broker account fetch failed"))
+            buys = []
+        elif total_buy > available_cash:
+            for i in buys:
+                result.skipped.append((
+                    i,
+                    f"cash-aware gate: total buy ${total_buy:,.2f} > available cash ${available_cash:,.2f}",
+                ))
+            buys = []
+
+    intents = list(plan.sells) + buys
 
     log = _load_daily_log()
     bucket = _today_bucket(log)
