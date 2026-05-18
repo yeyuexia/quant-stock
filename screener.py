@@ -56,10 +56,14 @@ def _detect_base(weekly_closes: pd.Series) -> dict:
       depth     = (hi − lo) / hi        ≤ SCREEN_BASE_DEPTH_MAX
       tightness = std(closes) / mean     ≤ SCREEN_TIGHTNESS_PCT_MAX
       width     between SCREEN_BASE_WEEKS_MIN and SCREEN_BASE_WEEKS_MAX
+
+    Returns a dict containing `hi` (the base's price ceiling) whenever a base
+    is detected; `hi` is None when no base qualifies.
     """
     n = len(weekly_closes)
     if n < SCREEN_BASE_WEEKS_MIN:
-        return {"in_base": False, "base_weeks": 0, "depth": None, "tightness": None}
+        return {"in_base": False, "base_weeks": 0, "depth": None,
+                "tightness": None, "hi": None}
 
     for w in range(min(n, SCREEN_BASE_WEEKS_MAX), SCREEN_BASE_WEEKS_MIN - 1, -1):
         window = weekly_closes.iloc[-w:]
@@ -75,9 +79,11 @@ def _detect_base(weekly_closes: pd.Series) -> dict:
                 "base_weeks": w,
                 "depth": float(depth),
                 "tightness": float(tightness),
+                "hi": float(hi),
             }
 
-    return {"in_base": False, "base_weeks": 0, "depth": None, "tightness": None}
+    return {"in_base": False, "base_weeks": 0, "depth": None,
+            "tightness": None, "hi": None}
 
 
 def screen_stocks(tickers: Optional[List[str]] = None) -> pd.DataFrame:
@@ -131,6 +137,7 @@ def screen_stocks(tickers: Optional[List[str]] = None) -> pd.DataFrame:
                 "base_weeks": base["base_weeks"],
                 "base_depth": base["depth"],
                 "base_tightness": base["tightness"],
+                "base_hi": base.get("hi"),
             })
         except Exception:
             continue
