@@ -263,6 +263,41 @@ def _sepa_notify(message: str, lines: list) -> None:
         _json.dump(existing, f, indent=2, default=str)
 
 
+def _cancel_pending_partials(symbol: str) -> None:
+    """Drop SEPA-side sell intents on `symbol` from .cache/pending_plan.json.
+
+    Filters to (side=="sell" AND reason.startswith("sepa-")) so we never
+    affect rebalance buys or non-SEPA exits. Idempotent: no plan or no
+    matching intents → no-op.
+    """
+    from pending_plan import load_plan, write_plan
+    plan = load_plan()
+    if plan is None:
+        return
+    keep = [
+        s for s in plan.intents
+        if not (s.intent.symbol == symbol
+                and s.intent.side == "sell"
+                and s.intent.reason.startswith("sepa-"))
+    ]
+    if len(keep) == len(plan.intents):
+        return
+    plan.intents = keep
+    write_plan(plan)
+
+
+def _set_climax_fired(symbol: str) -> None:
+    """Set climax_fired=True for `symbol` in the portfolio cache."""
+    import json as _json
+    cache = orders._load_portfolio_cache()
+    for p in cache.get("positions", []):
+        if p["symbol"] == symbol:
+            p["climax_fired"] = True
+            break
+    with open(orders.PORTFOLIO_PATH, "w") as f:
+        _json.dump(cache, f, indent=2, default=str)
+
+
 def check_sepa_exits(snap: "orders.PortfolioSnapshot", broker) -> list:
     """SEPA Phase 1 driver. Returns notification lines for the alert summary.
 

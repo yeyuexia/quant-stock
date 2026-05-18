@@ -245,3 +245,83 @@ def test_check_sepa_exits_disabled_when_config_off(tmp_path, monkeypatch):
     }])
     notifications = check_sepa_exits(snap, fb)
     assert notifications == []
+
+
+# ── Phase 2 watchdog helpers ─────────────────────────────────────
+
+def test_cancel_pending_partials_removes_sepa_sell_intents(tmp_path, monkeypatch):
+    from watchdog import _cancel_pending_partials
+    from pending_plan import (PENDING_PLAN_PATH as _, PendingPlan, IntentState, write_plan)
+    from pending_plan import Baseline
+    from orders import OrderIntent
+    import datetime as dt
+
+    monkeypatch.setattr("pending_plan.PENDING_PLAN_PATH", str(tmp_path / "plan.json"))
+    monkeypatch.setattr("config.PENDING_PLAN_PATH", str(tmp_path / "plan.json"))
+
+    write_plan(PendingPlan(
+        plan_id="p-1", tranche="core",
+        created_at=dt.datetime(2026, 5, 18, 14, 0, 0, tzinfo=dt.timezone.utc),
+        baseline=Baseline(spy=450, vix=14, macro_score=0.0,
+                          news_cursor_at=dt.datetime(2026, 5, 18, 14, 0, 0,
+                                                     tzinfo=dt.timezone.utc)),
+        intents=[
+            IntentState(intent=OrderIntent(
+                symbol="AAPL", notional=1000.0, side="sell",
+                reason="sepa-2R", tranche="core", client_order_id="c1",
+            )),
+            IntentState(intent=OrderIntent(
+                symbol="AAPL", notional=500.0, side="buy",
+                reason="rebalance", tranche="core", client_order_id="c2",
+            )),
+            IntentState(intent=OrderIntent(
+                symbol="NVDA", notional=800.0, side="sell",
+                reason="sepa-3R", tranche="core", client_order_id="c3",
+            )),
+        ],
+    ))
+
+    _cancel_pending_partials("AAPL")
+
+    from pending_plan import load_plan
+    plan = load_plan()
+    syms_reasons = [(s.intent.symbol, s.intent.reason) for s in plan.intents]
+    # AAPL sepa-2R removed; AAPL buy preserved (different side); NVDA sepa-3R preserved.
+    assert ("AAPL", "sepa-2R") not in syms_reasons
+    assert ("AAPL", "rebalance") in syms_reasons
+    assert ("NVDA", "sepa-3R") in syms_reasons
+
+
+def test_cancel_pending_partials_noop_when_no_plan(tmp_path, monkeypatch):
+    from watchdog import _cancel_pending_partials
+    monkeypatch.setattr("pending_plan.PENDING_PLAN_PATH", str(tmp_path / "plan.json"))
+    monkeypatch.setattr("config.PENDING_PLAN_PATH", str(tmp_path / "plan.json"))
+    _cancel_pending_partials("AAPL")  # must not raise
+
+
+def test_set_climax_fired_updates_portfolio_cache(tmp_path, monkeypatch):
+    from watchdog import _set_climax_fired
+    import json
+
+    monkeypatch.setattr("orders.PORTFOLIO_PATH", str(tmp_path / "port.json"))
+    (tmp_path / "port.json").write_text(json.dumps({
+        "synced_at": "2026-05-18T14:00:00+00:00", "alpaca_env": "paper",
+        "cash": 0, "equity": 0,
+        "positions": [
+            {"symbol": "AAPL", "shares": 30, "avg_entry": 100.0,
+             "market_value": 3000, "unrealized_pl": 0, "tranche": "core",
+             "entry_reason": "core rebalance",
+             "stop_order_id": None, "trail_order_id": None,
+             "initial_entry_price": 100.0, "initial_qty": 30,
+             "initial_stop_price": 92.0, "r_tier_filled": [],
+             "climax_fired": False},
+        ],
+        "tranches": {"core": {"last_rebalance": "2026-05-18"},
+                     "aggressive": {"last_rebalance": None}},
+    }))
+
+    _set_climax_fired("AAPL")
+
+    with open(tmp_path / "port.json") as f:
+        cache = json.load(f)
+    assert cache["positions"][0]["climax_fired"] is True
