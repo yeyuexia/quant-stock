@@ -104,6 +104,21 @@ SEPA_MA_PERIOD = 21
 SEPA_MA_TYPE = "ema"                       # "ema" | "sma"
 SEPA_MA_HISTORY = "6mo"                    # data.fetch_prices period for the EMA
 
+# ── SEPA Phase 2 — failed-breakout ──────────────────────────────
+SEPA_FAILED_BREAKOUT_WINDOW_DAYS = 3
+ENTRY_PIVOTS_PATH = os.path.join(os.path.dirname(__file__),
+                                  ".cache", "entry_pivots.json")
+
+# ── SEPA Phase 2 — climax detection ─────────────────────────────
+SEPA_CLIMAX_RETURN_LOOKBACK = 8
+SEPA_CLIMAX_RETURN_THRESHOLD = 0.25
+SEPA_CLIMAX_RANGE_LOOKBACK = 20
+SEPA_CLIMAX_RANGE_MULTIPLIER = 2.0
+SEPA_CLIMAX_VOLUME_LOOKBACK = 20
+SEPA_CLIMAX_VOLUME_MULTIPLIER = 2.0
+SEPA_CLIMAX_VOLUME_RECENT_DAYS = 3
+SEPA_CLIMAX_TRAIL_PCT = 0.06       # 6% — half of default core trail
+
 # ── Strategy 1: Dual Momentum ETF Rotation ──────────────────────
 # Concept: Hold the top-N momentum ETFs; flee to safety (BIL/SHY) when
 # all are below their moving average or absolute momentum is negative.
