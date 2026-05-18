@@ -540,3 +540,206 @@ def test_check_sepa_exits_gc_removes_exited_pivot_entries(tmp_path, monkeypatch)
     pivots = json.loads((tmp_path / "pivots.json").read_text())
     assert "AAPL" in pivots
     assert "NVDA" not in pivots
+
+
+# ── Phase 2 climax integration ───────────────────────────────────
+
+def _stub_fetch_ohlcv_full(monkeypatch, symbol, *,
+                           close, high=None, low=None, volume=None,
+                           start="2026-01-01"):
+    import pandas as pd
+    n = len(close)
+    idx = pd.date_range(start, periods=n, freq="B")
+    df = pd.DataFrame({
+        ("High",   symbol): high or [c + 0.5 for c in close],
+        ("Low",    symbol): low or [c - 0.5 for c in close],
+        ("Close",  symbol): close,
+        ("Volume", symbol): volume or [1_000_000] * n,
+    }, index=idx)
+    df.columns = pd.MultiIndex.from_tuples(df.columns)
+    monkeypatch.setattr("data.fetch_ohlcv",
+                        lambda tickers, period="1y": df)
+
+
+def _climax_ohlcv(symbol):
+    """Build OHLCV that satisfies all three climax conditions."""
+    quiet_close = [100.0] * 50
+    wild_close  = [102, 105, 108, 112, 116, 121, 126, 130.0]
+    closes = quiet_close + wild_close
+    quiet_high  = [100.5] * 50
+    wild_high   = [c + 3 for c in wild_close]
+    quiet_low   = [99.5] * 50
+    wild_low    = [c - 3 for c in wild_close]
+    quiet_vol   = [1_000_000] * 50
+    wild_vol    = [4_000_000] * 8
+    return dict(close=closes,
+                high=quiet_high + wild_high,
+                low=quiet_low + wild_low,
+                volume=quiet_vol + wild_vol)
+
+
+def test_check_sepa_exits_climax_sells_half_and_tightens_trail(tmp_path, monkeypatch):
+    """All three climax conditions → sell 50% MV + submit tighter trailing."""
+    from watchdog import check_sepa_exits
+    from broker import Order
+
+    monkeypatch.setattr("pending_plan.PENDING_PLAN_PATH", str(tmp_path / "plan.json"))
+    monkeypatch.setattr("config.PENDING_PLAN_PATH", str(tmp_path / "plan.json"))
+    monkeypatch.setattr("orders.PORTFOLIO_PATH", str(tmp_path / "port.json"))
+    monkeypatch.setattr("orders.HALT_PATH", str(tmp_path / "no_halt"))
+    monkeypatch.setattr("orders.DAILY_TRADE_LOG", str(tmp_path / "daily.json"))
+    monkeypatch.setattr("config.TELEGRAM_NOTIFY_PATH", str(tmp_path / "tg.json"))
+    monkeypatch.setattr("orders.ENTRY_PIVOTS_PATH", str(tmp_path / "pivots.json"))
+    monkeypatch.setattr("config.ENTRY_PIVOTS_PATH", str(tmp_path / "pivots.json"))
+
+    _seed_core_position(tmp_path, monkeypatch, shares=30.0,
+                        market_value=3900.0,  # MV after run-up
+                        r_tier_filled=[], climax_fired=False)
+    _stub_fetch_ohlcv_full(monkeypatch, "AAPL", **_climax_ohlcv("AAPL"),
+                           start="2026-01-01")
+    _stub_baseline(monkeypatch)
+
+    fb = FakeBroker()
+    fb.set_latest_price("AAPL", 130.0)
+    fb.seed_open_order(Order(
+        id="trail_old", symbol="AAPL", side="sell", type="trailing_stop",
+        qty=30.0, notional=None, status="accepted",
+        client_order_id="old-trail", parent_order_id=None,
+    ))
+
+    snap = _make_snap([{
+        "symbol": "AAPL", "shares": 30.0, "avg_entry": 100.0,
+        "market_value": 3900.0, "unrealized_pl": 900.0,
+        "tranche": "core", "entry_reason": "core rebalance",
+        "stop_order_id": None, "trail_order_id": "trail_old",
+        "initial_entry_price": 100.0, "initial_qty": 30,
+        "initial_stop_price": 92.0, "r_tier_filled": [], "climax_fired": False,
+    }])
+    notifications = check_sepa_exits(snap, fb)
+
+    # Old trailing cancelled, new one submitted with tighter %.
+    assert "trail_old" in fb._canceled
+    new_trails = [o for o in fb._submitted if o.type == "trailing_stop"]
+    assert len(new_trails) == 1
+    # 50% partial sell submitted directly (not pending_plan).
+    sell_orders = [o for o in fb._submitted if o.side == "sell" and o.type != "trailing_stop"]
+    assert any(o.symbol == "AAPL" for o in sell_orders)
+    assert any("climax" in line for line in notifications)
+
+
+def test_check_sepa_exits_climax_sets_climax_fired_true(tmp_path, monkeypatch):
+    """After climax, portfolio.json position has climax_fired=True."""
+    from watchdog import check_sepa_exits
+    import json
+
+    monkeypatch.setattr("pending_plan.PENDING_PLAN_PATH", str(tmp_path / "plan.json"))
+    monkeypatch.setattr("config.PENDING_PLAN_PATH", str(tmp_path / "plan.json"))
+    monkeypatch.setattr("orders.PORTFOLIO_PATH", str(tmp_path / "port.json"))
+    monkeypatch.setattr("orders.HALT_PATH", str(tmp_path / "no_halt"))
+    monkeypatch.setattr("orders.DAILY_TRADE_LOG", str(tmp_path / "daily.json"))
+    monkeypatch.setattr("config.TELEGRAM_NOTIFY_PATH", str(tmp_path / "tg.json"))
+    monkeypatch.setattr("orders.ENTRY_PIVOTS_PATH", str(tmp_path / "pivots.json"))
+    monkeypatch.setattr("config.ENTRY_PIVOTS_PATH", str(tmp_path / "pivots.json"))
+
+    _seed_core_position(tmp_path, monkeypatch, shares=30.0, market_value=3900.0)
+    _stub_fetch_ohlcv_full(monkeypatch, "AAPL", **_climax_ohlcv("AAPL"))
+    _stub_baseline(monkeypatch)
+
+    fb = FakeBroker()
+    fb.set_latest_price("AAPL", 130.0)
+    snap = _make_snap([{
+        "symbol": "AAPL", "shares": 30.0, "avg_entry": 100.0,
+        "market_value": 3900.0, "unrealized_pl": 900.0,
+        "tranche": "core", "entry_reason": "core rebalance",
+        "stop_order_id": None, "trail_order_id": None,
+        "initial_entry_price": 100.0, "initial_qty": 30,
+        "initial_stop_price": 92.0, "r_tier_filled": [], "climax_fired": False,
+    }])
+    check_sepa_exits(snap, fb)
+
+    # _seed_core_position writes to "portfolio.json" via _portfolio_cache.
+    with open(tmp_path / "portfolio.json") as f:
+        cache = json.load(f)
+    assert cache["positions"][0]["climax_fired"] is True
+
+
+def test_check_sepa_exits_climax_disables_r_multiple_on_next_run(tmp_path, monkeypatch):
+    """With climax_fired=True, R-multiple is gated off even at >2R price."""
+    from watchdog import check_sepa_exits
+
+    monkeypatch.setattr("pending_plan.PENDING_PLAN_PATH", str(tmp_path / "plan.json"))
+    monkeypatch.setattr("config.PENDING_PLAN_PATH", str(tmp_path / "plan.json"))
+    monkeypatch.setattr("orders.PORTFOLIO_PATH", str(tmp_path / "port.json"))
+    monkeypatch.setattr("orders.HALT_PATH", str(tmp_path / "no_halt"))
+    monkeypatch.setattr("orders.DAILY_TRADE_LOG", str(tmp_path / "daily.json"))
+    monkeypatch.setattr("config.TELEGRAM_NOTIFY_PATH", str(tmp_path / "tg.json"))
+    monkeypatch.setattr("orders.ENTRY_PIVOTS_PATH", str(tmp_path / "pivots.json"))
+    monkeypatch.setattr("config.ENTRY_PIVOTS_PATH", str(tmp_path / "pivots.json"))
+
+    # Use OHLCV that does NOT satisfy climax (return only, no range/vol).
+    closes = [100.0] * 50 + [102, 105, 108, 112, 116, 121, 126, 130.0]
+    _stub_fetch_ohlcv_full(monkeypatch, "AAPL", close=closes)
+    _stub_baseline(monkeypatch)
+
+    fb = FakeBroker()
+    fb.set_latest_price("AAPL", 130.0)  # well past 2R target of 116
+    snap = _make_snap([{
+        "symbol": "AAPL", "shares": 15.0, "avg_entry": 100.0,
+        "market_value": 1950.0, "unrealized_pl": 450.0,
+        "tranche": "core", "entry_reason": "core rebalance",
+        "stop_order_id": None, "trail_order_id": None,
+        "initial_entry_price": 100.0, "initial_qty": 30,
+        "initial_stop_price": 92.0, "r_tier_filled": [],
+        "climax_fired": True,  # already fired
+    }])
+    notifications = check_sepa_exits(snap, fb)
+    # No 2R/3R notification because climax_fired gates R-multiple.
+    assert not any("2R hit" in line or "3R hit" in line for line in notifications)
+
+
+def test_check_sepa_exits_climax_allows_ma_trail_after_fired(tmp_path, monkeypatch):
+    """With climax_fired=True and close < 21EMA, full exit fires via MA-trail."""
+    from watchdog import check_sepa_exits
+
+    monkeypatch.setattr("pending_plan.PENDING_PLAN_PATH", str(tmp_path / "plan.json"))
+    monkeypatch.setattr("config.PENDING_PLAN_PATH", str(tmp_path / "plan.json"))
+    monkeypatch.setattr("orders.PORTFOLIO_PATH", str(tmp_path / "port.json"))
+    monkeypatch.setattr("orders.HALT_PATH", str(tmp_path / "no_halt"))
+    monkeypatch.setattr("orders.DAILY_TRADE_LOG", str(tmp_path / "daily.json"))
+    monkeypatch.setattr("config.TELEGRAM_NOTIFY_PATH", str(tmp_path / "tg.json"))
+    monkeypatch.setattr("orders.ENTRY_PIVOTS_PATH", str(tmp_path / "pivots.json"))
+    monkeypatch.setattr("config.ENTRY_PIVOTS_PATH", str(tmp_path / "pivots.json"))
+
+    # OHLCV: rise then crash → climax_check False but ma_trail_should_exit True.
+    closes = list(range(89, 111)) + [80.0]
+    # submit_exit() reads cached position metadata to determine notional.
+    _seed_core_position(tmp_path, monkeypatch, shares=15.0,
+                        market_value=1200.0, climax_fired=True)
+    _stub_fetch_ohlcv_full(monkeypatch, "AAPL", close=closes)
+    # Phase 1's MA-trail reads via data.fetch_prices too — stub it equivalently.
+    import pandas as pd
+    idx = pd.date_range("2026-01-01", periods=len(closes), freq="B")
+    monkeypatch.setattr("data.fetch_prices",
+                        lambda tickers, period="2y":
+                            pd.DataFrame({"AAPL": closes}, index=idx))
+    _stub_baseline(monkeypatch)
+
+    fb = FakeBroker()
+    fb.set_latest_price("AAPL", 80.0)
+    snap = _make_snap([{
+        "symbol": "AAPL", "shares": 15.0, "avg_entry": 100.0,
+        "market_value": 1200.0, "unrealized_pl": -300.0,
+        "tranche": "core", "entry_reason": "core rebalance",
+        "stop_order_id": None, "trail_order_id": None,
+        "initial_entry_price": 100.0, "initial_qty": 30,
+        "initial_stop_price": 92.0, "r_tier_filled": [],
+        "climax_fired": True,
+    }])
+    notifications = check_sepa_exits(snap, fb)
+    from pending_plan import load_plan
+    plan = load_plan()
+    assert plan is not None
+    assert any(s.intent.symbol == "AAPL"
+               and "sepa-21EMA-break" in s.intent.reason
+               for s in plan.intents)
+    assert any("21EMA" in line for line in notifications)

@@ -82,13 +82,15 @@ def ma_break(closes: pd.Series, period: int = 21, ma_type: str = "ema") -> Optio
 
 
 def ma_trail_should_exit(position: dict, closes: pd.Series) -> bool:
-    """True only when r_tier_filled contains the final tier AND ma_break is True.
+    """True when ma_break is True AND the position has reached the MA-trail
+    backstop phase — either by completing the final R-tier (Phase 1) OR by
+    having fired climax (Phase 2: climax_fired=True).
 
     Returns False (not None) when gating conditions aren't met — this is the
     "do nothing" signal, distinct from data-unavailable (also False here).
     """
     filled = position.get("r_tier_filled") or []
-    if _final_tier_label() not in filled:
+    if _final_tier_label() not in filled and not position.get("climax_fired"):
         return False
     broke = ma_break(closes, period=config.SEPA_MA_PERIOD, ma_type=config.SEPA_MA_TYPE)
     return broke is True

@@ -354,56 +354,111 @@ def check_sepa_exits(snap: "orders.PortfolioSnapshot", broker) -> list:
             )
             continue
 
-        # 1. R-multiple scale-out
-        action = sepa_exits.next_r_tier_action(pos, current_price)
-        if action is not None:
-            # Fraction = the fraction associated with this tier label in SEPA_R_TIERS.
-            frac = next(
-                (f for (r, f) in config.SEPA_R_TIERS if f"{int(r)}R" == action),
-                None,
-            )
-            if frac is None:
+        # Phase 2 — 2. Climax (only if not already fired)
+        if not pos.get("climax_fired"):
+            if sepa_exits.climax_check(
+                ohlcv,
+                return_lookback=config.SEPA_CLIMAX_RETURN_LOOKBACK,
+                return_threshold=config.SEPA_CLIMAX_RETURN_THRESHOLD,
+                range_lookback=config.SEPA_CLIMAX_RANGE_LOOKBACK,
+                range_multiplier=config.SEPA_CLIMAX_RANGE_MULTIPLIER,
+                volume_lookback=config.SEPA_CLIMAX_VOLUME_LOOKBACK,
+                volume_multiplier=config.SEPA_CLIMAX_VOLUME_MULTIPLIER,
+                volume_recent_days=config.SEPA_CLIMAX_VOLUME_RECENT_DAYS,
+            ):
+                _cancel_pending_partials(symbol)
+                orders.cancel_position_trailing(symbol, broker=broker)
+
+                # Sell 50% of CURRENT remaining market value, directly via execute_plan
+                # (no slicing — climax is "sell into strength, get out today").
+                half_mv = float(pos["market_value"]) * 0.5
+                cid = orders._make_cid("core", "sepa-climax", symbol, today_date)
+                sell_intent = orders.OrderIntent(
+                    symbol=symbol, notional=round(half_mv, 2), side="sell",
+                    reason="sepa-climax", tranche="core", client_order_id=cid,
+                )
+                orders.execute_plan(
+                    orders.OrderPlan(buys=[], sells=[sell_intent], holds=[]),
+                    broker=broker, reason="sepa-climax",
+                )
+
+                # Tighter trailing on the (estimated) remaining qty.
+                remaining_qty = float(pos["shares"]) * 0.5
+                trail_cid = orders._make_cid("core", "climax-trail", symbol, today_date)
+                try:
+                    broker.submit_trailing_stop(
+                        symbol, qty=remaining_qty,
+                        trail_percent=config.SEPA_CLIMAX_TRAIL_PCT,
+                        client_order_id=trail_cid,
+                    )
+                except Exception as e:
+                    notifications.append(f"⚠ SEPA {symbol}: climax re-trail failed: {e}")
+
+                _set_climax_fired(symbol)
+                _sepa_notify(
+                    f"🔥 SEPA climax — {symbol}\n"
+                    f"Triple condition met; sold ~50% (~${half_mv:,.0f}) at "
+                    f"${current_price:.2f}; trailing tightened to "
+                    f"{config.SEPA_CLIMAX_TRAIL_PCT*100:.0f}%; "
+                    f"R-multiple scale-out disabled.",
+                    notifications,
+                )
                 continue
 
-            partial_result = orders.submit_partial_exit(
-                symbol, fraction_of_initial=frac,
-                reason=f"sepa-{action}", broker=broker,
-            )
-            orders.cancel_position_trailing(symbol, broker=broker)
-
-            # Re-trail unless this is the final tier label.
-            final_label = f"{int(config.SEPA_R_TIERS[-1][0])}R"
-            if action != final_label:
-                remaining_fraction = 1.0 - sum(
-                    f for (r, f) in config.SEPA_R_TIERS
-                    if f"{int(r)}R" in pos.get("r_tier_filled", []) or f"{int(r)}R" == action
+        # Phase 1 — 3. R-multiple scale-out (gated by !climax_fired in Phase 2)
+        if not pos.get("climax_fired"):
+            action = sepa_exits.next_r_tier_action(pos, current_price)
+            if action is not None:
+                # Fraction = the fraction associated with this tier label in SEPA_R_TIERS.
+                frac = next(
+                    (f for (r, f) in config.SEPA_R_TIERS if f"{int(r)}R" == action),
+                    None,
                 )
-                new_qty = float(pos["initial_qty"]) * remaining_fraction
-                from orders import _make_cid
-                _, trail_pct = orders._tranche_stops("core")
-                cid = _make_cid("core", f"sepa-trail-{action}", symbol, dt.date.today())
-                try:
-                    broker.submit_trailing_stop(symbol, qty=new_qty,
-                                                trail_percent=trail_pct,
-                                                client_order_id=cid)
-                except Exception as e:
-                    notifications.append(f"⚠ SEPA {symbol}: re-trail failed: {e}")
+                if frac is None:
+                    continue
 
-            sold_dollars = float(pos["initial_qty"]) * frac * current_price
-            sold_shares = float(pos["initial_qty"]) * frac
-            tail_msg = (" — trailing-stop removed, now MA-trailing"
-                        if action == final_label else "")
-            _sepa_notify(
-                f"🎯 SEPA {action} hit — {symbol}\n"
-                f"Sold ~{sold_shares:.2f} shares ≈ ${sold_dollars:,.0f} at ${current_price:.2f}"
-                f"{tail_msg}",
-                notifications,
-            )
-            continue  # Don't also check MA on the same run; next watchdog observes qty drop.
+                partial_result = orders.submit_partial_exit(
+                    symbol, fraction_of_initial=frac,
+                    reason=f"sepa-{action}", broker=broker,
+                )
+                orders.cancel_position_trailing(symbol, broker=broker)
 
-        # 2. 21EMA trail (only when final tier already filled)
+                # Re-trail unless this is the final tier label.
+                final_label = f"{int(config.SEPA_R_TIERS[-1][0])}R"
+                if action != final_label:
+                    remaining_fraction = 1.0 - sum(
+                        f for (r, f) in config.SEPA_R_TIERS
+                        if f"{int(r)}R" in pos.get("r_tier_filled", []) or f"{int(r)}R" == action
+                    )
+                    new_qty = float(pos["initial_qty"]) * remaining_fraction
+                    from orders import _make_cid
+                    _, trail_pct = orders._tranche_stops("core")
+                    cid = _make_cid("core", f"sepa-trail-{action}", symbol, dt.date.today())
+                    try:
+                        broker.submit_trailing_stop(symbol, qty=new_qty,
+                                                    trail_percent=trail_pct,
+                                                    client_order_id=cid)
+                    except Exception as e:
+                        notifications.append(f"⚠ SEPA {symbol}: re-trail failed: {e}")
+
+                sold_dollars = float(pos["initial_qty"]) * frac * current_price
+                sold_shares = float(pos["initial_qty"]) * frac
+                tail_msg = (" — trailing-stop removed, now MA-trailing"
+                            if action == final_label else "")
+                _sepa_notify(
+                    f"🎯 SEPA {action} hit — {symbol}\n"
+                    f"Sold ~{sold_shares:.2f} shares ≈ ${sold_dollars:,.0f} at ${current_price:.2f}"
+                    f"{tail_msg}",
+                    notifications,
+                )
+                continue  # Don't also check MA on the same run; next watchdog observes qty drop.
+
+        # Phase 1+2 — 4. 21EMA trail
+        # Original gate: final R-tier filled. Phase 2 extends: also active
+        # after climax_fired so the remaining 50% has an MA backstop.
         final_label = f"{int(config.SEPA_R_TIERS[-1][0])}R"
-        if final_label not in (pos.get("r_tier_filled") or []):
+        if (final_label not in (pos.get("r_tier_filled") or [])
+                and not pos.get("climax_fired")):
             continue
         try:
             prices = data.fetch_prices([symbol], period=config.SEPA_MA_HISTORY)
