@@ -1328,3 +1328,27 @@ def test_cancel_position_trailing_respects_halt(tmp_path, monkeypatch):
     result = cancel_position_trailing("AAPL", broker=fb)
     assert fb._canceled == []  # HALT prevented the cancel
     assert any("HALT" in msg for _, msg in result.skipped)
+
+
+# ── entry pivots sidecar ─────────────────────────────────────────
+
+def test_load_entry_pivots_missing_file_returns_empty(tmp_path, monkeypatch):
+    from orders import _load_entry_pivots
+    monkeypatch.setattr("orders.ENTRY_PIVOTS_PATH", str(tmp_path / "pivots.json"))
+    assert _load_entry_pivots() == {}
+
+
+def test_save_then_load_entry_pivots_roundtrip(tmp_path, monkeypatch):
+    from orders import _load_entry_pivots, _save_entry_pivots
+    monkeypatch.setattr("orders.ENTRY_PIVOTS_PATH", str(tmp_path / "pivots.json"))
+    data = {"AAPL": {"pivot": 200.5, "entry_date": "2026-05-18"}}
+    _save_entry_pivots(data)
+    assert _load_entry_pivots() == data
+
+
+def test_load_entry_pivots_malformed_returns_empty(tmp_path, monkeypatch):
+    from orders import _load_entry_pivots
+    path = tmp_path / "pivots.json"
+    path.write_text("not-json")
+    monkeypatch.setattr("orders.ENTRY_PIVOTS_PATH", str(path))
+    assert _load_entry_pivots() == {}

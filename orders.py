@@ -84,6 +84,7 @@ DAILY_LOG_PATH = os.path.join(os.path.dirname(__file__), "daily_log.csv")
 # ── Safety-rail paths (overridable for tests) ───────────────────
 
 HALT_PATH = config.HALT_PATH
+ENTRY_PIVOTS_PATH = config.ENTRY_PIVOTS_PATH
 DAILY_TRADE_LOG = config.DAILY_TRADE_LOG
 PENDING_ORDERS_PATH = config.PENDING_ORDERS_PATH
 
@@ -103,6 +104,28 @@ def _load_portfolio_cache() -> dict:
 def _save_portfolio_cache(snap: PortfolioSnapshot):
     with open(PORTFOLIO_PATH, "w") as f:
         json.dump(asdict(snap), f, indent=2, default=str)
+
+
+def _load_entry_pivots() -> dict:
+    """Load .cache/entry_pivots.json (the SEPA Phase 2 sidecar).
+
+    Returns an empty dict when the file is missing or malformed — entry-pivot
+    state is purely advisory; corruption should never block a watchdog run.
+    """
+    if not os.path.exists(ENTRY_PIVOTS_PATH):
+        return {}
+    try:
+        with open(ENTRY_PIVOTS_PATH) as f:
+            return json.load(f)
+    except Exception:
+        return {}
+
+
+def _save_entry_pivots(pivots: dict) -> None:
+    """Persist the entry-pivot sidecar."""
+    os.makedirs(os.path.dirname(ENTRY_PIVOTS_PATH), exist_ok=True)
+    with open(ENTRY_PIVOTS_PATH, "w") as f:
+        json.dump(pivots, f, indent=2, default=str)
 
 
 def _append_daily_log(line: str):
