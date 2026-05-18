@@ -210,6 +210,17 @@ def sync_state(broker, *, alerts: Optional[list] = None) -> PortfolioSnapshot:
             r_tier_filled = list((meta or {}).get("r_tier_filled", []))
             climax_fired = bool((meta or {}).get("climax_fired", False))
 
+            # Narrow-immutability exception: backfill initial_stop_price when
+            # it was None on first sight (no open stop attached yet) and a
+            # stop order has since been placed. This makes SEPA pick up
+            # protection for manually-stop-protected positions without
+            # requiring an operator to clear initial_entry_price by hand.
+            # Never overwrites an already-set initial_stop_price.
+            if initial_stop_price is None:
+                stop_ord = stop_orders_by_symbol.get(p.symbol)
+                if stop_ord is not None and stop_ord.stop_price is not None:
+                    initial_stop_price = float(stop_ord.stop_price)
+
             if (initial_qty and float(initial_qty) > 0
                     and initial_stop_price is not None
                     and tranche == "core"
