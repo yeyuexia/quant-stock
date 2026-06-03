@@ -395,6 +395,79 @@ def enrich_with_prices(snapshots: List[dict]) -> List[dict]:
     return snapshots
 
 
+# ── Stage-1 prescreen: universe-wide RS + liquidity gate ────────
+
+def _chunked_ohlcv(tickers: List[str], period: str = "1y", chunk: int = 150) -> pd.DataFrame:
+    """Batch-download OHLCV in chunks (yfinance chokes on 1000+ tickers at once),
+    concatenated to one MultiIndex (field, ticker) frame. Empty on total failure."""
+    frames = []
+    for i in range(0, len(tickers), chunk):
+        part = data_mod.fetch_ohlcv(tickers[i:i + chunk], period=period)
+        if not part.empty:
+            frames.append(part)
+    if not frames:
+        return pd.DataFrame()
+    return pd.concat(frames, axis=1)
+
+
+def prescreen_universe(tickers: List[str], protected: set, *, keep: Optional[int] = None):
+    """Stage 1 — cheap, batched. Rank the whole universe on universe-wide relative
+    strength, apply a price/liquidity gate, and carry the top `keep` survivors
+    (plus all `protected` names) into Stage 2.
+
+    Returns (survivors, metrics) where metrics[ticker] = {rs_pct, ret_3m,
+    dist_52w_high, sma50_dist_pct, price, avg_dollar_vol} so Stage 2 need not
+    recompute prices. Fail-open: if no price data, carry protected + the raw head
+    so a network blip never empties discovery.
+    """
+    keep = keep or config.DISCOVERY_STAGE1_KEEP
+    ohlcv = _chunked_ohlcv(tickers, period="1y")
+    if ohlcv.empty:
+        survivors = list(dict.fromkeys(list(protected) + tickers))[: max(keep, len(protected))]
+        return survivors, {}
+
+    close = ohlcv["Close"]
+    vol = ohlcv["Volume"]
+
+    def _ret(n):
+        return close.iloc[-1] / close.iloc[-n] - 1 if len(close) >= n else pd.Series(np.nan, index=close.columns)
+
+    rs_pct = (0.40 * _ret(63).fillna(0) + 0.30 * _ret(126).fillna(0)
+              + 0.30 * _ret(252).fillna(0)).rank(pct=True) * 100
+
+    metrics: dict = {}
+    for t in close.columns:
+        ser = close[t].dropna()
+        if ser.empty:
+            continue
+        last = float(ser.iloc[-1])
+        vser = vol[t].dropna() if t in vol.columns else pd.Series(dtype=float)
+        avg_dollar_vol = float((ser * vser).tail(20).mean()) if not vser.empty else 0.0
+        sma50 = ser.rolling(50).mean().iloc[-1] if len(ser) >= 50 else None
+        metrics[t] = {
+            "price": last,
+            "rs_pct": float(rs_pct.get(t)) if not pd.isna(rs_pct.get(t, np.nan)) else None,
+            "ret_3m": float(ser.iloc[-1] / ser.iloc[-63] - 1) if len(ser) >= 63 else None,
+            "dist_52w_high": float(last / ser.max() - 1) if ser.max() > 0 else None,
+            "sma50_dist_pct": (float((last - sma50) / sma50) if sma50 and sma50 > 0 else None),
+            "avg_dollar_vol": avg_dollar_vol,
+        }
+
+    def _passes_gate(t):
+        m = metrics.get(t)
+        if not m:
+            return False
+        return (m["price"] or 0) >= config.DISCOVERY_MIN_PRICE and \
+               m["avg_dollar_vol"] >= config.DISCOVERY_MIN_DOLLAR_VOLUME
+
+    gated = [t for t in metrics if _passes_gate(t)]
+    gated.sort(key=lambda t: (metrics[t]["rs_pct"] or 0.0), reverse=True)
+    survivors = gated[:keep]
+    # Protected names always advance, even if illiquid or price-less.
+    survivors = list(dict.fromkeys(survivors + [t for t in protected]))
+    return survivors, metrics
+
+
 # ── EPS acceleration (CANSLIM-aligned) ──────────────────────────
 
 def _eps_acceleration_score(quarterly_eps: list) -> float:

@@ -662,3 +662,47 @@ def test_get_universe_tickers_falls_back_to_sp500(monkeypatch, tmp_path):
     monkeypatch.setattr(config, "DISCOVERY_UNIVERSE_ETFS", {"IWB": "http://x"})
     u = discovery.get_universe_tickers()
     assert u == ["SPX1", "SPX2", "SPX3"]
+
+
+# ── Stage-1 prescreen_universe ───────────────────────────────────
+
+def _fake_ohlcv(tickers, days=300):
+    idx = pd.date_range("2025-01-01", periods=days, freq="B")
+    cols = {}
+    for i, t in enumerate(tickers):
+        # strictly rising series; steeper slope for lower i => higher RS for early tickers
+        slope = 0.003 - 0.000002 * i
+        series = 100 * np.cumprod(1 + np.full(days, max(slope, 0.0005)))
+        cols[("Close", t)] = series
+        cols[("Volume", t)] = pd.Series(2_000_000.0, index=idx)  # $ vol ~ price*2M >> floor
+    df = pd.DataFrame(cols, index=idx)
+    df.columns = pd.MultiIndex.from_tuples(df.columns)
+    return df
+
+def test_prescreen_keeps_top_by_rs_plus_protected(monkeypatch):
+    tickers = [f"T{i}" for i in range(100)]
+    monkeypatch.setattr(discovery.data_mod, "fetch_ohlcv", lambda ts, period="1y": _fake_ohlcv(list(ts)))
+    monkeypatch.setattr(config, "DISCOVERY_STAGE1_KEEP", 10)
+    survivors, metrics = discovery.prescreen_universe(tickers, protected={"T99"})
+    assert len(survivors) <= 10 + 1            # top-10 + the protected straggler
+    assert "T0" in survivors                    # strongest RS kept
+    assert "T99" in survivors                    # protected kept despite weak RS
+    assert metrics["T0"]["rs_pct"] is not None   # metrics carried for reuse in stage 2
+
+def test_prescreen_liquidity_gate_drops_illiquid(monkeypatch):
+    tickers = ["LIQ", "ILLIQ"]
+    def fake(ts, period="1y"):
+        df = _fake_ohlcv(list(ts))
+        df[("Volume", "ILLIQ")] = 1.0           # ~$ vol far below floor
+        return df
+    monkeypatch.setattr(discovery.data_mod, "fetch_ohlcv", fake)
+    monkeypatch.setattr(config, "DISCOVERY_STAGE1_KEEP", 10)
+    survivors, _ = discovery.prescreen_universe(tickers, protected=set())
+    assert "LIQ" in survivors and "ILLIQ" not in survivors
+
+def test_prescreen_failopen_when_no_prices(monkeypatch):
+    tickers = [f"T{i}" for i in range(5)]
+    monkeypatch.setattr(discovery.data_mod, "fetch_ohlcv", lambda ts, period="1y": pd.DataFrame())
+    survivors, metrics = discovery.prescreen_universe(tickers, protected={"T0"})
+    assert "T0" in survivors                     # never lose protected names
+    assert metrics == {}
