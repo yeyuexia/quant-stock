@@ -284,8 +284,11 @@ WATCHDOG_BUY_NOTIONAL = 2000.0         # USD notional per buy signal
 TRANSACTION_COST_BPS = 5         # ~$0.05 per $100 traded
 
 # ── Candidate individual stocks for deeper analysis ─────────────
-# High-conviction watchlist (updated by screening)
-WATCHLIST = [
+# Hand-curated SEED watchlist. This literal is owned by humans — keep the
+# comments and grouping; discovery.py NEVER rewrites this block. Auto-
+# discovered names live in watchlist_auto.json (see below) and are unioned
+# in to form the final WATCHLIST.
+WATCHLIST_SEED = [
     # Mega-cap tech
     "AAPL", "MSFT", "GOOGL", "AMZN", "NVDA", "META", "TSLA",
     # Financials
@@ -320,6 +323,65 @@ WATCHLIST = [
     "LUNR",  # Intuitive Machines — space/lunar missions
     "RDDT",  # Reddit — social platform, recently IPO'd
 ]
+
+# Auto-discovered tickers (appended by `discovery.py --update`, trimmed by
+# `--prune --confirm`). A generated file — never hand-edit it; edit
+# WATCHLIST_SEED above instead.
+WATCHLIST_AUTO_PATH = os.path.join(os.path.dirname(__file__), "watchlist_auto.json")
+
+
+def _is_valid_ticker(t) -> bool:
+    """Same validity rule discovery uses: non-empty alpha (dots/dashes ok), len<=5."""
+    return (
+        isinstance(t, str)
+        and bool(t)
+        and t.replace(".", "").replace("-", "").isalpha()
+        and len(t) <= 5
+    )
+
+
+def _load_auto_watchlist() -> list:
+    """Load auto-discovered tickers from WATCHLIST_AUTO_PATH.
+
+    Fail-open: a missing or corrupt file (or any non-list/garbage payload)
+    yields [] so the seed list is used alone — discovery problems must never
+    crash config import.
+    """
+    path = WATCHLIST_AUTO_PATH
+    if not os.path.exists(path):
+        return []
+    try:
+        with open(path) as f:
+            data = json.load(f)
+    except (OSError, json.JSONDecodeError) as e:
+        _logging.warning(f"config: watchlist_auto.json unreadable ({e}); using seed only")
+        return []
+    if not isinstance(data, list):
+        _logging.warning("config: watchlist_auto.json not a list; using seed only")
+        return []
+    out, seen = [], set()
+    for t in data:
+        if _is_valid_ticker(t) and t not in seen:
+            seen.add(t)
+            out.append(t)
+    return out
+
+
+def _union_watchlist(seed: list, auto: list) -> list:
+    """Seed first, then auto-only names; deduped, order preserved."""
+    out = list(seed)
+    seen = set(seed)
+    for t in auto:
+        if t not in seen:
+            seen.add(t)
+            out.append(t)
+    return out
+
+
+WATCHLIST_AUTO = _load_auto_watchlist()
+# Final list every consumer (screener / sentiment / discovery.merge_candidates)
+# reads. The quant-subagent override allowlist still targets this name.
+WATCHLIST = _union_watchlist(WATCHLIST_SEED, WATCHLIST_AUTO)
 
 # ── Alpaca broker ───────────────────────────────────────────────
 # ALPACA_LIVE_CONFIRM is intentionally not surfaced here — broker.py reads it

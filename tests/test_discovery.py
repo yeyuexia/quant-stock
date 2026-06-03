@@ -327,72 +327,184 @@ def test_record_screener_pass_stamps_today(monkeypatch, tmp_path):
 
 # ── Audit log ────────────────────────────────────────────────────
 
-# ── prune_stale_from_config: surgical removal ────────────────────
+# ── watchlist_auto.json: generated auto-discovery file ───────────
+# discovery --update / --prune now operate on config.WATCHLIST_AUTO_PATH
+# (a generated JSON file), NEVER on config.py. The hand-curated WATCHLIST
+# block in config.py is the SEED and is never mutated by discovery.
 
-def test_prune_stale_from_config_removes_listed(monkeypatch, tmp_path):
-    """prune_stale_from_config deletes exactly the named tickers from
-    config.py WATCHLIST and preserves the rest in order."""
-    fake_config = tmp_path / "config.py"
-    fake_config.write_text(
-        'WATCHLIST = [\n    "AAA",\n    "BBB",\n    "CCC",\n    "DDD",\n]\n'
-        'OTHER = 1\n'
-    )
-    monkeypatch.setattr(discovery.os.path, "dirname",
-                        lambda p: str(tmp_path) if p == discovery.__file__ else os.path.dirname(p))
-    monkeypatch.setattr(config, "WATCHLIST", ["AAA", "BBB", "CCC", "DDD"])
-
-    kept, removed = discovery.prune_stale_from_config(["BBB", "DDD"])
-    assert kept == ["AAA", "CCC"]
-    assert removed == ["BBB", "DDD"]
-
-    new_content = fake_config.read_text()
-    assert '"AAA",' in new_content
-    assert '"CCC",' in new_content
-    assert '"BBB"' not in new_content
-    assert '"DDD"' not in new_content
-    assert "OTHER = 1" in new_content  # rest of file untouched
+@pytest.fixture
+def auto_path(tmp_path, monkeypatch):
+    """Redirect the generated auto-watchlist file into tmp_path."""
+    p = tmp_path / "watchlist_auto.json"
+    monkeypatch.setattr(config, "WATCHLIST_AUTO_PATH", str(p))
+    return p
 
 
-def test_prune_stale_from_config_noop_when_ticker_not_present(monkeypatch, tmp_path):
-    fake_config = tmp_path / "config.py"
-    fake_config.write_text('WATCHLIST = [\n    "AAA",\n    "BBB",\n]\n')
-    monkeypatch.setattr(discovery.os.path, "dirname",
-                        lambda p: str(tmp_path) if p == discovery.__file__ else os.path.dirname(p))
-    monkeypatch.setattr(config, "WATCHLIST", ["AAA", "BBB"])
-    kept, removed = discovery.prune_stale_from_config(["ZZZ"])
-    assert kept == ["AAA", "BBB"]
+def test_config_unions_seed_and_auto(tmp_path, monkeypatch):
+    """config.WATCHLIST = seed (config.py literal) ∪ auto file (deduped, order)."""
+    import importlib
+    auto = tmp_path / "watchlist_auto.json"
+    auto.write_text(json.dumps(["AAPL", "WMT", "ZNGA"]))  # AAPL/WMT are seed dupes
+    monkeypatch.setattr(config, "WATCHLIST_AUTO_PATH", str(auto))
+    reloaded = config._load_auto_watchlist()
+    assert reloaded == ["AAPL", "WMT", "ZNGA"]
+    union = config._union_watchlist(config.WATCHLIST_SEED, reloaded)
+    # seed first, then auto-only names, deduped, order preserved
+    assert union[: len(config.WATCHLIST_SEED)] == config.WATCHLIST_SEED
+    assert "ZNGA" in union
+    assert union.count("AAPL") == 1
+    assert union.count("WMT") == 1
+
+
+def test_config_fails_open_on_missing_auto_file(tmp_path, monkeypatch):
+    """Missing watchlist_auto.json → seed only, no crash."""
+    monkeypatch.setattr(config, "WATCHLIST_AUTO_PATH", str(tmp_path / "nope.json"))
+    assert config._load_auto_watchlist() == []
+    union = config._union_watchlist(config.WATCHLIST_SEED, config._load_auto_watchlist())
+    assert union == config.WATCHLIST_SEED
+
+
+def test_config_fails_open_on_corrupt_auto_file(tmp_path, monkeypatch):
+    """Corrupt JSON → seed only, no crash."""
+    bad = tmp_path / "watchlist_auto.json"
+    bad.write_text("{not valid json[[[")
+    monkeypatch.setattr(config, "WATCHLIST_AUTO_PATH", str(bad))
+    assert config._load_auto_watchlist() == []
+
+
+def test_config_auto_file_filters_invalid_entries(tmp_path, monkeypatch):
+    """Only non-empty alpha (dotted/dashed) strings of len<=5 are accepted."""
+    auto = tmp_path / "watchlist_auto.json"
+    auto.write_text(json.dumps(
+        ["GOOD", "BRK-B", "123", "TOOLONG", "", "  ", 42, None, "OK"]
+    ))
+    monkeypatch.setattr(config, "WATCHLIST_AUTO_PATH", str(auto))
+    assert config._load_auto_watchlist() == ["GOOD", "BRK-B", "OK"]
+
+
+def test_config_watchlist_override_length_guard_still_holds():
+    """The override-allowlist length bounds on WATCHLIST are unchanged."""
+    assert config._OVERRIDE_SCHEMA["WATCHLIST"][1] == 1
+    assert config._OVERRIDE_SCHEMA["WATCHLIST"][2] == 200
+
+
+# ── --update: append to watchlist_auto.json, never config.py ──────
+
+def test_update_appends_to_auto_file(auto_path):
+    """update_config_watchlist writes new tickers to watchlist_auto.json."""
+    combined = discovery.update_config_watchlist(["NEWA", "NEWB"])
+    assert "NEWA" in combined and "NEWB" in combined
+    assert auto_path.exists()
+    stored = json.loads(auto_path.read_text())
+    assert stored == ["NEWA", "NEWB"]
+
+
+def test_update_is_append_only_and_deduped(auto_path):
+    """Second update appends without duplicating or reordering existing entries."""
+    discovery.update_config_watchlist(["NEWA", "NEWB"])
+    discovery.update_config_watchlist(["NEWB", "NEWC"])  # NEWB already present
+    stored = json.loads(auto_path.read_text())
+    assert stored == ["NEWA", "NEWB", "NEWC"]
+
+
+def test_update_does_not_touch_config_py(auto_path):
+    """--update must never rewrite config.py (seed comments preserved)."""
+    config_path = os.path.join(os.path.dirname(config.__file__), "config.py")
+    before = open(config_path).read()
+    discovery.update_config_watchlist(["NEWA", "NEWB"])
+    after = open(config_path).read()
+    assert before == after
+    # The hand-curated comment must still be present.
+    assert "# Mega-cap tech" in after
+
+
+def test_update_combined_includes_seed(auto_path, monkeypatch):
+    """Returned `combined` is seed ∪ auto so existing callers' counts are sane."""
+    monkeypatch.setattr(config, "WATCHLIST_SEED", ["SEED1", "SEED2"])
+    combined = discovery.update_config_watchlist(["NEWA"])
+    assert combined[:2] == ["SEED1", "SEED2"]
+    assert "NEWA" in combined
+
+
+# ── --prune: remove only auto entries; protect seed ──────────────
+
+def test_prune_removes_only_auto_entries(auto_path, monkeypatch):
+    """prune_stale removes stale names from the auto file, preserving order."""
+    auto_path.write_text(json.dumps(["AUTOA", "AUTOB", "AUTOC"]))
+    kept, removed, seed_skipped = discovery.prune_stale_from_config(["AUTOB"])
+    assert kept == ["AUTOA", "AUTOC"]
+    assert removed == ["AUTOB"]
+    assert seed_skipped == []
+    assert json.loads(auto_path.read_text()) == ["AUTOA", "AUTOC"]
+
+
+def test_prune_protects_seed_names(auto_path, monkeypatch):
+    """A stale name that's a SEED (not in the auto file) is skipped, not removed."""
+    monkeypatch.setattr(config, "WATCHLIST_SEED", ["SEEDA", "SEEDB"])
+    auto_path.write_text(json.dumps(["AUTOA"]))
+    # SEEDA is seed-only; AUTOA is in the auto file
+    kept, removed, seed_skipped = discovery.prune_stale_from_config(["SEEDA", "AUTOA"])
+    assert removed == ["AUTOA"]
+    assert seed_skipped == ["SEEDA"]
+    assert json.loads(auto_path.read_text()) == []
+
+
+def test_prune_does_not_touch_config_py(auto_path):
+    """--prune must never rewrite config.py."""
+    auto_path.write_text(json.dumps(["AUTOA", "AUTOB"]))
+    config_path = os.path.join(os.path.dirname(config.__file__), "config.py")
+    before = open(config_path).read()
+    discovery.prune_stale_from_config(["AUTOA"])
+    after = open(config_path).read()
+    assert before == after
+
+
+def test_prune_noop_when_ticker_not_present(auto_path):
+    auto_path.write_text(json.dumps(["AUTOA", "AUTOB"]))
+    kept, removed, seed_skipped = discovery.prune_stale_from_config(["ZZZ"])
+    assert kept == ["AUTOA", "AUTOB"]
     assert removed == []
+    # ZZZ is neither seed nor auto → reported as seed-skipped is wrong; it's
+    # simply absent. It must NOT appear in removed.
+    assert "ZZZ" not in removed
 
 
 def test_prune_main_confirm_skips_never_seen(monkeypatch, tmp_path):
-    """When --prune --confirm runs, 'never seen' entries must NOT be auto-deleted —
-    only explicit-stale (days >= threshold) tickers are removed."""
+    """--prune --confirm removes explicit-stale AUTO names only; 'never seen'
+    entries are skipped and a stale SEED name is left in place."""
     import datetime as _dt
-    fake_config = tmp_path / "config.py"
-    fake_config.write_text(
-        'WATCHLIST = [\n    "FRESH",\n    "STALE",\n    "NEWBIE",\n]\n'
-    )
-    monkeypatch.setattr(discovery.os.path, "dirname",
-                        lambda p: str(tmp_path) if p == discovery.__file__ else os.path.dirname(p))
+    auto = tmp_path / "watchlist_auto.json"
+    auto.write_text(json.dumps(["SAUTO", "NEWB"]))  # SAUTO = stale auto name
+    monkeypatch.setattr(config, "WATCHLIST_AUTO_PATH", str(auto))
     monkeypatch.setattr(discovery, "LASTPASS_PATH", str(tmp_path / "lp.json"))
-    monkeypatch.setattr(config, "WATCHLIST", ["FRESH", "STALE", "NEWBIE"])
+    # Seed has a stale name too; it must be protected.
+    monkeypatch.setattr(config, "WATCHLIST_SEED", ["SSEED", "FRESH"])
+    monkeypatch.setattr(config, "WATCHLIST",
+                        ["SSEED", "FRESH", "SAUTO", "NEWB"])
     monkeypatch.setattr(config, "DISCOVERY_STALE_DAYS", 30)
 
     today = _dt.date.today()
     discovery._save_lastpass({
         "FRESH": (today - _dt.timedelta(days=5)).isoformat(),
-        "STALE": (today - _dt.timedelta(days=120)).isoformat(),
-        # NEWBIE absent → "never seen" → must NOT be auto-pruned
+        "SSEED": (today - _dt.timedelta(days=120)).isoformat(),
+        "SAUTO": (today - _dt.timedelta(days=120)).isoformat(),
+        # NEWB absent → never seen → not auto-pruned
     })
+
+    config_path = os.path.join(os.path.dirname(config.__file__), "config.py")
+    cfg_before = open(config_path).read()
 
     monkeypatch.setattr(sys, "argv", ["discovery.py", "--prune", "--confirm"])
     rc = discovery.main()
     assert rc == 0
 
-    new_content = fake_config.read_text()
-    assert '"FRESH",' in new_content
-    assert '"NEWBIE",' in new_content   # preserved even though never seen
-    assert '"STALE"' not in new_content
+    # config.py untouched
+    assert open(config_path).read() == cfg_before
+    # auto file: SAUTO removed; NEWB kept (never seen); SSEED never
+    # was in the auto file so it stays out of it (and was protected as seed).
+    stored = json.loads(auto.read_text())
+    assert "SAUTO" not in stored
+    assert "NEWB" in stored
 
 
 # ── screener hook wiring ─────────────────────────────────────────

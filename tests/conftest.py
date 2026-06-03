@@ -19,6 +19,7 @@ _ISOLATED_PATHS = [
     ("config", "ENTRY_PIVOTS_PATH",        "entry_pivots.json"),
     ("config", "PENDING_ORDERS_PATH",      "pending_orders.json"),
     ("config", "PENDING_PLAN_PATH",        "pending_plan.json"),
+    ("config", "WATCHLIST_AUTO_PATH",      "watchlist_auto.json"),
     # orders — re-binds several config paths at import; patch its copies too
     ("orders", "PORTFOLIO_PATH",           "portfolio.json"),
     ("orders", "DAILY_LOG_PATH",           "orders_events.csv"),

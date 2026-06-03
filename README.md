@@ -65,7 +65,7 @@ python3 rebalancer.py --tranche core
 | `timeutils.py` | Shared `now_et()` + `is_rth_now()` helpers used by both executor and watchdog. |
 | `sepa_exits.py` | Pure rule library for Minervini SEPA exits: R-multiple, failed-breakout, climax detection, 21EMA backstop. Watchdog calls into it. Hardened against corrupt position metadata (R ≤ 0 → None, bad entry_date / missing pivot → False+log not crash); `climax_check` takes explicit `symbol` arg so multi-ticker frames look at the right column; tuning defaults fall back to `config.SEPA_*` so callers can't drift; `config.SEPA_R_TIERS` must be monotonic-ascending in R (validated at config import). |
 | `run.py` | Read-only daily reporter: `python3 run.py` (all sections) / `--section macro` / `--skip backtest` / `--with-review` (LLM cost, off by default) / `--backtest-years N`. Each section wrapped in `safe_section` — runtime errors print a "skipped" marker so partial output stays useful; bug-class exceptions (AttributeError / NameError / TypeError) re-raise so they're not silently swallowed. Risk analysis uses signals' real weights (renormalized over non-SAFE_HAVEN holdings); broker import is lazy so a broken SDK doesn't kill the report; ET-stamped header. |
-| `config.py` | All parameters, mode selection, watchlist, safety caps. Merges `.cache/strategy_overrides.json` from the quant subagent at load time. Unknown `PORTFOLIO_MODE` raises (no silent fallback); list overrides (WATCHLIST etc.) have min/max length bounds; tests are isolated from local strategy overrides via the `_isolate_strategy_overrides` conftest fixture. Public symbol: `config.ETF_LEVERAGED` (was `_ETF_LEVERAGED` — old name kept as alias). |
+| `config.py` | All parameters, mode selection, watchlist, safety caps. Merges `.cache/strategy_overrides.json` from the quant subagent at load time. Unknown `PORTFOLIO_MODE` raises (no silent fallback); list overrides (WATCHLIST etc.) have min/max length bounds; tests are isolated from local strategy overrides via the `_isolate_strategy_overrides` conftest fixture. `WATCHLIST` = the hand-curated `WATCHLIST_SEED` literal unioned with auto-discovered names loaded from `watchlist_auto.json` (fail-open if missing/corrupt). Public symbol: `config.ETF_LEVERAGED` (was `_ETF_LEVERAGED` — old name kept as alias). |
 | `momentum.py` / `screener.py` / `sentiment.py` / `risk.py` / `backtest.py` / `discovery.py` / `indicators.py` / `baseline.py` / `investor_agent.py` | Signal and analytics modules. |
 | `data.py` | yfinance fetch + cache layer. String tickers auto-wrap to `[...]` (no garbage cache keys); `fetch_ohlcv` always returns MultiIndex columns regardless of ticker count; all writes go through `fileio.atomic_write_*` (fcntl + tmp+rename); `fetch_info` is fail-open like `fetch_fundamentals` (consistent contract); `fetch_fundamentals` reuses `fetch_info`'s cache to avoid double `Ticker.info` round-trips; logger warnings on partial-failure paths so silent yfinance degradation is observable; 1-retry helper + module-level `ThreadPoolExecutor` shared across all timeout-guarded fetches. |
 | `macro.py` | FRED-based regime detector. 1-retry on transient FRED errors; atomic CSV cache writes (fcntl + tmp+rename); proper Sahm Rule implementation (rolling 3m MA vs min of prior 12 3m MAs); yield-curve returns N/A on missing data (no magic 4.0 fallback); composite normalizes over only the indicators that returned data so partial outages don't dilute the score toward 0. CLI: `python3 macro.py` (print regime) / `python3 macro.py --refresh` (force-fetch all series). |
@@ -102,13 +102,21 @@ python3 watchdog.py --portfolio  # live positions + P&L from Alpaca
 # the FULL S&P 500 (~503 names). DISCOVERY_SP500_BATCH=520 returns the whole
 # index every run; DISCOVERY_MAX_SCAN=800 is a ceiling that leaves room for it.
 # Note: the bulk universe is S&P 500 only — names outside the index (e.g. MRVL)
-# are NOT discovered and must be added to config.WATCHLIST by hand.
+# are NOT discovered and must be added to config.WATCHLIST_SEED by hand.
+#
+# Auto-discovered names live in watchlist_auto.json (config.WATCHLIST_AUTO_PATH),
+# a GENERATED file. config.py loads it and unions it onto the hand-curated
+# WATCHLIST_SEED literal to form config.WATCHLIST (seed first, then auto, deduped).
+# --update / --prune touch ONLY watchlist_auto.json — they NEVER rewrite config.py,
+# so the hand-curated WATCHLIST_SEED comments/grouping are preserved. A missing or
+# corrupt watchlist_auto.json fails open (seed-only). Only valid tickers (alpha,
+# dots/dashes ok, ≤5 chars) are accepted from the file.
 python3 discovery.py                # scan market for new candidates
 python3 discovery.py --trending     # list smart-money tickers (13F + ETF + ARK + Congress)
 python3 discovery.py --include-reddit  # also harvest Reddit-trending tickers
-python3 discovery.py --update       # scan + append top 50 to config.WATCHLIST
+python3 discovery.py --update       # scan + append top 50 to watchlist_auto.json
 python3 discovery.py --prune        # list watchlist names not seen by CANSLIM in N days
-python3 discovery.py --prune --confirm  # also remove them from config.WATCHLIST (never-seen entries are kept)
+python3 discovery.py --prune --confirm  # remove stale AUTO names from watchlist_auto.json (seed names + never-seen entries are kept)
 
 # Tests
 python3 -m pytest                              # unit tests only (integration deselected)
@@ -237,7 +245,7 @@ Ranks 19 US ETFs (+ 6 leveraged in growth mode) by a composite momentum score bl
 
 ### CANSLIM Technical Stock Screen (+ VCP base detection)
 
-Runs against `config.WATCHLIST` (≈50 hand-curated tickers, augmentable by `discovery.py --update` or low-risk additions from the quant subagent). Every survivor of the three technical hard gates (RS / ADR / EMA) is stamped into `.cache/discovery_lastpass.json` via `discovery.record_screener_pass`, which closes the loop with `discovery.py --prune` (lists watchlist names that haven't passed in ≥ `DISCOVERY_STALE_DAYS` = 90 days; `--confirm` actually removes them from `config.WATCHLIST` — "never seen" entries are never auto-pruned). Two-stage filter, then composite ranking:
+Runs against `config.WATCHLIST` = the hand-curated `WATCHLIST_SEED` (≈50 tickers) unioned with auto-discovered names from `watchlist_auto.json` (appended by `discovery.py --update`); low-risk additions from the quant subagent still apply on top. Every survivor of the three technical hard gates (RS / ADR / EMA) is stamped into `.cache/discovery_lastpass.json` via `discovery.record_screener_pass`, which closes the loop with `discovery.py --prune` (lists watchlist names that haven't passed in ≥ `DISCOVERY_STALE_DAYS` = 90 days; `--confirm` removes them from `watchlist_auto.json` ONLY — hand-curated seed names and "never seen" entries are never pruned, and `config.py` is never rewritten). Two-stage filter, then composite ranking:
 
 **Stage 1 — CANSLIM C+A fundamental hard gate** (fail-open when data missing):
 - Quarterly EPS YoY ≥ `SCREEN_EPS_Q_GROWTH_MIN` (default 25%)

@@ -11,16 +11,22 @@ Pipeline:
      burst), then ThreadPool-parallel info + fundamentals per ticker.
   3. Score every dimension cross-sectionally (rank percentile) and
      combine with config.DISCOVERY_WEIGHTS.
-  4. Rank, tag, optionally write back to config.WATCHLIST (append-only)
-     and append a one-line audit record to .cache/discovery.log.
+  4. Rank, tag, optionally append top names to watchlist_auto.json
+     (append-only; config.py is never rewritten) and append a one-line
+     audit record to .cache/discovery.log.
+
+Auto-discovered tickers live in watchlist_auto.json (config.WATCHLIST_AUTO_PATH).
+config.py loads that file and unions it with the hand-curated WATCHLIST_SEED to
+form config.WATCHLIST. --update / --prune touch ONLY the JSON file, so the seed
+block's hand-written comments are preserved.
 
 Usage:
   python3 discovery.py                 # full scan, print results
   python3 discovery.py --trending      # quick: just list smart-money + reddit tickers
-  python3 discovery.py --update        # scan + append top 50 to config.WATCHLIST
+  python3 discovery.py --update        # scan + append top 50 to watchlist_auto.json
   python3 discovery.py --include-reddit  # include Reddit-trending as a source
   python3 discovery.py --prune         # list watchlist names not seen in N days
-  python3 discovery.py --prune --confirm # also remove them from config.WATCHLIST
+  python3 discovery.py --prune --confirm # remove stale AUTO names from watchlist_auto.json
 """
 from __future__ import annotations
 import sys
@@ -538,41 +544,57 @@ def generate_watchlist(df: pd.DataFrame, max_per_category: int = 8) -> dict:
     return out
 
 
-def _rewrite_watchlist(new_list: List[str]) -> None:
-    """Atomically rewrite the WATCHLIST block in config.py to `new_list` (in order)."""
-    config_path = os.path.join(os.path.dirname(__file__), "config.py")
-    with open(config_path) as f:
-        content = f.read()
-    new_block = "WATCHLIST = [\n" + "\n".join(f'    "{t}",' for t in new_list) + "\n]"
-    new_content = re.sub(r"WATCHLIST\s*=\s*\[.*?\]", new_block, content, flags=re.DOTALL)
-    with open(config_path, "w") as f:
-        f.write(new_content)
+def _load_auto_file() -> list:
+    """Read the current auto-discovered ticker list (order preserved, [] on miss)."""
+    return config._load_auto_watchlist()
+
+
+def _write_auto_file(tickers: List[str]) -> None:
+    """Atomically (tmp file + os.replace) write the auto-discovered ticker list.
+
+    Writes config.WATCHLIST_AUTO_PATH — config.py is NEVER touched.
+    """
+    path = config.WATCHLIST_AUTO_PATH
+    os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+    tmp = f"{path}.tmp.{os.getpid()}"
+    with open(tmp, "w") as f:
+        json.dump(tickers, f, indent=2)
+    os.replace(tmp, path)
 
 
 def update_config_watchlist(new_tickers: List[str]) -> list:
-    """Append new tickers to config.WATCHLIST (dedupe, preserve order).
+    """Append new tickers to watchlist_auto.json (append-only, dedupe, order kept).
 
-    Append-only. Use prune_stale_from_config (via --prune --confirm) to remove.
+    config.py is NEVER modified — the hand-curated WATCHLIST_SEED block (and its
+    comments) is left intact. Returns the full seed ∪ auto union so callers can
+    report the effective watchlist size.
     """
-    from config import WATCHLIST
-    combined = list(dict.fromkeys(WATCHLIST + new_tickers))
-    _rewrite_watchlist(combined)
-    return combined
+    current = _load_auto_file()
+    combined_auto = list(dict.fromkeys(current + list(new_tickers)))
+    _write_auto_file(combined_auto)
+    return config._union_watchlist(config.WATCHLIST_SEED, combined_auto)
 
 
-def prune_stale_from_config(stale_tickers: List[str]) -> tuple[list, list]:
-    """Remove `stale_tickers` from config.py WATCHLIST.
+def prune_stale_from_config(stale_tickers: List[str]) -> tuple[list, list, list]:
+    """Remove `stale_tickers` from watchlist_auto.json ONLY.
 
-    Returns (kept, removed). Order of kept tickers is preserved.
-    Caller is responsible for deciding which tickers are stale enough to remove
+    A stale name that is NOT in the auto file but IS a hand-curated seed name
+    is skipped (never removed from config.py) and reported separately.
+
+    Returns (kept_auto, removed_auto, seed_skipped). Order of kept entries is
+    preserved. Caller decides which tickers are stale enough to remove
     (typically: filter find_stale_watchlist() to entries with days != None).
     """
-    from config import WATCHLIST
+    auto = _load_auto_file()
+    seed = set(config.WATCHLIST_SEED)
     remove = set(stale_tickers)
-    kept = [t for t in WATCHLIST if t not in remove]
-    removed = [t for t in WATCHLIST if t in remove]
-    _rewrite_watchlist(kept)
-    return kept, removed
+    kept = [t for t in auto if t not in remove]
+    removed = [t for t in auto if t in remove]
+    auto_set = set(auto)
+    # Stale names that live only in the seed are protected, not removed.
+    seed_skipped = [t for t in stale_tickers if t in seed and t not in auto_set]
+    _write_auto_file(kept)
+    return kept, removed, seed_skipped
 
 
 # ── Pruning ─────────────────────────────────────────────────────
@@ -713,7 +735,8 @@ def display_prune(stale: list, *, confirmable_only: bool = False):
         return
     print(f"\n  ── STALE WATCHLIST NAMES (no CANSLIM pass in ≥ {config.DISCOVERY_STALE_DAYS} days) ──")
     if confirmable_only:
-        print(f"  Re-run with --confirm to actually remove these from config.WATCHLIST.")
+        print(f"  Re-run with --confirm to remove auto-discovered names from watchlist_auto.json.")
+        print(f"  Hand-curated seed names (in config.py) are never removed.")
         print(f"  'never seen' entries are NEVER auto-pruned (could be newly added).\n")
     else:
         print(f"  Candidates for removal — use --prune --confirm to apply.\n")
@@ -743,10 +766,16 @@ def main() -> int:
             if not removable:
                 print("\n  Nothing safe to auto-prune (all stale entries are 'never seen').")
                 return 0
-            kept, removed = prune_stale_from_config(removable)
-            print(f"\n  ✓ Removed {len(removed)} stale tickers from config.WATCHLIST: "
-                  f"{', '.join(removed)}")
-            print(f"    WATCHLIST now has {len(kept)} tickers.")
+            kept, removed, seed_skipped = prune_stale_from_config(removable)
+            if removed:
+                print(f"\n  ✓ Removed {len(removed)} stale tickers from "
+                      f"watchlist_auto.json: {', '.join(removed)}")
+            else:
+                print("\n  Nothing removed from watchlist_auto.json.")
+            for t in seed_skipped:
+                print(f"    • {t}: seed — left in place (hand-curated in config.py)")
+            print(f"    watchlist_auto.json now has {len(kept)} auto tickers "
+                  f"(config.py seed untouched).")
         return 0
 
     if trending_only:
@@ -772,7 +801,9 @@ def main() -> int:
     if update_mode:
         new_tickers = df.head(50)["ticker"].tolist()
         combined = update_config_watchlist(new_tickers)
-        print(f"\n  ✓ Updated config.py WATCHLIST: {len(combined)} tickers")
+        print(f"\n  ✓ Appended top discoveries to watchlist_auto.json — "
+              f"effective WATCHLIST is now {len(combined)} tickers "
+              f"(config.py seed untouched).")
         print("    Run 'python3 run.py' to use the new watchlist.")
     else:
         print("\n  To auto-update watchlist:  python3 discovery.py --update")
