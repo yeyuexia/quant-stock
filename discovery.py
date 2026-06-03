@@ -123,6 +123,39 @@ def parse_ishares_holdings_csv(text: str) -> List[str]:
     return list(dict.fromkeys(out))
 
 
+def fetch_etf_full_holdings(symbol: str, url: str) -> List[str]:
+    """Download one ETF's full-holdings CSV and parse out equity tickers.
+    Never raises — returns [] on any network/parse failure."""
+    try:
+        import urllib.request
+        req = urllib.request.Request(
+            url, headers={"User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)"}
+        )
+        with urllib.request.urlopen(req, timeout=20) as resp:
+            text = resp.read().decode("utf-8", "replace")
+        return parse_ishares_holdings_csv(text)
+    except Exception:
+        return []
+
+
+def get_universe_tickers() -> List[str]:
+    """Discovery scan universe = union of config.DISCOVERY_UNIVERSE_ETFS holdings,
+    cached 1 week. Falls back to the Wikipedia S&P 500 list if the CSV download
+    yields too few names (so discovery degrades gracefully, never to empty)."""
+    cached = _cache_get("universe", ttl_hours=168)
+    if cached:
+        return cached[: config.DISCOVERY_UNIVERSE_MAX]
+    tickers: List[str] = []
+    for sym, url in config.DISCOVERY_UNIVERSE_ETFS.items():
+        tickers.extend(fetch_etf_full_holdings(sym, url))
+    tickers = list(dict.fromkeys(tickers))
+    if len(tickers) >= 200:
+        _cache_set("universe", tickers)
+        return tickers[: config.DISCOVERY_UNIVERSE_MAX]
+    # Fallback: keep discovery working even if iShares blocks the download.
+    return get_sp500_tickers()[: config.DISCOVERY_UNIVERSE_MAX]
+
+
 def sp500_round_robin_slice(batch_size: int) -> List[str]:
     """Return the next `batch_size` S&P 500 tickers, advancing the pointer.
 

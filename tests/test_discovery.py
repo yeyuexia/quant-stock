@@ -640,3 +640,28 @@ def test_parse_ishares_holdings_csv_extracts_equities_only():
 def test_parse_ishares_holdings_csv_bad_input_returns_empty():
     assert discovery.parse_ishares_holdings_csv("") == []
     assert discovery.parse_ishares_holdings_csv("no header here\njust,junk\n") == []
+
+
+def test_get_universe_tickers_unions_etfs_and_caches(monkeypatch, tmp_path):
+    # No real network: stub the per-ETF fetch and the disk cache.
+    monkeypatch.setattr(discovery, "CACHE_DIR", str(tmp_path))
+    calls = {"n": 0}
+    def fake_fetch(sym, url):
+        calls["n"] += 1
+        return ["AAPL", "MRVL", "NVDA"] + [f"X{i}" for i in range(300)]
+    monkeypatch.setattr(discovery, "fetch_etf_full_holdings", fake_fetch)
+    monkeypatch.setattr(config, "DISCOVERY_UNIVERSE_ETFS", {"IWB": "http://x"})
+    u1 = discovery.get_universe_tickers()
+    assert "MRVL" in u1 and "AAPL" in u1
+    # second call served from cache → no extra fetch
+    u2 = discovery.get_universe_tickers()
+    assert u1 == u2
+    assert calls["n"] == 1
+
+def test_get_universe_tickers_falls_back_to_sp500(monkeypatch, tmp_path):
+    monkeypatch.setattr(discovery, "CACHE_DIR", str(tmp_path))
+    monkeypatch.setattr(discovery, "fetch_etf_full_holdings", lambda s, u: [])  # download blocked
+    monkeypatch.setattr(discovery, "get_sp500_tickers", lambda: ["SPX1", "SPX2", "SPX3"])
+    monkeypatch.setattr(config, "DISCOVERY_UNIVERSE_ETFS", {"IWB": "http://x"})
+    u = discovery.get_universe_tickers()
+    assert u == ["SPX1", "SPX2", "SPX3"]
