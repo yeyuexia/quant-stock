@@ -4,6 +4,7 @@ scoring, US-only, smart-money harvesting)."""
 import os
 import sys
 import json
+import pathlib
 import tempfile
 import pandas as pd
 import numpy as np
@@ -620,3 +621,22 @@ def test_discovery_universe_config_present_and_sane():
     assert config.DISCOVERY_MIN_DOLLAR_VOLUME > 0
     assert isinstance(config.DISCOVERY_SECTOR_RELATIVE, bool)
     assert 0 <= config.DISCOVERY_GROWTH_EXEMPT_PCTL <= 100
+
+
+# ── iShares full-holdings CSV parser ─────────────────────────────
+
+_FIX = pathlib.Path(__file__).parent / "fixtures" / "ishares_iwb_sample.csv"
+
+def test_parse_ishares_holdings_csv_extracts_equities_only():
+    text = _FIX.read_text()
+    out = discovery.parse_ishares_holdings_csv(text)
+    assert "AAPL" in out
+    assert "MRVL" in out          # the whole point: a non-S&P leader is in Russell 1000
+    assert "BRK.B" in out         # dotted share-class ticker kept
+    assert "USD" not in out       # cash row filtered (Asset Class != Equity)
+    assert "MARGIN_USD" not in out
+    assert out == list(dict.fromkeys(out))  # de-duped, order preserved
+
+def test_parse_ishares_holdings_csv_bad_input_returns_empty():
+    assert discovery.parse_ishares_holdings_csv("") == []
+    assert discovery.parse_ishares_holdings_csv("no header here\njust,junk\n") == []

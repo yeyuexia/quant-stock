@@ -31,6 +31,8 @@ Usage:
 from __future__ import annotations
 import sys
 import os
+import csv
+import io
 import json
 import time
 import re
@@ -92,6 +94,33 @@ def get_sp500_tickers() -> List[str]:
     except Exception:
         pass
     return []
+
+
+def parse_ishares_holdings_csv(text: str) -> List[str]:
+    """Extract equity tickers from an iShares full-holdings CSV.
+
+    The file has a ~9-line preamble before a header row that starts with
+    "Ticker". We DictReader from that row and keep rows whose Asset Class is
+    "Equity", filtering to valid US-equity-style symbols. Returns de-duped,
+    order-preserved tickers; [] on any structural problem (fail-open).
+    """
+    lines = text.splitlines()
+    start = None
+    for i, line in enumerate(lines):
+        if line.lstrip('"').startswith("Ticker"):
+            start = i
+            break
+    if start is None:
+        return []
+    reader = csv.DictReader(io.StringIO("\n".join(lines[start:])))
+    out: List[str] = []
+    for row in reader:
+        if (row.get("Asset Class") or "").strip() != "Equity":
+            continue
+        t = (row.get("Ticker") or "").strip().upper()
+        if t and t.replace(".", "").replace("-", "").isalpha() and len(t) <= 5:
+            out.append(t)
+    return list(dict.fromkeys(out))
 
 
 def sp500_round_robin_slice(batch_size: int) -> List[str]:
