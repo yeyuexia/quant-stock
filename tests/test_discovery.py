@@ -731,3 +731,42 @@ def test_discover_is_two_stage_only_fetches_snapshots_for_survivors(monkeypatch)
     assert seen["arg"] == survivors                      # ONLY survivors hit the expensive path
     assert set(df["ticker"]) == set(survivors)
     assert df.loc[df.ticker == "U0", "rs_pct"].iloc[0] == 90.0   # stage-1 metrics carried through
+
+
+# ── Sector-relative ranking + growth exemption ───────────────────
+
+def test_value_pe_ranked_within_sector(monkeypatch):
+    monkeypatch.setattr(config, "DISCOVERY_SECTOR_RELATIVE", True)
+    monkeypatch.setattr(config, "DISCOVERY_GROWTH_EXEMPT_PCTL", 101.0)  # disable exemption
+    df = pd.DataFrame([
+        {"ticker": "A", "sector": "Tech", "pe": 30, "rev_growth": 0.05, "roe": 0.1,
+         "rs_pct": 50, "eps_q_growth": 0.0, "ret_3m": 0.0, "dist_52w_high": -0.1,
+         "ipo_age_years": 5, "sma50_dist_pct": 0.0, "quarterly_eps": []},
+        {"ticker": "B", "sector": "Tech", "pe": 60, "rev_growth": 0.05, "roe": 0.1,
+         "rs_pct": 50, "eps_q_growth": 0.0, "ret_3m": 0.0, "dist_52w_high": -0.1,
+         "ipo_age_years": 5, "sma50_dist_pct": 0.0, "quarterly_eps": []},
+        {"ticker": "C", "sector": "Util", "pe": 10, "rev_growth": 0.05, "roe": 0.1,
+         "rs_pct": 50, "eps_q_growth": 0.0, "ret_3m": 0.0, "dist_52w_high": -0.1,
+         "ipo_age_years": 5, "sma50_dist_pct": 0.0, "quarterly_eps": []},
+    ])
+    scored = discovery.compute_composite_scores(df.copy())
+    a = scored.loc[scored.ticker == "A", "rank_value_pe"].iloc[0]
+    b = scored.loc[scored.ticker == "B", "rank_value_pe"].iloc[0]
+    assert a > b   # cheaper-within-sector ranks higher
+
+def test_growth_exemption_neutralizes_value_pe(monkeypatch):
+    monkeypatch.setattr(config, "DISCOVERY_SECTOR_RELATIVE", False)
+    monkeypatch.setattr(config, "DISCOVERY_GROWTH_EXEMPT_PCTL", 66.0)
+    df = pd.DataFrame([
+        {"ticker": "HIGROW", "sector": "Tech", "pe": 100, "rev_growth": 0.90, "roe": 0.1,
+         "rs_pct": 50, "eps_q_growth": 0.0, "ret_3m": 0.0, "dist_52w_high": -0.1,
+         "ipo_age_years": 5, "sma50_dist_pct": 0.0, "quarterly_eps": []},
+        {"ticker": "LOGROW1", "sector": "Tech", "pe": 12, "rev_growth": 0.02, "roe": 0.1,
+         "rs_pct": 50, "eps_q_growth": 0.0, "ret_3m": 0.0, "dist_52w_high": -0.1,
+         "ipo_age_years": 5, "sma50_dist_pct": 0.0, "quarterly_eps": []},
+        {"ticker": "LOGROW2", "sector": "Tech", "pe": 20, "rev_growth": 0.03, "roe": 0.1,
+         "rs_pct": 50, "eps_q_growth": 0.0, "ret_3m": 0.0, "dist_52w_high": -0.1,
+         "ipo_age_years": 5, "sma50_dist_pct": 0.0, "quarterly_eps": []},
+    ])
+    scored = discovery.compute_composite_scores(df.copy())
+    assert scored.loc[scored.ticker == "HIGROW", "rank_value_pe"].iloc[0] == 50.0

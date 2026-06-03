@@ -496,34 +496,67 @@ def _pct_rank(series: pd.Series, ascending: bool = True) -> pd.Series:
     return ranked.fillna(50.0)
 
 
+def _pct_rank_within(series: pd.Series, groups: Optional[pd.Series], ascending: bool = True) -> pd.Series:
+    """Percentile rank 0-100 computed WITHIN each group (e.g. GICS sector).
+
+    Falls back to a global rank when groups is None/empty or a group has a single
+    member (a singleton can't be ranked against peers). NaN → 50 (neutral)."""
+    if groups is None or groups.isna().all():
+        return _pct_rank(series, ascending=ascending)
+    out = pd.Series(np.nan, index=series.index)
+    global_rank = _pct_rank(series, ascending=ascending)
+    for g, idx in groups.groupby(groups).groups.items():
+        sub = series.loc[idx]
+        if len(sub) <= 1:
+            out.loc[idx] = global_rank.loc[idx]  # singleton → global
+        else:
+            out.loc[idx] = _pct_rank(sub, ascending=ascending)
+    return out.fillna(50.0)
+
+
 def compute_composite_scores(df: pd.DataFrame, weights: dict = None) -> pd.DataFrame:
-    """Cross-sectional rank for each dimension, weighted sum to `composite_score`."""
+    """Cross-sectional rank for each dimension, weighted sum to `composite_score`.
+
+    Momentum/RS factors rank market-wide; value/quality (value_pe, roe) rank
+    within GICS sector when config.DISCOVERY_SECTOR_RELATIVE and a 'sector' column
+    is present. The top growth cohort (rev_growth percentile >=
+    config.DISCOVERY_GROWTH_EXEMPT_PCTL) is not penalized on value_pe.
+    """
     if df.empty:
         df["composite_score"] = pd.Series(dtype=float)
         return df
     w = weights or config.DISCOVERY_WEIGHTS
 
+    sector = df.get("sector") if (config.DISCOVERY_SECTOR_RELATIVE and "sector" in df.columns) else None
+    if sector is not None:
+        sector = sector.replace("", np.nan)
+
     pct = pd.DataFrame(index=df.index)
     pct["rs"]            = _pct_rank(df.get("rs_pct"))
     pct["rev_growth"]    = _pct_rank(df.get("rev_growth"))
     pct["eps_q_growth"]  = _pct_rank(df.get("eps_q_growth"))
-    pct["roe"]           = _pct_rank(df.get("roe"))
+    pct["roe"]           = _pct_rank_within(df.get("roe"), sector)
     pct["mom_3m"]        = _pct_rank(df.get("ret_3m"))
-    # closer to 52w high is BETTER — dist is ≤ 0, so larger (less negative) ranks higher
     pct["dist_52w_high"] = _pct_rank(df.get("dist_52w_high"))
-    # younger IPOs rank higher: invert (ascending=False)
     pct["ipo_age"]       = _pct_rank(df.get("ipo_age_years"), ascending=False)
     pct["sma50_dist"]    = _pct_rank(df.get("sma50_dist_pct"))
-    # PE: only score POSITIVE P/E names; loss-makers excluded from this dimension
+
     pe = df.get("pe")
     inv_pe = pd.Series(np.where((pe > 0) & pe.notna(), 1.0 / pe, np.nan), index=df.index)
-    pct["value_pe"]      = _pct_rank(inv_pe)
-    # EPS acceleration is a separate boost on top of the weighted sum
-    eps_accel = df.get("quarterly_eps").apply(_eps_acceleration_score)
+    value_pe = _pct_rank_within(inv_pe, sector)
+    # Growth exemption (rank-based → scale-invariant): neutralize value_pe for the
+    # top growth cohort so high-P/E leaders aren't dinged for being expensive.
+    # Use method='min' so ties are resolved conservatively (lower rank), preventing
+    # a 2-stock tied universe from accidentally exceeding the threshold.
+    rev_growth_ser = df.get("rev_growth")
+    rev_pctl = rev_growth_ser.rank(pct=True, method="min", na_option="keep") * 100
+    rev_pctl = rev_pctl.fillna(50.0)
+    value_pe = value_pe.mask(rev_pctl >= config.DISCOVERY_GROWTH_EXEMPT_PCTL, 50.0)
+    pct["value_pe"] = value_pe
 
+    eps_accel = df.get("quarterly_eps").apply(_eps_acceleration_score)
     total_w = sum(w.values())
     score = sum(pct[k] * w[k] for k in w if k in pct.columns) / max(total_w, 1e-9)
-    # Acceleration bonus: up to +5 percentile points
     df["composite_score"] = (score + 5.0 * eps_accel).round(2)
     df["eps_accel_score"] = eps_accel
     for k in pct.columns:
