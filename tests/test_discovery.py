@@ -706,3 +706,28 @@ def test_prescreen_failopen_when_no_prices(monkeypatch):
     survivors, metrics = discovery.prescreen_universe(tickers, protected={"T0"})
     assert "T0" in survivors                     # never lose protected names
     assert metrics == {}
+
+
+def test_discover_is_two_stage_only_fetches_snapshots_for_survivors(monkeypatch):
+    candidates = [f"U{i}" for i in range(50)]
+    monkeypatch.setattr(discovery, "merge_candidates",
+                        lambda **k: (candidates, {t: ["universe"] for t in candidates}))
+    survivors = ["U0", "U1", "U2"]
+    price_metrics = {t: {"rs_pct": 90.0, "ret_3m": 0.1, "dist_52w_high": -0.05,
+                         "sma50_dist_pct": 0.05, "price": 100.0} for t in survivors}
+    monkeypatch.setattr(discovery, "prescreen_universe", lambda c, protected, **k: (survivors, price_metrics))
+
+    seen = {}
+    def fake_snaps(ts, workers=None):
+        seen["arg"] = list(ts)
+        return [{"ticker": t, "name": t, "price": 100.0, "market_cap": 5e9,
+                 "market_cap_B": 5.0, "pe": 20.0, "roe": 0.2, "rev_growth": 0.3,
+                 "div_yield": 0.0, "sector": "Information Technology", "country": "United States",
+                 "ipo_age_years": 4.0, "eps_q_growth": 0.2, "quarterly_eps": [], "debt_equity": 0.5,
+                 "avg_volume": 1e6} for t in ts]
+    monkeypatch.setattr(discovery, "fetch_snapshots_parallel", fake_snaps)
+
+    df, _ = discovery.discover(verbose=False)
+    assert seen["arg"] == survivors                      # ONLY survivors hit the expensive path
+    assert set(df["ticker"]) == set(survivors)
+    assert df.loc[df.ticker == "U0", "rs_pct"].iloc[0] == 90.0   # stage-1 metrics carried through

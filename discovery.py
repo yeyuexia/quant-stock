@@ -622,29 +622,33 @@ def discover(
     include_reddit: bool = False,
     verbose: bool = True,
 ) -> tuple[pd.DataFrame, dict]:
-    """Run the full discovery pipeline. Returns (ranked_df, source_map)."""
+    """Two-stage discovery pipeline. Returns (ranked_df, source_map).
+
+    Stage 1 (cheap): rank the whole universe on universe-wide RS + liquidity,
+    keep the top DISCOVERY_STAGE1_KEEP survivors (+ watchlist/smart-money, which
+    are 'protected'). Stage 2 (expensive): fetch info+fundamentals only for
+    survivors, then compute the peer-relative composite.
+    """
     if verbose:
         print("  Gathering candidates...")
-    candidates, sources = merge_candidates(
-        include_reddit=include_reddit, max_scan=max_scan
-    )
-    if verbose:
-        src_counts = {}
-        for feeds in sources.values():
-            for f in feeds:
-                src_counts[f] = src_counts.get(f, 0) + 1
-        print(f"    {len(candidates)} unique tickers from "
-              + ", ".join(f"{k}={v}" for k, v in sorted(src_counts.items())))
+    candidates, sources = merge_candidates(include_reddit=include_reddit, max_scan=max_scan)
+
+    # Anything sourced by something other than the bulk universe is protected:
+    # never dropped by the Stage-1 liquidity/RS gate.
+    protected = {t for t in candidates if any(s != "universe" for s in sources.get(t, []))}
 
     if verbose:
-        print(f"\n  Fetching snapshots (parallel, {config.DISCOVERY_THREAD_WORKERS} workers)...")
-    snaps = fetch_snapshots_parallel(candidates)
+        print(f"    {len(candidates)} candidates; Stage 1 ranking on price/liquidity...")
+    survivors, price_metrics = prescreen_universe(candidates, protected)
     if verbose:
-        print(f"    {len(snaps)} valid snapshots after equity/US/micro-cap filter")
+        print(f"    {len(survivors)} survivors → Stage 2 (info + fundamentals)")
 
-    if verbose:
-        print("  Batch-downloading 1y prices...")
-    snaps = enrich_with_prices(snaps)
+    snaps = fetch_snapshots_parallel(survivors)
+    # Attach Stage-1 price metrics (no second price download).
+    for s in snaps:
+        m = price_metrics.get(s["ticker"], {})
+        for k in ("ret_3m", "rs_pct", "dist_52w_high", "sma50_dist_pct"):
+            s[k] = m.get(k)
 
     df = pd.DataFrame(snaps)
     if df.empty:
