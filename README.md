@@ -101,8 +101,13 @@ python3 watchdog.py --portfolio  # live positions + P&L from Alpaca
 # Each run scans the deduped union of: config.WATCHLIST + smart-money feeds +
 # the FULL S&P 500 (~503 names). DISCOVERY_SP500_BATCH=520 returns the whole
 # index every run; DISCOVERY_MAX_SCAN=800 is a ceiling that leaves room for it.
-# Note: the bulk universe is S&P 500 only — names outside the index (e.g. MRVL)
-# are NOT discovered and must be added to config.WATCHLIST_SEED by hand.
+# Planned: two-stage pipeline will replace the S&P-500 bulk scan with the iShares
+# Russell 1000 ETF (IWB) full holdings (~1000 names); Stage 1 ranks on OHLCV/RS
+# and keeps DISCOVERY_STAGE1_KEEP=250 survivors for the expensive Stage 2 pass.
+# Config constants for the new pipeline are in DISCOVERY_UNIVERSE_ETFS,
+# DISCOVERY_UNIVERSE_MAX, DISCOVERY_STAGE1_KEEP, DISCOVERY_MIN_PRICE,
+# DISCOVERY_MIN_DOLLAR_VOLUME, DISCOVERY_SECTOR_RELATIVE, and
+# DISCOVERY_GROWTH_EXEMPT_PCTL.
 #
 # Auto-discovered names live in watchlist_auto.json (config.WATCHLIST_AUTO_PATH),
 # a GENERATED file. config.py loads it and unions it onto the hand-curated

@@ -605,3 +605,18 @@ def test_log_run_appends_jsonl(monkeypatch, tmp_path):
     assert rec1["candidates"] == 3
     assert rec1["valid"] == 3
     assert rec1["top_10"] == ["A", "B", "C"]
+
+
+# ── New-universe / two-stage / ranking config ─────────────────────
+
+def test_discovery_universe_config_present_and_sane():
+    import config
+    assert isinstance(config.DISCOVERY_UNIVERSE_ETFS, dict) and config.DISCOVERY_UNIVERSE_ETFS
+    # every value is a URL string
+    assert all(isinstance(u, str) and u.startswith("http") for u in config.DISCOVERY_UNIVERSE_ETFS.values())
+    assert config.DISCOVERY_UNIVERSE_MAX >= 1000
+    assert 50 <= config.DISCOVERY_STAGE1_KEEP <= config.DISCOVERY_UNIVERSE_MAX
+    assert config.DISCOVERY_MIN_PRICE > 0
+    assert config.DISCOVERY_MIN_DOLLAR_VOLUME > 0
+    assert isinstance(config.DISCOVERY_SECTOR_RELATIVE, bool)
+    assert 0 <= config.DISCOVERY_GROWTH_EXEMPT_PCTL <= 100

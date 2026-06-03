@@ -271,6 +271,33 @@ DISCOVERY_REQUIRE_US = True          # screen out non-US-domiciled tickers
 DISCOVERY_TICKER_SOURCES = (         # smart-money signals to harvest
     "13F", "etf-holdings", "ark", "congress",
 )
+# ── Discovery scan universe (方案A: Russell 1000 via iShares full holdings) ──
+# The union of these ETFs' FULL holdings is the discovery scan universe. iShares
+# publishes a daily CSV of every holding (not just the top 25), giving ~1000
+# large+mid-cap US names — far broader than the S&P 500, and it includes growth
+# leaders that sit outside the index. Wikipedia S&P 500 is the fallback if the
+# CSV download is blocked (see discovery.get_universe_tickers).
+DISCOVERY_UNIVERSE_ETFS = {
+    # iShares Russell 1000 ETF (IWB) — large + mid cap, rules-based, daily-updated.
+    "IWB": (
+        "https://www.ishares.com/us/products/239707/"
+        "ishares-russell-1000-etf/1467271812596.ajax"
+        "?fileType=csv&fileName=IWB_holdings&dataType=fund"
+    ),
+}
+DISCOVERY_UNIVERSE_MAX = 2000          # hard safety ceiling on universe size
+# Two-stage screening: Stage 1 (cheap, batched OHLCV) ranks the whole universe on
+# relative strength + liquidity and carries this many survivors into Stage 2
+# (expensive per-ticker info+fundamentals).
+DISCOVERY_STAGE1_KEEP = 250
+DISCOVERY_MIN_PRICE = 5.0              # Stage-1 gate: drop sub-$5 names
+DISCOVERY_MIN_DOLLAR_VOLUME = 5e6      # Stage-1 gate: avg daily $-volume floor
+# Peer-relative ranking: rank value/quality factors within GICS sector so a
+# high-P/E growth leader isn't graded against utilities/staples.
+DISCOVERY_SECTOR_RELATIVE = True
+# Growth exemption (rank-based, scale-invariant): names whose rev-growth percentile
+# is >= this are NOT penalized on the value-P/E factor (neutralized to 50).
+DISCOVERY_GROWTH_EXEMPT_PCTL = 66.0
 DIVIDEND_WITHHOLDING_RATE = 0.30     # W-8BEN: 30% US withholding on dividends
 
 # ── Intraday buy signals (watchdog) ─────────────────────────────
