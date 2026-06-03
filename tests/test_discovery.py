@@ -23,8 +23,8 @@ def test_merge_candidates_is_deterministic(monkeypatch):
     """Two consecutive calls with identical inputs must return identical lists."""
     monkeypatch.setattr(discovery, "get_smart_money_tickers",
                         lambda *a, **kw: {"NVDA": ["13F"], "PLTR": ["ark"]})
-    monkeypatch.setattr(discovery, "sp500_round_robin_slice",
-                        lambda n: ["A", "B", "C", "D"])
+    monkeypatch.setattr(discovery, "get_universe_tickers",
+                        lambda: ["A", "B", "C", "D"])
     monkeypatch.setattr(config, "WATCHLIST", ["AAPL", "MSFT"])
     a, _ = discovery.merge_candidates(max_scan=20)
     b, _ = discovery.merge_candidates(max_scan=20)
@@ -37,8 +37,8 @@ def test_merge_candidates_priority_order(monkeypatch):
                         lambda *a, **kw: {"SMRT1": ["13F"], "SMRT2": ["ark"]})
     monkeypatch.setattr(discovery, "get_reddit_trending_tickers",
                         lambda *a, **kw: ["REDD1"])
-    monkeypatch.setattr(discovery, "sp500_round_robin_slice",
-                        lambda n: ["SPX1", "SPX2"])
+    monkeypatch.setattr(discovery, "get_universe_tickers",
+                        lambda: ["SPX1", "SPX2"])
     monkeypatch.setattr(config, "WATCHLIST", ["WL1", "WL2"])
     ordered, _ = discovery.merge_candidates(include_reddit=True, max_scan=20)
     assert ordered[:2] == ["WL1", "WL2"]
@@ -52,42 +52,39 @@ def test_merge_candidates_dedupes_across_sources(monkeypatch):
     """A ticker present in multiple feeds appears once, with merged source list."""
     monkeypatch.setattr(discovery, "get_smart_money_tickers",
                         lambda *a, **kw: {"AAPL": ["13F", "etf-holdings"]})
-    monkeypatch.setattr(discovery, "sp500_round_robin_slice",
-                        lambda n: ["AAPL", "NVDA"])
+    monkeypatch.setattr(discovery, "get_universe_tickers",
+                        lambda: ["AAPL", "NVDA"])
     monkeypatch.setattr(config, "WATCHLIST", ["AAPL"])
     ordered, sources = discovery.merge_candidates(max_scan=20)
     assert ordered.count("AAPL") == 1
     assert "watchlist" in sources["AAPL"]
     assert "13F" in sources["AAPL"]
-    assert "sp500" in sources["AAPL"]
+    assert "universe" in sources["AAPL"]
 
-
-def test_merge_candidates_includes_full_sp500(monkeypatch):
-    """With production constants, one run must scan the ENTIRE S&P 500 — never a
-    truncated slice. The cap must leave room for the full universe on top of the
-    watchlist + a substantial smart-money set (regression: DISCOVERY_MAX_SCAN was
-    200 / DISCOVERY_SP500_BATCH 50, so a name like MRVL could be skipped run after
-    run)."""
-    universe = [f"SP{i}" for i in range(503)]
-    # Real round-robin returns the full universe when batch >= len(universe); the
-    # doubled list models the wrap so any batch >= 503 yields every name.
-    monkeypatch.setattr(discovery, "sp500_round_robin_slice",
-                        lambda n: (universe * 2)[:n])
-    monkeypatch.setattr(discovery, "get_smart_money_tickers",
-                        lambda *a, **kw: {f"SM{i}": ["13F"] for i in range(150)})
-    monkeypatch.setattr(config, "WATCHLIST", [f"WL{i}" for i in range(51)])
-    ordered, _ = discovery.merge_candidates()  # uses config production constants
-    assert set(universe).issubset(set(ordered)), \
-        "every S&P 500 name must be scanned in a single discovery run"
 
 
 def test_merge_candidates_respects_max_scan(monkeypatch):
     monkeypatch.setattr(discovery, "get_smart_money_tickers", lambda *a, **kw: {})
-    monkeypatch.setattr(discovery, "sp500_round_robin_slice", lambda n: [f"S{i}" for i in range(n)])
+    monkeypatch.setattr(discovery, "get_universe_tickers", lambda: [f"S{i}" for i in range(20)])
     monkeypatch.setattr(config, "WATCHLIST", ["A", "B", "C"])
     ordered, _ = discovery.merge_candidates(max_scan=5)
     assert len(ordered) == 5
     assert ordered[:3] == ["A", "B", "C"]
+
+
+def test_merge_candidates_uses_full_universe(monkeypatch):
+    """merge_candidates now sources the bulk universe from get_universe_tickers,
+    not the S&P 500 round-robin. Watchlist + smart-money still come first."""
+    universe = [f"U{i}" for i in range(1200)]
+    monkeypatch.setattr(discovery, "get_universe_tickers", lambda: universe)
+    monkeypatch.setattr(discovery, "get_smart_money_tickers", lambda *a, **k: {"NVDA": ["13F"]})
+    monkeypatch.setattr(config, "WATCHLIST", ["AAPL", "MSFT"])
+    monkeypatch.setattr(config, "DISCOVERY_UNIVERSE_MAX", 2000)
+    ordered, sources = discovery.merge_candidates()
+    assert ordered[:2] == ["AAPL", "MSFT"]      # watchlist first
+    assert "NVDA" in ordered                      # smart-money present
+    assert set(universe).issubset(set(ordered))   # whole universe scanned
+    assert "universe" in sources["U0"]            # tagged with its source
 
 
 # ── S&P 500 round-robin pointer ───────────────────────────────────

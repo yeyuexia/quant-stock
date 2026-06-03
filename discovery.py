@@ -227,11 +227,11 @@ def merge_candidates(
 ) -> tuple[list, dict]:
     """Deterministic, priority-ordered candidate merge.
 
-    Order: current WATCHLIST → smart-money → Reddit (opt-in) → S&P500 round-robin slice.
-    Returns (ordered_tickers, source_map) where source_map records every feed each
-    ticker came from. Each ticker appears at most once.
+    Order: current WATCHLIST → smart-money → Reddit (opt-in) → full scan universe
+    (config.DISCOVERY_UNIVERSE_ETFS via get_universe_tickers; Russell 1000 today).
+    Returns (ordered_tickers, source_map). Each ticker appears at most once.
     """
-    cap = max_scan or config.DISCOVERY_MAX_SCAN
+    cap = max_scan or config.DISCOVERY_UNIVERSE_MAX
     ordered: list = []
     sources: dict = {}
 
@@ -242,29 +242,23 @@ def merge_candidates(
         sources[ticker] = [source]
         ordered.append(ticker)
 
-    # 1. Current watchlist — always re-scored
     for t in config.WATCHLIST:
         _add(t, "watchlist")
 
-    # 2. Smart money (13F, ETF holdings, ARK, Congress)
     sm = get_smart_money_tickers()
     for t, feeds in sm.items():
         for f in feeds:
             _add(t, f)
 
-    # 3. Reddit (opt-in only)
     if include_reddit:
         for t in get_reddit_trending_tickers():
             _add(t, "reddit")
 
-    # 4. S&P 500 round-robin — fills remaining quota
-    remaining = max(0, cap - len(ordered))
-    if remaining > 0:
-        batch = min(config.DISCOVERY_SP500_BATCH, remaining)
-        for t in sp500_round_robin_slice(batch):
-            if len(ordered) >= cap:
-                break
-            _add(t, "sp500")
+    # Bulk universe — fills the rest up to the cap.
+    for t in get_universe_tickers():
+        if len(ordered) >= cap:
+            break
+        _add(t, "universe")
 
     return ordered[:cap], sources
 

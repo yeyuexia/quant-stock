@@ -99,15 +99,14 @@ python3 watchdog.py --portfolio  # live positions + P&L from Alpaca
 
 # Stock discovery
 # Each run scans the deduped union of: config.WATCHLIST + smart-money feeds +
-# the FULL S&P 500 (~503 names). DISCOVERY_SP500_BATCH=520 returns the whole
-# index every run; DISCOVERY_MAX_SCAN=800 is a ceiling that leaves room for it.
-# Planned: two-stage pipeline will replace the S&P-500 bulk scan with the iShares
-# Russell 1000 ETF (IWB) full holdings (~1000 names); Stage 1 ranks on OHLCV/RS
-# and keeps DISCOVERY_STAGE1_KEEP=250 survivors for the expensive Stage 2 pass.
-# Config constants for the new pipeline are in DISCOVERY_UNIVERSE_ETFS,
-# DISCOVERY_UNIVERSE_MAX, DISCOVERY_STAGE1_KEEP, DISCOVERY_MIN_PRICE,
-# DISCOVERY_MIN_DOLLAR_VOLUME, DISCOVERY_SECTOR_RELATIVE, and
-# DISCOVERY_GROWTH_EXEMPT_PCTL.
+# the FULL Russell 1000 universe via get_universe_tickers() (iShares IWB full
+# holdings, ~1000 names, 1-week cached; falls back to Wikipedia S&P 500 list
+# if the download is blocked). DISCOVERY_UNIVERSE_MAX caps the total candidate
+# pool. Config constants: DISCOVERY_UNIVERSE_ETFS, DISCOVERY_UNIVERSE_MAX,
+# DISCOVERY_STAGE1_KEEP, DISCOVERY_MIN_PRICE, DISCOVERY_MIN_DOLLAR_VOLUME,
+# DISCOVERY_SECTOR_RELATIVE, and DISCOVERY_GROWTH_EXEMPT_PCTL.
+# The old S&P-500 round-robin (sp500_round_robin_slice) is still defined but
+# is no longer called by merge_candidates.
 #
 # Auto-discovered names live in watchlist_auto.json (config.WATCHLIST_AUTO_PATH),
 # a GENERATED file. config.py loads it and unions it onto the hand-curated
