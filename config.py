@@ -1,14 +1,19 @@
 """
-Portfolio configuration for a $100,000 quantitative investment system.
+Portfolio configuration for a quantitative investment system.
 
-Capital structure (two-tranche):
-  Core tranche    $90,000 (90%) — balanced mode: ETF rotation + stock screen
-  Aggressive tranche $10,000 (10%) — leveraged ETF momentum, top-2, weekly
+Capital structure (two-tranche, sized dynamically from Alpaca equity):
+  Core tranche       (1 - AGGRESSIVE_TRANCHE_PCT) of system equity
+                     — ETF rotation + CANSLIM stock screen
+  Aggressive tranche AGGRESSIVE_TRANCHE_PCT of system equity
+                     — leveraged ETF momentum, top-2
+
+Both tranches rebalance DAILY; the REBALANCE_BAND_PCT (5% of tranche capital)
+is the actual churn brake — drifts smaller than the band are treated as holds.
 
 Core modes (set via PORTFOLIO_MODE env var):
   conservative — capital preservation, ETF-heavy, wide stops
   balanced     — default, mix of ETFs and stocks
-  growth       — aggressive, small/mid-cap heavy, leveraged ETFs, tighter rotation
+  growth       — aggressive, small/mid-cap heavy, leveraged ETFs in core too
 """
 import os
 
@@ -21,9 +26,11 @@ PORTFOLIO_MODE = os.environ.get("PORTFOLIO_MODE", "balanced")
 INITIAL_CAPITAL = 100_000
 
 # ── Two-Tranche Structure ────────────────────────────────────────
-# Core tranche:       $90,000 — standard balanced strategy
-# Aggressive tranche: $10,000 — leveraged ETF rotation, no stocks
-AGGRESSIVE_TRANCHE_PCT = 0.10    # 10% = $10,000
+# Tranche capital is computed at runtime from snap.equity (see
+# rebalancer._system_equity), so the system compounds as the account grows.
+# INITIAL_CAPITAL above is just a defensive fallback if the live equity
+# fetch fails on a brand-new account.
+AGGRESSIVE_TRANCHE_PCT = 0.10    # 10% to aggressive sleeve
 
 # ── Mode-specific parameters ────────────────────────────────────
 _MODE_PARAMS = {
@@ -36,7 +43,7 @@ _MODE_PARAMS = {
         "etf_allocation_pct": 0.90,      # 90% ETFs, 10% stocks
         "stock_allocation_pct": 0.10,
         "momentum_top_n": 3,
-        "rebalance_days": 30,
+        "rebalance_days": 1,             # daily — 5% REBALANCE_BAND_PCT throttles churn
         "use_leveraged_etfs": False,
     },
     "balanced": {
@@ -48,7 +55,7 @@ _MODE_PARAMS = {
         "etf_allocation_pct": 0.80,      # 80% ETFs, 20% stocks
         "stock_allocation_pct": 0.20,
         "momentum_top_n": 4,
-        "rebalance_days": 30,
+        "rebalance_days": 1,             # daily — 5% REBALANCE_BAND_PCT throttles churn
         "use_leveraged_etfs": False,
     },
     "growth": {
@@ -60,15 +67,24 @@ _MODE_PARAMS = {
         "etf_allocation_pct": 0.50,      # 50% ETFs, 50% stocks
         "stock_allocation_pct": 0.50,
         "momentum_top_n": 3,             # concentrated bets
-        "rebalance_days": 14,            # bi-weekly rebalance
+        "rebalance_days": 1,             # daily — 5% REBALANCE_BAND_PCT throttles churn
         "use_leveraged_etfs": True,      # allow TQQQ, SOXL, etc.
     },
 }
 
-_params = _MODE_PARAMS.get(PORTFOLIO_MODE, _MODE_PARAMS["balanced"])
+if PORTFOLIO_MODE not in _MODE_PARAMS:
+    raise ValueError(
+        f"unknown PORTFOLIO_MODE: {PORTFOLIO_MODE!r}; "
+        f"expected one of {sorted(_MODE_PARAMS)}"
+    )
+
+# Internal: callers should NEVER read `config._params["x"]` directly.
+# Always use the module-level constants (STOP_LOSS_PCT, etc.) derived below
+# — they're what the quant subagent's _OVERRIDE_SCHEMA targets, and what
+# tests monkeypatch. Reading the dict bypasses overrides.
+_params = _MODE_PARAMS[PORTFOLIO_MODE]
 
 MAX_POSITION_PCT = _params["max_position_pct"]
-MAX_POSITIONS = _params["max_positions"]
 CASH_BUFFER_PCT = _params["cash_buffer_pct"]
 STOP_LOSS_PCT = _params["stop_loss_pct"]
 TRAILING_STOP_PCT = _params["trailing_stop_pct"]
@@ -76,23 +92,29 @@ ETF_ALLOCATION_PCT = _params["etf_allocation_pct"]
 STOCK_ALLOCATION_PCT = _params["stock_allocation_pct"]
 USE_LEVERAGED_ETFS = _params["use_leveraged_etfs"]
 
-# ── Aggressive Tranche Parameters ($10,000) ─────────────────────
-# Pure leveraged ETF momentum — top-2 picks, weekly rotation.
+# ── Aggressive Tranche Parameters ───────────────────────────────
+# Pure leveraged ETF momentum — top-2 picks, daily rebalance cadence
+# (5% REBALANCE_BAND_PCT throttles churn; hysteresis prevents whipsaw).
 # Tight stops because leveraged ETFs decay rapidly if held through drawdowns.
 AGGRESSIVE_PARAMS = {
     "momentum_top_n": 2,            # hold only the top-2 leveraged ETFs
-    "max_position_pct": 0.50,       # up to $5,000 per position
     "stop_loss_pct": 0.10,          # cut at -10% (tight — leveraged decay is costly)
     "trailing_stop_pct": 0.15,      # trail at -15% from peak
-    "rebalance_days": 7,            # weekly rotation
+    "rebalance_days": 1,            # daily — 5% REBALANCE_BAND_PCT throttles churn
     "cash_buffer_pct": 0.05,        # keep $500 in cash as reserve
+    "hysteresis_depth": 1,          # held leveraged ETF kept until rank > top_n + depth
 }
 
 # ── Stop-loss ATR scaling (core tranche only) ───────────────────
-# Initial stop = min(STOP_LOSS_PCT, ATR_STOP_MULTIPLIER × ATR(ATR_PERIOD) / last_close).
+# Initial stop = clamp(ATR_STOP_MULTIPLIER × ATR(ATR_PERIOD) / last_close,
+#                      ATR_STOP_FLOOR_PCT, STOP_LOSS_PCT).
 # Aggressive tranche keeps the fixed AGGRESSIVE_PARAMS["stop_loss_pct"].
+# The floor stops near-zero-vol instruments (BIL, T-bill ETFs) from getting
+# an absurdly tight ATR stop that would fire on bid-ask noise. Defensive /
+# safe-haven symbols skip ATR scaling entirely (see orders._effective_stop_pct).
 ATR_PERIOD = 14
 ATR_STOP_MULTIPLIER = 2.0
+ATR_STOP_FLOOR_PCT = 0.02
 
 # ── SEPA take-profit (Phase 1: core tranche only) ────────────────
 # R-multiple scale-out: at each tier, sell `fraction` of initial_qty.
@@ -100,6 +122,13 @@ ATR_STOP_MULTIPLIER = 2.0
 # remaining position is exited when daily close < EMA(SEPA_MA_PERIOD).
 SEPA_ENABLED = True
 SEPA_R_TIERS = [(2.0, 1/3), (3.0, 1/3)]   # (R-multiple, fraction-of-initial-qty)
+# Enforce monotonic-ascending R so sepa_exits.next_r_tier_action can bail on
+# the first unfilled-but-not-reached tier without missing a lower one.
+_r_multiples = [r for r, _ in SEPA_R_TIERS]
+if _r_multiples != sorted(_r_multiples):
+    raise ValueError(
+        f"SEPA_R_TIERS must be ascending in R-multiple, got {_r_multiples}"
+    )
 SEPA_MA_PERIOD = 21
 SEPA_MA_TYPE = "ema"                       # "ema" | "sma"
 SEPA_MA_HISTORY = "6mo"                    # data.fetch_prices period for the EMA
@@ -156,8 +185,10 @@ _ETF_BASE = [
     "SHY",   # Short-term treasury
 ]
 
-_ETF_LEVERAGED = [
-    # Leveraged (growth mode only — 2x/3x daily, high risk)
+ETF_LEVERAGED = [
+    # Leveraged (used by aggressive tranche unconditionally; added to core
+    # universe only in growth mode). 2x/3x daily — high decay if held in
+    # drawdowns.
     "TQQQ",  # 3x Nasdaq-100
     "SOXL",  # 3x Semiconductors
     "UPRO",  # 3x S&P 500
@@ -166,22 +197,33 @@ _ETF_LEVERAGED = [
     "LABU",  # 3x Biotech
 ]
 
-ETF_UNIVERSE = _ETF_BASE + (_ETF_LEVERAGED if USE_LEVERAGED_ETFS else [])
+# Backward-compat alias for the leading-underscore name. Old callers
+# (rebalancer / watchdog / tests) read config._ETF_LEVERAGED — preserved
+# so this rename doesn't cascade into a sweep of unrelated changes.
+_ETF_LEVERAGED = ETF_LEVERAGED
+
+ETF_UNIVERSE = _ETF_BASE + (ETF_LEVERAGED if USE_LEVERAGED_ETFS else [])
 
 SAFE_HAVEN = "BIL"               # T-bill ETF (cash equivalent)
 MOMENTUM_LOOKBACK_MONTHS = [1, 3, 6, 12]
 MOMENTUM_TOP_N = _params["momentum_top_n"]
 SMA_FILTER_PERIOD = 200          # 200-day SMA trend filter
 
+# Hysteresis depth for ETF momentum selection. A held ETF that slips out of
+# top-MOMENTUM_TOP_N is kept as long as it stays within
+# top-(MOMENTUM_TOP_N + MOMENTUM_HYSTERESIS_DEPTH) AND remains above its
+# 200-day SMA. Prevents whipsaw when an ETF oscillates around the cutoff
+# rank. Set to 0 to disable.
+MOMENTUM_HYSTERESIS_DEPTH = 1
+
 # ── Strategy 2: CANSLIM Technical Stock Screen ──────────────────
 # Satellite allocation (20% of portfolio): momentum + base pattern filter.
 
-SCREEN_MIN_MARKET_CAP = 500e6    # $500M+ (liquidity floor)
-SCREEN_MAX_MARKET_CAP = 20e9     # <$20B (avoid mega-caps; focus on mid/small growth)
-SCREEN_TOP_N = 10                # return top 10, pick 2-3
+SCREEN_TOP_N = 10                # screener returns top 10
+STOCK_SLEEVE_TOP_N = 3           # rebalancer picks this many from screener output
 
 # Relative Strength
-SCREEN_RS_MIN = 70               # RS percentile vs universe (0-100); 70+ = leadership
+SCREEN_RS_MIN = 75               # RS percentile vs universe (0-100); 75+ = leadership
 
 # Average Daily Range — volatility/tradability filter
 SCREEN_ADR_MIN = 0.04            # 4% minimum average daily range
@@ -195,10 +237,50 @@ SCREEN_EMA_SLOW = 50
 SCREEN_BASE_WEEKS_MIN = 5        # minimum consolidation weeks
 SCREEN_BASE_WEEKS_MAX = 15       # maximum consolidation weeks
 SCREEN_BASE_DEPTH_MAX = 0.30     # max drawdown within base (30%)
-SCREEN_TIGHTNESS_PCT_MAX = 0.05  # max weekly-close std dev / mean during base
 
-# ── Rebalancing ─────────────────────────────────────────────────
-REBALANCE_FREQUENCY_DAYS = _params["rebalance_days"]
+# CANSLIM C+A fundamental filters (applied before technical screen)
+SCREEN_EPS_Q_GROWTH_MIN = 0.25   # quarterly EPS YoY growth >= 25% (C)
+SCREEN_REV_GROWTH_MIN = 0.20     # TTM/quarterly revenue YoY growth >= 20% (C)
+
+# ── Stock Discovery ─────────────────────────────────────────────
+# discovery.py composite score weights. Each dimension is ranked
+# cross-sectionally (pct percentile, 0-100) then weighted. Weights
+# don't need to sum to 1 — they're applied as multipliers.
+DISCOVERY_WEIGHTS = {
+    "rs":            0.25,   # relative strength percentile (3M/6M/12M blend)
+    "rev_growth":    0.15,   # revenue YoY
+    "eps_q_growth":  0.15,   # latest quarterly EPS YoY
+    "roe":           0.10,   # return on equity
+    "mom_3m":        0.10,   # 3-month price return
+    "dist_52w_high": 0.10,   # distance to 52-week high (closer = higher)
+    "ipo_age":       0.05,   # younger US IPOs score higher (CANSLIM "N")
+    "sma50_dist":    0.05,   # % above 50-day SMA (continuous)
+    "value_pe":      0.05,   # inverse P/E percentile (loss-makers excluded)
+}
+# Ceiling on candidates scanned per run. Set high enough to admit the FULL S&P 500
+# (~503) on top of the watchlist + smart-money names, so no S&P name is ever
+# truncated. It's a ceiling, not a target: the actual count scanned is the deduped
+# union of all sources (~540 today), so headroom here costs nothing.
+DISCOVERY_MAX_SCAN = 800             # candidate ceiling per run after merge
+# >= S&P 500 universe size, so one round-robin slice returns every name each run
+# (the pointer still advances; it just no longer gates coverage).
+DISCOVERY_SP500_BATCH = 520          # full S&P 500 per run (was 50 → round-robin sampling)
+DISCOVERY_THREAD_WORKERS = 8         # yfinance concurrent fetchers
+DISCOVERY_STALE_DAYS = 90            # --prune: stale if not seen in N days
+DISCOVERY_REQUIRE_US = True          # screen out non-US-domiciled tickers
+DISCOVERY_TICKER_SOURCES = (         # smart-money signals to harvest
+    "13F", "etf-holdings", "ark", "congress",
+)
+DIVIDEND_WITHHOLDING_RATE = 0.30     # W-8BEN: 30% US withholding on dividends
+
+# ── Intraday buy signals (watchdog) ─────────────────────────────
+WATCHDOG_BUY_LOOKBACK_DAYS = 10        # down-day volume lookback window
+WATCHDOG_BUY_SCREENER_CACHE_HOURS = 1  # screener result cache lifetime (hours)
+WATCHDOG_BUY_MIN_ELAPSED_MIN = 30      # skip volume estimate if < N min into trading day
+WATCHDOG_BUY_NOTIONAL = 2000.0         # USD notional per buy signal
+
+# ── Rebalancing cost model ──────────────────────────────────────
+# Used by backtest.py only — production cadence comes from REBALANCE_DAYS below.
 TRANSACTION_COST_BPS = 5         # ~$0.05 per $100 traded
 
 # ── Candidate individual stocks for deeper analysis ─────────────
@@ -240,15 +322,13 @@ WATCHLIST = [
 ]
 
 # ── Alpaca broker ───────────────────────────────────────────────
+# ALPACA_LIVE_CONFIRM is intentionally not surfaced here — broker.py reads it
+# directly from os.environ to keep the safety check next to the construction
+# logic. Duplicating it as a module constant invited "config.ALPACA_LIVE_CONFIRM"
+# misuse (the constant was a snapshot at import time; the env can change).
 ALPACA_ENV = os.environ.get("ALPACA_ENV", "paper")         # "paper" | "live"
-ALPACA_LIVE_CONFIRM = os.environ.get("ALPACA_LIVE_CONFIRM") == "yes"
 ALPACA_API_KEY = os.environ.get("ALPACA_API_KEY")
 ALPACA_API_SECRET = os.environ.get("ALPACA_API_SECRET")
-
-# Alpaca API endpoints. The SDK picks these automatically from env, but
-# surfaced here for clarity / dry-run / test overrides.
-ALPACA_PAPER_URL = "https://paper-api.alpaca.markets"
-ALPACA_LIVE_URL = "https://api.alpaca.markets"
 
 # ── Safety rails ────────────────────────────────────────────────
 HALT_PATH = os.path.join(os.path.dirname(__file__), ".cache", "HALT")
@@ -268,6 +348,11 @@ REBALANCE_DAYS = {
     "core": _params["rebalance_days"],
     "aggressive": AGGRESSIVE_PARAMS["rebalance_days"],
 }
+
+# Drift threshold below which reconcile_to_targets treats a position as "hold"
+# (fraction of tranche capital). With daily rebalance cadence, this band is the
+# primary churn-suppression mechanism, so keep it generous.
+REBALANCE_BAND_PCT = 0.05
 
 # ── Intraday execution layer ────────────────────────────────────
 
@@ -324,14 +409,17 @@ import logging as _logging
 
 _OVERRIDES_PATH = os.path.join(os.path.dirname(__file__), ".cache", "strategy_overrides.json")
 
-# Allowlist: key → (expected_type, lower_bound, upper_bound)
-# Bounds of None mean unbounded (for lists).
+# Allowlist: key → (expected_type, lower_bound, upper_bound).
+# For numeric types: lo/hi are value bounds.
+# For list types:    lo/hi are MIN/MAX length (so quant subagent can't push
+#                    e.g. an empty WATCHLIST or a 10K-ticker garbage list).
+# For str types:     lo/hi are unused — None/None.
 # The applier enforces relative-pct bounds (±20%, ±50%); this layer enforces
 # absolute bounds as a second line of defense.
 _OVERRIDE_SCHEMA = {
     # Low-risk (auto-applied by the quant review applier)
-    "WATCHLIST":            (list,  None, None),
-    "NEWS_SHOCK_KEYWORDS":  (list,  None, None),
+    "WATCHLIST":            (list,  1,    200),
+    "NEWS_SHOCK_KEYWORDS":  (list,  1,    100),
     "STOP_LOSS_PCT":        (float, 0.04, 0.20),
     "ATR_STOP_MULTIPLIER":  (float, 1.0,  4.0),
     "TRAILING_STOP_PCT":    (float, 0.06, 0.25),
@@ -348,8 +436,7 @@ _OVERRIDE_SCHEMA = {
     "SCREEN_BASE_WEEKS_MIN":     (int,   3,    15),
     "SCREEN_BASE_WEEKS_MAX":     (int,   8,    52),
     "SCREEN_BASE_DEPTH_MAX":     (float, 0.10, 0.50),
-    "SCREEN_TIGHTNESS_PCT_MAX":  (float, 0.01, 0.15),
-    "MOMENTUM_LOOKBACK_MONTHS":  (list,  None, None),
+    "MOMENTUM_LOOKBACK_MONTHS":  (list,  1,    12),
     "SAFE_HAVEN":                (str,   None, None),
 }
 
@@ -372,10 +459,22 @@ def _apply_overrides():
             continue
         expected_type, lo, hi = _OVERRIDE_SCHEMA[key]
         if not isinstance(value, expected_type):
-            _logging.warning(f"config: override for {key!r} has wrong type {type(value).__name__}")
+            _logging.warning(
+                f"config: override for {key!r} has wrong type {type(value).__name__}"
+            )
             continue
-        if lo is not None and not (lo <= value <= hi):
-            _logging.warning(f"config: override for {key!r}={value} out of bounds [{lo},{hi}]")
+        # For lists: lo/hi mean MIN/MAX length, not value bounds.
+        if isinstance(value, list):
+            if lo is not None and not (lo <= len(value) <= hi):
+                _logging.warning(
+                    f"config: override for {key!r} list length {len(value)} "
+                    f"out of bounds [{lo},{hi}]"
+                )
+                continue
+        elif lo is not None and not (lo <= value <= hi):
+            _logging.warning(
+                f"config: override for {key!r}={value} out of bounds [{lo},{hi}]"
+            )
             continue
         globals()[key] = value
 

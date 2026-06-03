@@ -13,6 +13,7 @@ Produces:
 """
 import os
 import json
+import logging
 import time
 import re
 from collections import Counter
@@ -20,6 +21,10 @@ from datetime import datetime, timedelta
 from typing import Dict, List, Tuple
 
 import pandas as pd
+
+from fileio import atomic_write_json
+
+_log = logging.getLogger(__name__)
 
 CACHE_DIR = os.path.join(os.path.dirname(__file__), ".cache")
 os.makedirs(CACHE_DIR, exist_ok=True)
@@ -76,9 +81,13 @@ def _cache_get(key: str, ttl_minutes: int = 30):
 
 
 def _cache_set(key: str, data):
+    """Lock-protected cache write — concurrent watchdog + run.py shouldn't
+    race on the sentiment cache."""
     path = os.path.join(CACHE_DIR, f"sentiment_{key}.json")
-    with open(path, "w") as f:
-        json.dump(data, f, default=str)
+    try:
+        atomic_write_json(path, data)
+    except Exception as e:
+        _log.warning("sentiment cache write failed for %s: %s", key, e)
 
 
 # ── Yahoo Finance News ──────────────────────────────────────────
@@ -111,7 +120,8 @@ def fetch_yf_news(tickers=None) -> List[dict]:
                     "published": content.get("pubDate", ""),
                     "provider": content.get("provider", {}).get("displayName", ""),
                 })
-        except Exception:
+        except Exception as e:
+            _log.warning("fetch_yf_news: %s failed: %s", t, e)
             continue
 
     # Deduplicate by title
@@ -145,7 +155,8 @@ def fetch_reddit_posts(subreddit: str, limit: int = 25) -> List[dict]:
     try:
         with urllib.request.urlopen(req, timeout=10) as resp:
             data = json.loads(resp.read().decode())
-    except Exception:
+    except Exception as e:
+        _log.warning("fetch_reddit_posts: r/%s failed: %s", subreddit, e)
         return []
 
     posts = []
@@ -180,14 +191,30 @@ def fetch_all_reddit() -> List[dict]:
 
 # ── Sentiment Analysis ──────────────────────────────────────────
 
+def _word_or_phrase_count(text_lower: str, vocabulary) -> int:
+    """Count occurrences of words/phrases in `vocabulary` within `text_lower`.
+    Single-word entries match on \\b word boundary so 'bear' doesn't fire on
+    'bearable' (substring match was the old behavior). Multi-word entries
+    fall back to substring `in` since they're already specific.
+    """
+    n = 0
+    for term in vocabulary:
+        if " " in term:
+            if term in text_lower:
+                n += 1
+        else:
+            if re.search(rf"\b{re.escape(term)}\b", text_lower):
+                n += 1
+    return n
+
+
 def _score_text(text: str) -> Tuple[float, str]:
     """Simple keyword-based sentiment scoring.
     Returns (score, label) where score is -1 to +1."""
     text_lower = text.lower()
-    words = set(text_lower.split())
 
-    bull_count = sum(1 for w in BULLISH_WORDS if w in text_lower)
-    bear_count = sum(1 for w in BEARISH_WORDS if w in text_lower)
+    bull_count = _word_or_phrase_count(text_lower, BULLISH_WORDS)
+    bear_count = _word_or_phrase_count(text_lower, BEARISH_WORDS)
 
     total = bull_count + bear_count
     if total == 0:

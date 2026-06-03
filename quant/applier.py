@@ -9,11 +9,21 @@ import datetime as dt
 import json
 import logging
 import os
+import sys
 from typing import Any, Optional
 
 from quant.schema import ProposedChange, ApplierResult
 
 LOG = logging.getLogger(__name__)
+
+# fileio lives at the repo root — add to sys.path so this module works when
+# imported either as `quant.applier` or as a script from `scripts/quant_apply.py`.
+_REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if _REPO_ROOT not in sys.path:
+    sys.path.insert(0, _REPO_ROOT)
+from fileio import (  # noqa: E402
+    atomic_write_json, atomic_append_text, read_modify_write_json,
+)
 
 
 # ── Tier allowlists ──────────────────────────────────────────────
@@ -46,7 +56,6 @@ _HIGH_RISK_KEYS = {
     "SCREEN_BASE_WEEKS_MIN",
     "SCREEN_BASE_WEEKS_MAX",
     "SCREEN_BASE_DEPTH_MAX",
-    "SCREEN_TIGHTNESS_PCT_MAX",
     "MOMENTUM_LOOKBACK_MONTHS",
     "SAFE_HAVEN",
 }
@@ -63,7 +72,10 @@ def classify_change(change: ProposedChange) -> str:
     # 1. Low-risk numeric keys
     if key in _LOW_RISK_NUMERIC:
         abs_lo, abs_hi, rel_band = _LOW_RISK_NUMERIC[key]
-        if not isinstance(proposed, (int, float)):
+        # bool is technically a subclass of int — explicitly reject so an
+        # agent that sends {"STOP_LOSS_PCT": True} doesn't silently
+        # become STOP_LOSS_PCT=1.
+        if isinstance(proposed, bool) or not isinstance(proposed, (int, float)):
             return "rejected_out_of_bounds"
         if not (abs_lo <= proposed <= abs_hi):
             return "rejected_out_of_bounds"
@@ -154,57 +166,48 @@ def apply(
 # ── Helpers ──────────────────────────────────────────────────────
 
 def _merge_overrides(low_changes: list) -> None:
-    """Merge applied-low changes into strategy_overrides.json."""
-    os.makedirs(os.path.dirname(OVERRIDES_PATH), exist_ok=True)
-    existing = {}
-    if os.path.exists(OVERRIDES_PATH):
-        try:
-            with open(OVERRIDES_PATH) as f:
-                existing = json.load(f)
-        except Exception:
-            existing = {}
-    for c in low_changes:
-        existing[c.key] = c.proposed_value
-    with open(OVERRIDES_PATH, "w") as f:
-        json.dump(existing, f, indent=2, default=str)
+    """Merge applied-low changes into strategy_overrides.json (lock-protected)."""
+    def _mutate(existing):
+        for c in low_changes:
+            existing[c.key] = c.proposed_value
+        return existing
+    read_modify_write_json(OVERRIDES_PATH, _mutate, default={})
 
 
 def _append_proposals(high_changes: list) -> None:
-    """Append high-risk changes to strategy_proposals.json with expiry."""
-    os.makedirs(os.path.dirname(PROPOSALS_PATH), exist_ok=True)
-    existing = []
-    if os.path.exists(PROPOSALS_PATH):
-        try:
-            with open(PROPOSALS_PATH) as f:
-                existing = json.load(f)
-        except Exception:
-            existing = []
+    """Append high-risk changes to strategy_proposals.json with expiry.
+
+    Lock-protected so two quant runs can't generate colliding IDs or lose
+    each other's proposals. Expiry is 24 hours from creation (was 21:35
+    HKT local, which is wrong for any non-HKT operator).
+    """
     now = dt.datetime.now(dt.timezone.utc)
-    # Expire at 21:35 local today (= 13:35 UTC in +08). If that's already past,
-    # roll to next day.
-    expires = now.replace(hour=13, minute=35, second=0, microsecond=0)
-    if expires < now:
-        expires = expires + dt.timedelta(days=1)
+    expires = now + dt.timedelta(hours=24)
     today_slug = now.date().isoformat()
-    for idx, c in enumerate(high_changes, start=1 + len(existing)):
-        existing.append({
-            "id": f"prop_{today_slug}_{idx:02d}",
-            "key": c.key,
-            "current": c.current_value,
-            "proposed": c.proposed_value,
-            "rationale": c.rationale,
-            "detailed_plan": c.detailed_plan,
-            "expected_effect": c.expected_effect,
-            "confidence": c.confidence,
-            "created_at": now.isoformat(),
-            "expires_at": expires.isoformat(),
-        })
-    with open(PROPOSALS_PATH, "w") as f:
-        json.dump(existing, f, indent=2, default=str)
+
+    def _mutate(existing):
+        if not isinstance(existing, list):
+            existing = []
+        # Number new proposals continuing from existing count to avoid
+        # collisions if the file already has same-day proposals.
+        for idx, c in enumerate(high_changes, start=1 + len(existing)):
+            existing.append({
+                "id": f"prop_{today_slug}_{idx:02d}",
+                "key": c.key,
+                "current": c.current_value,
+                "proposed": c.proposed_value,
+                "rationale": c.rationale,
+                "detailed_plan": c.detailed_plan,
+                "expected_effect": c.expected_effect,
+                "confidence": c.confidence,
+                "created_at": now.isoformat(),
+                "expires_at": expires.isoformat(),
+            })
+        return existing
+    read_modify_write_json(PROPOSALS_PATH, _mutate, default=[])
 
 
 def _write_dry_run(changes: list, result: ApplierResult) -> None:
-    os.makedirs(os.path.dirname(DRY_RUN_PATH), exist_ok=True)
     data = {
         "run_at": dt.datetime.now(dt.timezone.utc).isoformat(),
         "dry_run": True,
@@ -216,8 +219,7 @@ def _write_dry_run(changes: list, result: ApplierResult) -> None:
             "rejected_out_of_bounds": [_change_to_dict(c) for c in result.rejected_out_of_bounds],
         },
     }
-    with open(DRY_RUN_PATH, "w") as f:
-        json.dump(data, f, indent=2, default=str)
+    atomic_write_json(DRY_RUN_PATH, data)
 
 
 def _change_to_dict(c: ProposedChange) -> dict:
@@ -236,22 +238,18 @@ def _change_to_dict(c: ProposedChange) -> dict:
 def _write_tg_notification(result: ApplierResult,
                            review_context: Optional[dict]) -> None:
     """Append a formatted TG message to telegram_notifications.json."""
-    os.makedirs(os.path.dirname(TG_NOTIFY_PATH), exist_ok=True)
-    existing = []
-    if os.path.exists(TG_NOTIFY_PATH):
-        try:
-            with open(TG_NOTIFY_PATH) as f:
-                existing = json.load(f)
-        except Exception:
-            existing = []
+    import sys as _sys
+    _root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    if _root not in _sys.path:
+        _sys.path.insert(0, _root)
+    from notifications import append_notification
     message = _format_tg_message(result, review_context)
-    existing.append({
-        "ts": dt.datetime.now(dt.timezone.utc).isoformat(),
-        "source": "quant-review",
-        "message": message,
-    })
-    with open(TG_NOTIFY_PATH, "w") as f:
-        json.dump(existing, f, indent=2, default=str)
+    # Target the quant subagent's own TG path (env-overridable + test-patchable);
+    # falls back to config.TELEGRAM_NOTIFY_PATH inside the helper when None.
+    append_notification(
+        {"source": "quant-review", "message": message},
+        path=TG_NOTIFY_PATH,
+    )
 
 
 def _format_tg_message(result: ApplierResult,
@@ -321,7 +319,8 @@ def _format_tg_message(result: ApplierResult,
 def _append_audit_log(result: ApplierResult,
                       ctx: Optional[dict],
                       dry_run: bool) -> None:
-    os.makedirs(os.path.dirname(AUDIT_LOG_PATH), exist_ok=True)
+    """Append-only JSON-lines audit. Lock-protected so concurrent writes
+    don't interleave bytes."""
     record = {
         "ts": dt.datetime.now(dt.timezone.utc).isoformat(),
         "dry_run": dry_run,
@@ -332,5 +331,4 @@ def _append_audit_log(result: ApplierResult,
         "rejected_malformed_count": len(result.rejected_malformed),
         "context": ctx or {},
     }
-    with open(AUDIT_LOG_PATH, "a") as f:
-        f.write(json.dumps(record, default=str) + "\n")
+    atomic_append_text(AUDIT_LOG_PATH, json.dumps(record, default=str))
