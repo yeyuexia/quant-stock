@@ -98,15 +98,16 @@ python3 watchdog.py --quick      # price moves + bracket verification only
 python3 watchdog.py --portfolio  # live positions + P&L from Alpaca
 
 # Stock discovery
-# Each run scans the deduped union of: config.WATCHLIST + smart-money feeds +
-# the FULL Russell 1000 universe via get_universe_tickers() (iShares IWB full
-# holdings, ~1000 names, 1-week cached; falls back to Wikipedia S&P 500 list
-# if the download is blocked). DISCOVERY_UNIVERSE_MAX caps the total candidate
-# pool. Config constants: DISCOVERY_UNIVERSE_ETFS, DISCOVERY_UNIVERSE_MAX,
-# DISCOVERY_STAGE1_KEEP, DISCOVERY_MIN_PRICE, DISCOVERY_MIN_DOLLAR_VOLUME,
-# DISCOVERY_SECTOR_RELATIVE, and DISCOVERY_GROWTH_EXEMPT_PCTL.
-# The old S&P-500 round-robin (sp500_round_robin_slice) is still defined but
-# is no longer called by merge_candidates.
+# Two-stage scan over a broad, stable universe:
+#   Universe = config.DISCOVERY_UNIVERSE_ETFS holdings (Russell 1000 via iShares
+#     IWB full-holdings CSV, ~1000 large+mid-cap US names; Wikipedia S&P 500 is
+#     the fallback). Includes growth leaders outside the S&P 500 (e.g. MRVL).
+#   Stage 1 (cheap): batch OHLCV -> universe-wide relative strength + liquidity
+#     gate -> keep top DISCOVERY_STAGE1_KEEP survivors (watchlist/smart-money are
+#     'protected' and always advance).
+#   Stage 2 (expensive): info + fundamentals only for survivors -> composite rank.
+#   Ranking: momentum/RS market-wide; value/quality within GICS sector; the top
+#     growth cohort is exempt from the value-P/E penalty.
 #
 # Auto-discovered names live in watchlist_auto.json (config.WATCHLIST_AUTO_PATH),
 # a GENERATED file. config.py loads it and unions it onto the hand-curated
@@ -368,6 +369,7 @@ Paper is the default. Before flipping:
 | FRED API | Free (key required) | Macro regime indicators |
 | Reddit JSON | Free | Social sentiment from finance subreddits |
 | Wikipedia | Free | S&P 500 component list |
+| iShares (IWB) | Free | Russell 1000 full holdings — discovery scan universe |
 
 ## File Structure
 

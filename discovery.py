@@ -4,16 +4,18 @@ Auto Stock Discovery — refreshes the candidate watchlist by scanning the
 market through deterministic, ranked sources.
 
 Pipeline:
-  1. Gather candidates from prioritized sources (current watchlist,
-     smart-money signals from quant/data_sources, S&P 500 round-robin,
-     and optional Reddit trending).
-  2. Batch-fetch 6mo OHLCV via data.fetch_prices/fetch_ohlcv (one HTTP
-     burst), then ThreadPool-parallel info + fundamentals per ticker.
-  3. Score every dimension cross-sectionally (rank percentile) and
-     combine with config.DISCOVERY_WEIGHTS.
-  4. Rank, tag, optionally append top names to watchlist_auto.json
-     (append-only; config.py is never rewritten) and append a one-line
-     audit record to .cache/discovery.log.
+  1. Build the scan universe (config.DISCOVERY_UNIVERSE_ETFS full holdings via
+     get_universe_tickers; Russell 1000 today, S&P 500 fallback) and merge with
+     the current watchlist + smart-money + optional Reddit feeds.
+  2. Stage 1 (cheap): batch-download OHLCV and rank the whole universe on
+     universe-wide relative strength + a price/liquidity gate, keeping the top
+     DISCOVERY_STAGE1_KEEP survivors (watchlist/smart-money are protected).
+  3. Stage 2 (expensive): fetch info + fundamentals only for survivors, then
+     score every dimension cross-sectionally and combine with DISCOVERY_WEIGHTS
+     (value/quality ranked within GICS sector; top growth cohort exempt from the
+     value-P/E penalty).
+  4. Rank, tag, optionally append top names to watchlist_auto.json (append-only;
+     config.py is never rewritten) and append a one-line audit record.
 
 Auto-discovered tickers live in watchlist_auto.json (config.WATCHLIST_AUTO_PATH).
 config.py loads that file and unions it with the hand-curated WATCHLIST_SEED to
