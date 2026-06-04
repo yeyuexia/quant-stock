@@ -484,8 +484,9 @@ def check_sepa_exits(snap: "orders.PortfolioSnapshot", broker,
     import data
 
     core_positions = [
-        p for p in snap.by_tranche("core")
-        if p.get("initial_stop_price") is not None
+        p for p in snap.positions
+        if p.get("tranche") in ("core", "unknown")
+        and p.get("initial_stop_price") is not None
     ]
     if not core_positions:
         return notifications
@@ -958,10 +959,16 @@ def run_watchdog(quick=False):
     # 2 extra Alpaca client constructions per invocation.
     broker = Broker(env=config.ALPACA_ENV)
     snap = snapshot(broker=broker)
+    _last_rebalances = [
+        v.get("last_rebalance")
+        for v in snap.tranches.values()
+        if isinstance(v, dict) and v.get("last_rebalance")
+    ]
     portfolio = {
         "positions": _as_legacy_positions(snap),
         "cash": snap.cash,
         "initial_capital": config.INITIAL_CAPITAL,
+        "last_rebalance": max(_last_rebalances) if _last_rebalances else None,
     }
 
     # Safety net: attach trailing stops to any known-tranche position missing one.
@@ -990,7 +997,7 @@ def run_watchdog(quick=False):
 
     for r in rows:
         pnl_icon = "▲" if r["pnl"] >= 0 else "▼"
-        print(f"  {pnl_icon} {r['ticker']:6s}  {r['shares']:3d} × ${r['current']:>8.2f} = ${r['value']:>9.2f}  "
+        print(f"  {pnl_icon} {r['ticker']:6s}  {r['shares']:>9.4f} × ${r['current']:>8.2f} = ${r['value']:>9.2f}  "
               f"P&L: ${r['pnl']:>+8.2f} ({r['pnl_pct']:>+6.1f}%)")
 
     print(f"\n  Cash:           ${cash:>10,.2f}")
@@ -1432,7 +1439,7 @@ if __name__ == "__main__":
         header("PORTFOLIO STATUS")
         for r in rows:
             pnl_icon = "▲" if r["pnl"] >= 0 else "▼"
-            print(f"  {pnl_icon} {r['ticker']:6s}  {r['shares']:3d} × ${r['current']:>8.2f} = ${r['value']:>9.2f}  "
+            print(f"  {pnl_icon} {r['ticker']:6s}  {r['shares']:>9.4f} × ${r['current']:>8.2f} = ${r['value']:>9.2f}  "
                   f"P&L: ${r['pnl']:>+8.2f} ({r['pnl_pct']:>+6.1f}%)")
         print(f"\n  Total: ${total_value:>10,.2f} | P&L: ${total_pnl:>+8.2f} ({total_pnl_pct:>+.1f}%)")
     elif "--history" in args:
