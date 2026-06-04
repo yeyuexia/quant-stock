@@ -1,23 +1,19 @@
 #!/usr/bin/env python3
 """
-Daily Portfolio Watchdog
-
-Run every morning before market open, or set up as a cron job.
-Checks for:
-  1. Price alerts — big overnight/intraday moves in holdings
-  2. Stop-loss triggers — any position hitting -8% from entry
-  3. Macro regime shifts — yield curve, credit spread changes
-  4. News/sentiment spikes — breaking stories on our tickers
-  5. Volume anomalies — unusual trading activity
-  6. Correlation breakdown — diversification failing
+Portfolio Watchdog
 
 Usage:
   python3 watchdog.py              # full daily check
   python3 watchdog.py --quick      # price + stop-loss only
+  python3 watchdog.py --intraday   # lightweight intraday check (SEPA + stop-loss)
   python3 watchdog.py --portfolio  # show current portfolio status
 
-Cron (run at 8:30 AM ET every weekday):
+Cron:
+  # Full daily check at 8:30 AM ET (before market open):
   30 8 * * 1-5 cd /Users/zl/works/stock && python3 watchdog.py >> .cache/watchdog.log 2>&1
+
+  # Intraday check every 5 min during market hours (9:30–16:00 ET):
+  */5 9-16 * * 1-5 cd /Users/zl/works/stock && python3 watchdog.py --intraday >> .cache/watchdog_intraday.log 2>&1
 """
 import sys
 import os
@@ -33,14 +29,106 @@ import config
 # ── Portfolio state (via orders.sync_state) ─────────────────────
 
 
-def snapshot() -> orders.PortfolioSnapshot:
+_DEGRADED_SENTINEL_PATH = os.path.join(os.path.dirname(__file__), ".cache",
+                                       "snapshot_degraded_since.json")
+
+
+def _enter_degraded(reason: str) -> bool:
+    """Record degraded entry. Returns True iff this is a state TRANSITION
+    (healthy → degraded) so the caller only notifies on first occurrence."""
+    if os.path.exists(_DEGRADED_SENTINEL_PATH):
+        return False  # already degraded — no transition, no spam
+    os.makedirs(os.path.dirname(_DEGRADED_SENTINEL_PATH), exist_ok=True)
+    with open(_DEGRADED_SENTINEL_PATH, "w") as f:
+        json.dump({
+            "since": dt.datetime.now(dt.timezone.utc).isoformat(),
+            "reason": reason,
+        }, f)
+    return True
+
+
+def _exit_degraded() -> "tuple[bool, float]":
+    """Clear degraded state. Returns (was_degraded, minutes_in_degraded)."""
+    if not os.path.exists(_DEGRADED_SENTINEL_PATH):
+        return (False, 0.0)
+    try:
+        with open(_DEGRADED_SENTINEL_PATH) as f:
+            data = json.load(f)
+        since = dt.datetime.fromisoformat(data["since"])
+        minutes = (dt.datetime.now(dt.timezone.utc) - since).total_seconds() / 60
+    except (json.JSONDecodeError, KeyError, ValueError):
+        minutes = 0.0
+    try:
+        os.remove(_DEGRADED_SENTINEL_PATH)
+    except OSError:
+        pass
+    return (True, minutes)
+
+
+def snapshot(broker=None) -> orders.PortfolioSnapshot:
     """Pull a fresh PortfolioSnapshot from Alpaca (source of truth).
-    Alerts about unknown positions and missing brackets are returned separately.
+
+    Tolerant to transient broker failures: retries once, then falls back to
+    the on-disk portfolio.json cache (last successful sync). TG notifications
+    only fire on state TRANSITIONS (healthy → degraded, degraded → recovered)
+    — not every tick we're degraded, to avoid spamming the bot during outages.
     """
-    broker = Broker(env=config.ALPACA_ENV)
+    if broker is None:
+        broker = Broker(env=config.ALPACA_ENV)
     alerts: list = []
-    snap = orders.sync_state(broker, alerts=alerts)
-    snapshot.last_alerts = alerts  # type: ignore[attr-defined]
+
+    last_exc = None
+    for attempt in range(2):
+        try:
+            snap = orders.sync_state(broker, alerts=alerts)
+            # Healthy path: if we were in degraded state, notify recovery.
+            was_degraded, minutes_down = _exit_degraded()
+            if was_degraded:
+                try:
+                    from notifications import append_notification
+                    append_notification({
+                        "source": "watchdog.snapshot",
+                        "message": (f"✓ snapshot RECOVERED after "
+                                    f"{minutes_down:.0f} minutes in degraded mode."),
+                    })
+                except Exception:
+                    pass
+            snapshot.last_alerts = alerts  # type: ignore[attr-defined]
+            return snap
+        except Exception as e:
+            last_exc = e
+            if attempt == 0:
+                import time as _time
+                _time.sleep(0.5)
+
+    # Both attempts failed — fall back to the cache so we can still run SEPA
+    # exits, stop-loss, macro etc. against the last known state.
+    reason = f"{type(last_exc).__name__}: {last_exc}"
+    if _enter_degraded(reason):
+        # State transition: healthy → degraded. One notification only.
+        try:
+            from notifications import append_notification
+            append_notification({
+                "source": "watchdog.snapshot",
+                "message": (f"⚠ CRITICAL: snapshot DEGRADED to portfolio.json "
+                            f"cache ({reason}). Subsequent degraded ticks will "
+                            f"NOT re-notify until recovery."),
+            })
+        except Exception:
+            pass
+
+    cache = orders._load_portfolio_cache() or {}
+    snap = orders.PortfolioSnapshot(
+        synced_at=cache.get("synced_at", ""),
+        alpaca_env=cache.get("alpaca_env", config.ALPACA_ENV),
+        cash=float(cache.get("cash", 0.0) or 0.0),
+        equity=float(cache.get("equity", 0.0) or 0.0),
+        positions=cache.get("positions", []),
+        tranches=cache.get("tranches", {}),
+    )
+    snapshot.last_alerts = [  # type: ignore[attr-defined]
+        f"DEGRADED: using cached portfolio.json ({reason})",
+    ]
     return snap
 
 
@@ -55,10 +143,10 @@ def _as_legacy_positions(snap: orders.PortfolioSnapshot) -> list[dict]:
             "shares": p["shares"],
             "entry_price": p["avg_entry"],
             "entry_date": "",
-            "tranche": p.get("tranche", "core"),
+            # unknown tranche (externally-bought) falls back to core stop-loss rules
+            "tranche": "core" if p.get("tranche") == "unknown" else p.get("tranche", "core"),
         }
         for p in snap.positions
-        if p.get("tranche") != "unknown"
     ]
 
 
@@ -80,8 +168,18 @@ def header(text):
 
 # ── Check 1: Price Moves ───────────────────────────────────────
 
-def check_price_moves(portfolio):
-    """Check for significant price moves in holdings."""
+def check_price_moves(portfolio, broker=None):
+    """Check for significant price moves in holdings.
+
+    Uses 6-month price history so "peak since entry" is genuinely the high
+    since the position was opened (previous version used a 5-day window which
+    silently misrepresented the trailing-stop reference for any position held
+    longer than a week).
+
+    When *broker* is supplied, current price is fetched via broker._latest_price
+    (Alpaca real-time / IEX feed) so intraday triggers don't wait for the
+    daily close. prev_close + peak still come from yfinance daily bars.
+    """
     from data import fetch_prices, fetch_info
 
     alerts = []
@@ -89,7 +187,9 @@ def check_price_moves(portfolio):
     if not tickers:
         return alerts
 
-    prices = fetch_prices(tickers, period="5d")
+    # 6mo so even positions held for months have a meaningful peak. yfinance
+    # cache makes the additional history nearly free after the first warm-up.
+    prices = fetch_prices(tickers, period="6mo")
 
     for pos in portfolio["positions"]:
         t = pos["ticker"]
@@ -100,7 +200,13 @@ def check_price_moves(portfolio):
         if len(s) < 2:
             continue
 
-        current = s.iloc[-1]
+        if broker is not None:
+            try:
+                current = float(broker._latest_price(t))
+            except Exception:
+                current = s.iloc[-1]
+        else:
+            current = s.iloc[-1]
         prev_close = s.iloc[-2]
         entry = pos["entry_price"]
 
@@ -110,8 +216,23 @@ def check_price_moves(portfolio):
         # Change from entry
         from_entry = (current / entry - 1) * 100
 
-        # Peak since entry (for trailing stop)
-        peak = s.max()
+        # Peak since entry. Slice the series at entry_date when we know it,
+        # else use the entry price as a floor so pre-entry highs don't count.
+        entry_date_str = pos.get("entry_date") or ""
+        try:
+            entry_date = dt.date.fromisoformat(entry_date_str) if entry_date_str else None
+        except (TypeError, ValueError):
+            entry_date = None
+
+        if entry_date is not None:
+            after_entry = s[s.index.date >= entry_date]
+            peak = float(after_entry.max()) if not after_entry.empty else float(s.max())
+        else:
+            # Unknown entry date — bound peak below by entry price so a higher
+            # pre-entry print doesn't inflate the "from peak" warning level.
+            peak = float(max(s.max(), entry))
+        # current too — the trailing-stop reference can only be ≥ current.
+        peak = max(peak, float(current))
         from_peak = (current / peak - 1) * 100
 
         # Big daily move (>3%)
@@ -161,12 +282,31 @@ def check_price_moves(portfolio):
 # ── Check 2: Portfolio Status ──────────────────────────────────
 
 def check_portfolio_status(portfolio):
-    """Calculate current portfolio value and P&L."""
-    from data import fetch_info
+    """Calculate current portfolio value and P&L.
+
+    One batched fetch_prices call for all holdings (taking the last close as
+    'current'). The old per-ticker fetch_info loop spent ~0.5-1s per ticker on
+    Ticker.info — wasteful for daily runs with 4-10 positions.
+    """
+    from data import fetch_prices
 
     rows = []
     total_value = 0
     total_cost = 0
+
+    tickers = [p["ticker"] for p in portfolio["positions"]]
+    current_by_ticker: dict = {}
+    if tickers:
+        try:
+            prices = fetch_prices(tickers, period="5d")
+        except Exception:
+            prices = None
+        if prices is not None and not prices.empty:
+            for t in tickers:
+                if t in prices.columns:
+                    series = prices[t].dropna()
+                    if not series.empty:
+                        current_by_ticker[t] = float(series.iloc[-1])
 
     for pos in portfolio["positions"]:
         t = pos["ticker"]
@@ -174,11 +314,7 @@ def check_portfolio_status(portfolio):
         entry = pos["entry_price"]
         cost = shares * entry
 
-        try:
-            info = fetch_info(t)
-            current = info.get("currentPrice") or info.get("regularMarketPrice", entry)
-        except Exception:
-            current = entry
+        current = current_by_ticker.get(t, entry)
 
         value = shares * current
         pnl = value - cost
@@ -209,29 +345,52 @@ def check_portfolio_status(portfolio):
 # ── Check 3: Volume Anomalies ─────────────────────────────────
 
 def check_volume(portfolio):
-    """Check for unusual volume (>2x 20-day average)."""
+    """Check for unusual volume (>2x 20-day average).
+
+    One batched yfinance call for all holdings instead of N serial calls
+    (the old per-ticker loop is the same anti-pattern we batched out of
+    check_sepa_exits / check_buy_signals — same fix here for the daily path).
+    """
     import yfinance as yf
 
     alerts = []
     tickers = [p["ticker"] for p in portfolio["positions"]]
+    if not tickers:
+        return alerts
+
+    try:
+        all_data = yf.download(
+            tickers, period="1mo", progress=False, group_by="ticker",
+        )
+    except Exception as exc:
+        alerts.append((Alert.WARNING, "VOL", f"batch yfinance failed: {exc}"))
+        return alerts
+
+    if all_data is None or all_data.empty:
+        return alerts
+
+    def _vol_series(ticker):
+        if isinstance(all_data.columns, pd.MultiIndex):
+            try:
+                return all_data[ticker]["Volume"].dropna()
+            except (KeyError, IndexError):
+                return None
+        # Single-ticker case (yfinance flattens)
+        if len(tickers) == 1:
+            return all_data["Volume"].dropna()
+        return None
 
     for t in tickers:
-        try:
-            data = yf.download(t, period="1mo", progress=False)
-            if data.empty or len(data) < 5:
-                continue
-            if isinstance(data.columns, pd.MultiIndex):
-                vol = data["Volume"][t]
-            else:
-                vol = data["Volume"]
-            avg_vol = vol.iloc[:-1].mean()
-            last_vol = vol.iloc[-1]
-            if avg_vol > 0 and last_vol > avg_vol * 2:
-                ratio = last_vol / avg_vol
-                alerts.append((Alert.WARNING, t,
-                    f"Volume spike: {ratio:.1f}x avg ({last_vol/1e6:.1f}M vs {avg_vol/1e6:.1f}M avg)"))
-        except Exception:
+        vol = _vol_series(t)
+        if vol is None or len(vol) < 5:
             continue
+        avg_vol = vol.iloc[:-1].mean()
+        last_vol = vol.iloc[-1]
+        if avg_vol > 0 and last_vol > avg_vol * 2:
+            ratio = last_vol / avg_vol
+            alerts.append((Alert.WARNING, t,
+                f"Volume spike: {ratio:.1f}x avg "
+                f"({last_vol/1e6:.1f}M vs {avg_vol/1e6:.1f}M avg)"))
 
     return alerts
 
@@ -242,25 +401,8 @@ def _sepa_notify(message: str, lines: list) -> None:
     """Append a Telegram message; also push to the in-process `lines` list
     so the caller can include them in the watchdog alert summary."""
     lines.append(message)
-    path = getattr(config, "TELEGRAM_NOTIFY_PATH", None)
-    if not path:
-        return
-    import json as _json
-    os.makedirs(os.path.dirname(path), exist_ok=True) if os.path.dirname(path) else None
-    existing = []
-    if os.path.exists(path):
-        try:
-            with open(path) as f:
-                existing = _json.load(f)
-        except Exception:
-            existing = []
-    existing.append({
-        "ts": dt.datetime.now(dt.timezone.utc).isoformat(),
-        "source": "watchdog.sepa",
-        "message": message,
-    })
-    with open(path, "w") as f:
-        _json.dump(existing, f, indent=2, default=str)
+    from notifications import append_notification
+    append_notification({"source": "watchdog.sepa", "message": message})
 
 
 def _cancel_pending_partials(symbol: str) -> None:
@@ -287,18 +429,35 @@ def _cancel_pending_partials(symbol: str) -> None:
 
 
 def _set_climax_fired(symbol: str) -> None:
-    """Set climax_fired=True for `symbol` in the portfolio cache."""
-    import json as _json
-    cache = orders._load_portfolio_cache()
-    for p in cache.get("positions", []):
-        if p["symbol"] == symbol:
-            p["climax_fired"] = True
-            break
-    with open(orders.PORTFOLIO_PATH, "w") as f:
-        _json.dump(cache, f, indent=2, default=str)
+    """Set climax_fired=True for `symbol` in the portfolio cache.
+
+    Uses a .lock sidecar (codebase convention) instead of locking the data
+    file directly — keeps the lock target separate from the JSON we mutate.
+    """
+    import fcntl, json as _json
+    path = orders.PORTFOLIO_PATH
+    if not os.path.exists(path):
+        return  # sync_state hasn't run yet; nothing to mark
+    lock_path = path + ".lock"
+    with open(lock_path, "w") as lk:
+        fcntl.flock(lk.fileno(), fcntl.LOCK_EX)
+        with open(path, "r") as f:
+            try:
+                cache = _json.load(f)
+            except (json.JSONDecodeError, ValueError):
+                cache = {}
+        for p in cache.get("positions", []):
+            if p["symbol"] == symbol:
+                p["climax_fired"] = True
+                break
+        tmp_path = path + ".tmp"
+        with open(tmp_path, "w") as f:
+            _json.dump(cache, f, indent=2, default=str)
+        os.replace(tmp_path, path)
 
 
-def check_sepa_exits(snap: "orders.PortfolioSnapshot", broker) -> list:
+def check_sepa_exits(snap: "orders.PortfolioSnapshot", broker,
+                     *, live_prices: bool = False) -> list:
     """SEPA Phase 1 driver. Returns notification lines for the alert summary.
 
     Per core position, in order:
@@ -307,6 +466,15 @@ def check_sepa_exits(snap: "orders.PortfolioSnapshot", broker) -> list:
          is the final tier — in which case no re-trail).
       2. If r_tier_filled contains the final tier label → check 21EMA;
          if close < EMA, submit_exit (full).
+
+    Performance: this function used to issue (N × broker._latest_price) +
+    (N × data.fetch_ohlcv) round-trips, fired every 5 min by the intraday
+    cron — ≈ 300+ HTTP calls per day for 4 positions. We now batch both:
+      - data.fetch_ohlcv(all_core_symbols, ...) once at the top
+      - current price either from snap.market_value/shares (default, free,
+        possibly 0-5min stale) OR from a single batched broker.latest_quote
+        loop when `live_prices=True` (intraday mode wants real-time so fast
+        R-tier triggers don't fire ~5 min late).
     """
     notifications: list = []
     if not getattr(config, "SEPA_ENABLED", False):
@@ -315,24 +483,102 @@ def check_sepa_exits(snap: "orders.PortfolioSnapshot", broker) -> list:
     import sepa_exits
     import data
 
-    for pos in snap.by_tranche("core"):
-        symbol = pos["symbol"]
-        if pos.get("initial_stop_price") is None:
-            continue
-        try:
-            current_price = float(broker._latest_price(symbol))
-        except Exception as e:
-            notifications.append(f"⚠ SEPA {symbol}: no latest price ({e})")
-            continue
+    core_positions = [
+        p for p in snap.by_tranche("core")
+        if p.get("initial_stop_price") is not None
+    ]
+    if not core_positions:
+        return notifications
 
-        # Phase 2 — 1. Failed-breakout (highest priority)
+    core_symbols = [p["symbol"] for p in core_positions]
+
+    # When live_prices=True, batch-quote all core symbols up front instead of
+    # per-position broker calls inside the loop. Falls back to snap-derived
+    # price when a quote fetch fails (network blip on one symbol shouldn't
+    # block the others).
+    live_price_by_symbol: dict = {}
+    if live_prices:
+        for sym in core_symbols:
+            try:
+                bid, ask = broker.latest_quote(sym)
+                live_price_by_symbol[sym] = (bid + ask) / 2
+            except Exception:
+                continue
+
+    # ── Batch prefetch: one yfinance call for all core OHLCV ──────
+    try:
+        batched_ohlcv = data.fetch_ohlcv(core_symbols, period=config.SEPA_MA_HISTORY)
+    except Exception as e:
+        notifications.append(f"⚠ SEPA: batched OHLCV fetch failed: {e} — "
+                             f"falling back to per-symbol fetch")
+        batched_ohlcv = None
+
+    def _close_series_for(symbol):
+        """Pull a single ticker's Close series out of the batched frame, with
+        per-symbol fallback if the batch fetch failed or this symbol is missing."""
+        if batched_ohlcv is not None:
+            try:
+                col = (batched_ohlcv["Close"][symbol]
+                       if symbol in batched_ohlcv["Close"].columns
+                       else batched_ohlcv["Close"].iloc[:, 0])
+                return col.dropna()
+            except (KeyError, IndexError):
+                pass
+        # Fallback: per-symbol fetch
         try:
             ohlcv = data.fetch_ohlcv([symbol], period=config.SEPA_MA_HISTORY)
-            close_series = (ohlcv["Close"][symbol]
-                            if symbol in ohlcv["Close"].columns
-                            else ohlcv["Close"].iloc[:, 0]).dropna()
-        except Exception as e:
-            notifications.append(f"⚠ SEPA {symbol}: closes fetch failed: {e}")
+            return (ohlcv["Close"][symbol]
+                    if symbol in ohlcv["Close"].columns
+                    else ohlcv["Close"].iloc[:, 0]).dropna()
+        except Exception:
+            return None
+
+    def _ohlcv_for(symbol):
+        """Per-symbol OHLCV slice for climax_check (which needs O/H/L/C/V).
+        Tries to slice the batched frame; falls back to per-symbol fetch."""
+        if batched_ohlcv is not None:
+            try:
+                fields = {}
+                for col in ("Open", "High", "Low", "Close", "Volume"):
+                    if col not in batched_ohlcv.columns.levels[0]:
+                        continue
+                    sub = batched_ohlcv[col]
+                    if symbol in sub.columns:
+                        fields[(col, symbol)] = sub[symbol]
+                if fields:
+                    out = pd.DataFrame(fields, index=batched_ohlcv.index)
+                    out.columns = pd.MultiIndex.from_tuples(out.columns)
+                    return out
+            except (KeyError, IndexError, AttributeError):
+                pass
+        try:
+            return data.fetch_ohlcv([symbol], period=config.SEPA_MA_HISTORY)
+        except Exception:
+            return None
+
+    for pos in core_positions:
+        symbol = pos["symbol"]
+
+        shares = float(pos.get("shares") or 0)
+        if shares == 0:
+            notifications.append(f"⚠ SEPA {symbol}: zero shares, skipping")
+            continue
+
+        # Prefer the live quote when intraday explicitly asked for real-time;
+        # otherwise derive from snap (no network call, possibly slightly stale).
+        if symbol in live_price_by_symbol:
+            current_price = float(live_price_by_symbol[symbol])
+        else:
+            current_price = float(pos["market_value"]) / shares
+
+        close_series = _close_series_for(symbol)
+        if close_series is None or close_series.empty:
+            notifications.append(f"⚠ SEPA {symbol}: closes fetch failed")
+            continue
+
+        ohlcv = _ohlcv_for(symbol)
+        if ohlcv is None:
+            notifications.append(f"⚠ SEPA {symbol}: ohlcv fetch failed")
             continue
 
         pivots = orders._load_entry_pivots()
@@ -344,7 +590,8 @@ def check_sepa_exits(snap: "orders.PortfolioSnapshot", broker) -> list:
         ):
             _cancel_pending_partials(symbol)
             orders.cancel_position_trailing(symbol, broker=broker)
-            orders.submit_exit(symbol, reason="sepa-failed-breakout", broker=broker)
+            orders.submit_exit(symbol, reason="sepa-failed-breakout",
+                               broker=broker, current_price=current_price)
             pivot_price = float(pivots[symbol]["pivot"])
             _sepa_notify(
                 f"⚠ SEPA failed-breakout — {symbol}\n"
@@ -356,16 +603,10 @@ def check_sepa_exits(snap: "orders.PortfolioSnapshot", broker) -> list:
 
         # Phase 2 — 2. Climax (only if not already fired)
         if not pos.get("climax_fired"):
-            if sepa_exits.climax_check(
-                ohlcv,
-                return_lookback=config.SEPA_CLIMAX_RETURN_LOOKBACK,
-                return_threshold=config.SEPA_CLIMAX_RETURN_THRESHOLD,
-                range_lookback=config.SEPA_CLIMAX_RANGE_LOOKBACK,
-                range_multiplier=config.SEPA_CLIMAX_RANGE_MULTIPLIER,
-                volume_lookback=config.SEPA_CLIMAX_VOLUME_LOOKBACK,
-                volume_multiplier=config.SEPA_CLIMAX_VOLUME_MULTIPLIER,
-                volume_recent_days=config.SEPA_CLIMAX_VOLUME_RECENT_DAYS,
-            ):
+            # symbol is now explicit — climax_check used to pick alphabetically-
+            # first column from ohlcv["Close"]; with batched fetches that could
+            # silently look at the wrong ticker.
+            if sepa_exits.climax_check(ohlcv, symbol):
                 _cancel_pending_partials(symbol)
                 orders.cancel_position_trailing(symbol, broker=broker)
 
@@ -420,6 +661,7 @@ def check_sepa_exits(snap: "orders.PortfolioSnapshot", broker) -> list:
                 partial_result = orders.submit_partial_exit(
                     symbol, fraction_of_initial=frac,
                     reason=f"sepa-{action}", broker=broker,
+                    current_price=current_price,
                 )
                 orders.cancel_position_trailing(symbol, broker=broker)
 
@@ -460,18 +702,13 @@ def check_sepa_exits(snap: "orders.PortfolioSnapshot", broker) -> list:
         if (final_label not in (pos.get("r_tier_filled") or [])
                 and not pos.get("climax_fired")):
             continue
-        try:
-            prices = data.fetch_prices([symbol], period=config.SEPA_MA_HISTORY)
-            closes = (prices[symbol] if symbol in prices.columns
-                      else prices.iloc[:, 0]).dropna()
-        except Exception as e:
-            notifications.append(f"⚠ SEPA {symbol}: closes fetch failed: {e}")
-            continue
-        if sepa_exits.ma_trail_should_exit(pos, closes):
-            orders.submit_exit(symbol, reason="sepa-21EMA-break", broker=broker)
+        # Reuse close_series from the batched OHLCV fetch — no extra HTTP.
+        if sepa_exits.ma_trail_should_exit(pos, close_series):
+            orders.submit_exit(symbol, reason="sepa-21EMA-break", broker=broker,
+                               current_price=current_price)
             _sepa_notify(
                 f"📉 SEPA 21EMA break — {symbol}\n"
-                f"Last close ${float(closes.iloc[-1]):.2f} below 21EMA; "
+                f"Last close ${float(close_series.iloc[-1]):.2f} below 21EMA; "
                 f"exiting remaining shares.",
                 notifications,
             )
@@ -488,16 +725,18 @@ def check_sepa_exits(snap: "orders.PortfolioSnapshot", broker) -> list:
 
 # ── Macro-flip action ─────────────────────────────────────────
 
-def act_on_macro_flip(snap: orders.PortfolioSnapshot, regime: str) -> list:
+def act_on_macro_flip(snap: orders.PortfolioSnapshot, regime: str,
+                       broker=None) -> list:
     """If macro regime turned bearish today, exit leveraged-ETF aggressive positions."""
     if regime != "contraction":
         return []
 
-    broker = Broker(env=config.ALPACA_ENV)
+    if broker is None:
+        broker = Broker(env=config.ALPACA_ENV)
     notifications: list = []
     for p in snap.by_tranche("aggressive"):
         sym = p["symbol"]
-        if sym not in config._ETF_LEVERAGED:
+        if sym not in config.ETF_LEVERAGED:
             continue
         result = orders.submit_exit(sym, reason="macro-contraction", broker=broker)
         if result.submitted:
@@ -509,7 +748,11 @@ def act_on_macro_flip(snap: orders.PortfolioSnapshot, regime: str) -> list:
 
 # ── Check 4: Macro Shifts ─────────────────────────────────────
 
-def check_macro_shift(snap=None):
+_MACRO_SCORE_PATH = os.path.join(os.path.dirname(__file__), ".cache",
+                                 "last_macro_score.json")
+
+
+def check_macro_shift(snap=None, broker=None):
     """Check if macro regime has changed since last check."""
     from macro import macro_regime_score
 
@@ -518,8 +761,8 @@ def check_macro_shift(snap=None):
     score = result["score"]
     regime = result["regime"]
 
-    # Load previous score
-    score_file = os.path.join(os.path.dirname(__file__), ".cache", "last_macro_score.json")
+    # Load previous score (module-level constant lets tests monkeypatch the path)
+    score_file = _MACRO_SCORE_PATH
     prev_score = None
     prev_regime = None
     if os.path.exists(score_file):
@@ -527,11 +770,6 @@ def check_macro_shift(snap=None):
             prev = json.load(f)
             prev_score = prev.get("score")
             prev_regime = prev.get("regime")
-
-    # Save current
-    os.makedirs(os.path.dirname(score_file), exist_ok=True)
-    with open(score_file, "w") as f:
-        json.dump({"score": score, "regime": regime, "date": str(dt.date.today())}, f)
 
     if prev_regime and prev_regime != regime:
         alerts.append((Alert.CRITICAL, "MACRO",
@@ -555,10 +793,26 @@ def check_macro_shift(snap=None):
             alerts.append((Alert.WARNING, "MACRO",
                 f"Credit spreads widening — financial stress! {ind['label']}"))
 
-    # Auto-exit leveraged ETFs on contraction
-    notifications = act_on_macro_flip(snap if snap is not None else snapshot(), regime)
+    # Auto-exit leveraged ETFs on contraction BEFORE persisting the new score.
+    # Rationale: if act_on_macro_flip fails (broker down, cash gate, etc.) we
+    # don't want prev_regime advanced to the new value — tomorrow's run must
+    # re-detect the flip and re-attempt the exit. Score is only persisted when
+    # the act half completed without raising.
+    act_failed = False
+    try:
+        if snap is None:
+            snap = snapshot(broker=broker)
+        notifications = act_on_macro_flip(snap, regime, broker=broker)
+    except Exception as e:
+        act_failed = True
+        notifications = [f"act_on_macro_flip raised {type(e).__name__}: {e}"]
     for n in notifications:
         alerts.append((Alert.CRITICAL, "MACRO", n))
+
+    if not act_failed:
+        os.makedirs(os.path.dirname(score_file), exist_ok=True)
+        with open(score_file, "w") as f:
+            json.dump({"score": score, "regime": regime, "date": str(dt.date.today())}, f)
 
     return alerts, result
 
@@ -572,7 +826,15 @@ def check_news(portfolio):
     alerts = []
     try:
         hotspots = get_market_hotspots()
-    except Exception:
+    except Exception as e:
+        # Don't silently disappear — surface the feed outage so we know to fix
+        # it. One alert per run, not per ticker.
+        msg = f"news/sentiment feed unavailable: {type(e).__name__}: {e}"
+        alerts.append((Alert.WARNING, "NEWS", msg))
+        try:
+            _notify_critical(f"⚠ watchdog: {msg}")
+        except Exception:
+            pass
         return alerts
 
     our_tickers = set(p["ticker"] for p in portfolio["positions"])
@@ -603,53 +865,86 @@ def check_news(portfolio):
 
 # ── Check 6: Rebalance Reminder ───────────────────────────────
 
+_REBALANCE_STALE_DAYS = 7   # cron rebalance fires daily; > 7 days means cron is broken
+
 def check_rebalance(portfolio):
-    """Remind if rebalance is due."""
-    from config import REBALANCE_FREQUENCY_DAYS
+    """Health check: alert only when the daily rebalance cron appears stuck.
+
+    Under daily cadence the old "rebalance due" reminder fires every single day
+    and is pure noise. We instead surface ONE alert when last_rebalance is
+    older than _REBALANCE_STALE_DAYS days (signals: cron not firing, broker
+    persistently rejecting, or HALT file forgotten).
+    """
     alerts = []
-
     last = portfolio.get("last_rebalance")
-    if last:
+    if not last:
+        return alerts
+    try:
         last_date = dt.date.fromisoformat(last)
-        days_since = (dt.date.today() - last_date).days
-        if days_since >= REBALANCE_FREQUENCY_DAYS:
-            alerts.append((Alert.WARNING, "REBAL",
-                f"Rebalance overdue! Last: {last} ({days_since} days ago). Run: python3 run.py"))
-        elif days_since >= REBALANCE_FREQUENCY_DAYS - 3:
-            alerts.append((Alert.INFO, "REBAL",
-                f"Rebalance due in {REBALANCE_FREQUENCY_DAYS - days_since} days"))
-
+    except (TypeError, ValueError):
+        return alerts
+    days_since = (dt.date.today() - last_date).days
+    if days_since >= _REBALANCE_STALE_DAYS:
+        alerts.append((Alert.CRITICAL, "REBAL",
+            f"No successful rebalance in {days_since} days (last: {last}). "
+            f"Check cron / .cache/HALT / Alpaca connectivity."))
     return alerts
 
 
 # ── Daily Log ─────────────────────────────────────────────────
 
+_DAILY_LOG_COLUMNS = ["date", "total_value", "pnl_pct", "cash",
+                       "num_positions", "holdings"]
+
+
 def log_daily(portfolio, total_value, total_pnl_pct):
-    """Append daily snapshot to a CSV log for tracking over time."""
+    """Append daily snapshot to a CSV log for tracking over time.
+
+    Append-only: header written once on file creation, subsequent calls just
+    append one CSV row. Avoids the quadratic read-concat-write cost of the
+    old pandas-based path (which grew linearly with file size).
+    Same-day dedup via a cheap last-line tail check.
+    """
+    import csv
+    import fcntl
     log_file = os.path.join(os.path.dirname(__file__), "daily_log.csv")
     today = str(dt.date.today())
+    lock_path = log_file + ".lock"
 
-    # Check if already logged today
-    if os.path.exists(log_file):
-        df = pd.read_csv(log_file)
-        if today in df["date"].values:
-            return  # already logged
-    else:
-        df = pd.DataFrame()
+    with open(lock_path, "w") as lk:
+        fcntl.flock(lk.fileno(), fcntl.LOCK_EX)
 
-    tickers = [p["ticker"] for p in portfolio["positions"]]
-    row = {
-        "date": today,
-        "total_value": round(total_value, 2),
-        "pnl_pct": round(total_pnl_pct, 2),
-        "cash": portfolio.get("cash", 0),
-        "num_positions": len(tickers),
-        "holdings": ",".join(tickers),
-    }
+        # Dedup: scan the last ~4KB for a row starting with today's date.
+        # Cheap O(constant) instead of pandas reading the whole file.
+        if os.path.exists(log_file):
+            try:
+                with open(log_file, "rb") as f:
+                    f.seek(0, os.SEEK_END)
+                    size = f.tell()
+                    f.seek(max(0, size - 4096))
+                    tail = f.read().decode("utf-8", errors="replace")
+                for line in reversed(tail.splitlines()):
+                    if line.startswith(today + ","):
+                        return  # already logged today
+            except (OSError, UnicodeDecodeError):
+                pass
 
-    new_row = pd.DataFrame([row])
-    df = pd.concat([df, new_row], ignore_index=True)
-    df.to_csv(log_file, index=False)
+        tickers = [p["ticker"] for p in portfolio["positions"]]
+        row = [
+            today,
+            round(total_value, 2),
+            round(total_pnl_pct, 2),
+            portfolio.get("cash", 0),
+            len(tickers),
+            ",".join(tickers),
+        ]
+
+        write_header = not os.path.exists(log_file)
+        with open(log_file, "a", newline="") as f:
+            w = csv.writer(f)
+            if write_header:
+                w.writerow(_DAILY_LOG_COLUMNS)
+            w.writerow(row)
 
 
 # ── Main ──────────────────────────────────────────────────────
@@ -659,8 +954,10 @@ def run_watchdog(quick=False):
     print("║           DAILY PORTFOLIO WATCHDOG                       ║")
     print("╚════════════════════════════════════════════════════════════╝")
 
-    # Load portfolio state from Alpaca
-    snap = snapshot()
+    # Single Broker instance threaded through the rest of the run — saves
+    # 2 extra Alpaca client constructions per invocation.
+    broker = Broker(env=config.ALPACA_ENV)
+    snap = snapshot(broker=broker)
     portfolio = {
         "positions": _as_legacy_positions(snap),
         "cash": snap.cash,
@@ -671,7 +968,6 @@ def run_watchdog(quick=False):
     # Rebalancer normally does this at submit time; this catches anything that
     # slipped through (e.g., buy filled after rebalancer exited, or bracket
     # attach failed).
-    broker = Broker(env=config.ALPACA_ENV)
     trail_result = orders.ensure_trailing_stops(broker)
     if trail_result.submitted:
         print(f"  Attached {len(trail_result.submitted)} missing trailing stop(s):")
@@ -682,14 +978,11 @@ def run_watchdog(quick=False):
             sym = pair[0].symbol if pair[0] is not None else "?"
             print(f"    ! Could not attach trailing stop on {sym}: {pair[1]}")
 
-    # SEPA Phase 1 take-profit checks (R-multiple scale-out + 21EMA trail)
-    header("SEPA EXITS")
-    sepa_lines = check_sepa_exits(snap, broker)
-    if not sepa_lines:
-        print("  No SEPA actions today.")
-    else:
-        for line in sepa_lines:
-            print(f"  {line}")
+    # SEPA exits run in run_intraday (every 5 min during RTH). The daily
+    # 8:30 ET pass intentionally skips them to avoid duplicate evaluation —
+    # intraday's first tick at 9:30 will run them anyway. Keep the header for
+    # operational visibility.
+    header("SEPA EXITS (skipped — handled by intraday cron)")
 
     # Portfolio status
     header("PORTFOLIO STATUS")
@@ -721,7 +1014,7 @@ def run_watchdog(quick=False):
 
     if not quick:
         header("MACRO REGIME CHECK")
-        macro_alerts, macro_result = check_macro_shift(snap)
+        macro_alerts, macro_result = check_macro_shift(snap, broker=broker)
         all_alerts.extend(macro_alerts)
         print(f"  Score: {macro_result['score']:+.3f} | Regime: {macro_result['regime'].upper()}")
         for name, ind in macro_result["indicators"].items():
@@ -774,10 +1067,359 @@ def show_history():
     print()
 
 
+# ── Intraday buy signals ─────────────────────────────────────────
+
+_SCREENER_CACHE_PATH = os.path.join(os.path.dirname(__file__), ".cache", "screener_result.json")
+
+
+def _load_screener_cache() -> "pd.DataFrame | None":
+    """Return cached screener DataFrame if younger than WATCHDOG_BUY_SCREENER_CACHE_HOURS."""
+    if not os.path.exists(_SCREENER_CACHE_PATH):
+        return None
+    age_hours = (dt.datetime.now().timestamp() - os.path.getmtime(_SCREENER_CACHE_PATH)) / 3600
+    if age_hours > config.WATCHDOG_BUY_SCREENER_CACHE_HOURS:
+        return None
+    try:
+        import json as _json
+        with open(_SCREENER_CACHE_PATH) as f:
+            records = _json.load(f)
+        return pd.DataFrame(records)
+    except Exception:
+        return None
+
+
+def _save_screener_cache(df: "pd.DataFrame") -> None:
+    """Write screener cache atomically: write-temp then rename, with fcntl
+    lock on a sibling sentinel so a concurrent reader never sees partial JSON."""
+    import fcntl, json as _json
+    os.makedirs(os.path.dirname(_SCREENER_CACHE_PATH), exist_ok=True)
+    lock_path = _SCREENER_CACHE_PATH + ".lock"
+    with open(lock_path, "w") as lk:
+        fcntl.flock(lk.fileno(), fcntl.LOCK_EX)
+        tmp_path = _SCREENER_CACHE_PATH + ".tmp"
+        with open(tmp_path, "w") as f:
+            _json.dump(df.to_dict(orient="records"), f, default=str)
+        os.replace(tmp_path, _SCREENER_CACHE_PATH)
+
+
+def _get_screened_stocks() -> "pd.DataFrame":
+    """Return screener results from 1-hour cache, or run a fresh screen."""
+    cached = _load_screener_cache()
+    if cached is not None and not cached.empty:
+        return cached
+    from screener import screen_stocks
+    df = screen_stocks()
+    if not df.empty:
+        _save_screener_cache(df)
+    return df
+
+
+def _intraday_volume_fraction(minutes_elapsed: float) -> float:
+    """Approximate fraction of full-day volume accumulated by `minutes_elapsed`
+    minutes into the session.
+
+    US equity intraday volume is U-shaped:
+      • 9:30–10:30 (open burst):     ~25% of daily volume
+      • 10:30–15:00 (midday trough): ~50%
+      • 15:00–16:00 (closing burst): ~25%
+
+    Returning the cumulative fraction lets the projector compute
+    full_day = observed / fraction, which is dramatically more accurate
+    at midday than a linear 1.0× projection.
+    """
+    if minutes_elapsed <= 0:
+        return 0.0
+    if minutes_elapsed <= 60:                      # 0–60 min into session
+        return (minutes_elapsed / 60.0) * 0.25
+    if minutes_elapsed <= 330:                     # 60–330 min (10:30–15:00)
+        return 0.25 + ((minutes_elapsed - 60) / 270.0) * 0.50
+    if minutes_elapsed <= 390:                     # 330–390 (15:00–16:00)
+        return 0.75 + ((minutes_elapsed - 330) / 60.0) * 0.25
+    return 1.0
+
+
+def _estimate_full_day_volume(ticker: str,
+                              bars: "pd.DataFrame | None" = None) -> "float | None":
+    """Project today's full-day volume from intraday 1-min bars + a U-shape profile.
+
+    Returns None when < WATCHDOG_BUY_MIN_ELAPSED_MIN into the session.
+    `bars` lets callers pass a pre-fetched 1m frame (multi-ticker batch
+    download) to avoid one yfinance round-trip per symbol — see check_buy_signals.
+    """
+    from timeutils import now_et
+    now = now_et()
+    market_open = now.replace(hour=9, minute=30, second=0, microsecond=0)
+    minutes_elapsed = (now - market_open).total_seconds() / 60
+    if minutes_elapsed < config.WATCHDOG_BUY_MIN_ELAPSED_MIN:
+        return None
+
+    if bars is None:
+        import yfinance as yf
+        bars = yf.download(ticker, period="1d", interval="1m",
+                            progress=False, auto_adjust=True)
+    if bars is None or bars.empty:
+        return None
+
+    if isinstance(bars.columns, pd.MultiIndex):
+        try:
+            current_vol = float(bars["Volume"][ticker].sum())
+        except KeyError:
+            return None
+    else:
+        current_vol = float(bars["Volume"].sum())
+
+    fraction = _intraday_volume_fraction(minutes_elapsed)
+    if fraction <= 0:
+        return None
+    return current_vol / fraction
+
+
+_BUY_SIGNALS_TODAY_PATH = os.path.join(os.path.dirname(__file__),
+                                        ".cache", "buy_signals_today.json")
+
+
+def _load_today_buy_signals() -> set:
+    """Tickers we've already fired buy signals for today. Resets at date change."""
+    today = dt.date.today().isoformat()
+    if not os.path.exists(_BUY_SIGNALS_TODAY_PATH):
+        return set()
+    try:
+        with open(_BUY_SIGNALS_TODAY_PATH) as f:
+            data = json.load(f)
+    except (json.JSONDecodeError, OSError):
+        return set()
+    if data.get("date") != today:
+        return set()
+    return set(data.get("tickers", []))
+
+
+def _record_today_buy_signal(ticker: str) -> None:
+    """Stamp `ticker` as having fired today. fcntl-safe."""
+    import fcntl
+    today = dt.date.today().isoformat()
+    os.makedirs(os.path.dirname(_BUY_SIGNALS_TODAY_PATH), exist_ok=True)
+    lock = _BUY_SIGNALS_TODAY_PATH + ".lock"
+    with open(lock, "w") as lk:
+        fcntl.flock(lk.fileno(), fcntl.LOCK_EX)
+        existing = _load_today_buy_signals()
+        existing.add(ticker)
+        with open(_BUY_SIGNALS_TODAY_PATH, "w") as f:
+            json.dump({"date": today, "tickers": sorted(existing)}, f)
+
+
+def check_buy_signals(snap: "orders.PortfolioSnapshot", broker: "Broker") -> list[str]:
+    """Fire when a screened stock's estimated full-day volume exceeds the max
+    volume on any down-day in the past WATCHDOG_BUY_LOOKBACK_DAYS trading days.
+    Submits a buy order and writes a Telegram notification.
+
+    Performance: batches all candidates into TWO yfinance calls per tick
+    (history + intraday) instead of 2N. Critical because intraday cron fires
+    every 5 min — the old per-ticker loop guaranteed yfinance throttling.
+
+    Dedup: a ticker that already fired today (recorded in
+    .cache/buy_signals_today.json) is skipped — avoids re-submitting the same
+    buy 5 min later just because volume kept climbing.
+    """
+    import yfinance as yf
+
+    screened = _get_screened_stocks()
+    if screened.empty:
+        return []
+
+    owned = {p["symbol"] for p in snap.positions}
+    fired_today = _load_today_buy_signals()
+    candidates = [
+        str(row["ticker"]) for _, row in screened.iterrows()
+        if str(row["ticker"]) not in owned and str(row["ticker"]) not in fired_today
+    ]
+    if not candidates:
+        return []
+
+    lines: list[str] = []
+    lookback = config.WATCHDOG_BUY_LOOKBACK_DAYS
+
+    # ── Batch fetch: history (lookback+5 days) for ALL candidates in one call ──
+    try:
+        hist_all = yf.download(
+            candidates, period=f"{lookback + 5}d",
+            progress=False, auto_adjust=True, group_by="ticker",
+        )
+    except Exception as e:
+        lines.append(f"  [buy-check batch-history error]: {e}")
+        return lines
+
+    # ── Batch fetch: today's 1m bars for all candidates ──
+    intraday_all = None
+    try:
+        intraday_all = yf.download(
+            candidates, period="1d", interval="1m",
+            progress=False, auto_adjust=True, group_by="ticker",
+        )
+    except Exception as e:
+        lines.append(f"  [buy-check batch-intraday error]: {e}")
+        # We can still attempt per-ticker fallback inside the loop.
+
+    def _per_ticker_frame(batched, ticker, multi_first: bool):
+        """Slice batched yf.download output for one ticker. yfinance frame
+        shape varies (single-ticker = flat; multi-ticker = MultiIndex). When
+        we passed a list of tickers, group_by='ticker' makes ticker the top
+        level."""
+        if batched is None or batched.empty:
+            return None
+        if isinstance(batched.columns, pd.MultiIndex):
+            try:
+                if multi_first:
+                    return batched[ticker]
+                return batched.xs(ticker, axis=1, level=1)
+            except (KeyError, ValueError):
+                return None
+        # Single ticker case (yfinance flattens when len(candidates)==1)
+        return batched if len(candidates) == 1 else None
+
+    for ticker in candidates:
+        try:
+            hist = _per_ticker_frame(hist_all, ticker, multi_first=True)
+            if hist is None or hist.empty or len(hist) < 2:
+                continue
+
+            close = hist["Close"].dropna() if "Close" in hist.columns else None
+            volume = hist["Volume"].dropna() if "Volume" in hist.columns else None
+            if close is None or volume is None:
+                continue
+
+            df_h = pd.DataFrame({"close": close, "volume": volume}).dropna().iloc[:-1]
+            df_h = df_h.tail(lookback)
+            df_h = df_h.copy()
+            df_h["prev_close"] = df_h["close"].shift(1)
+            down_days = df_h[df_h["close"] < df_h["prev_close"]]
+            if down_days.empty:
+                continue
+
+            max_down_vol = float(down_days["volume"].max())
+
+            # Intraday bars come from the same batched frame when possible
+            # (saves a yfinance call per candidate inside _estimate_full_day_volume).
+            ticker_intraday = _per_ticker_frame(intraday_all, ticker, multi_first=True)
+            est_vol = _estimate_full_day_volume(ticker, bars=ticker_intraday)
+            if est_vol is None:
+                continue
+
+            if est_vol <= max_down_vol:
+                continue
+
+            # Buy signal fired — try to submit. Only stamp dedup if the order
+            # actually went through; otherwise (HALT, cash-aware gate, etc.)
+            # a later tick on the same day should still get a chance.
+            msg = (f"BUY SIGNAL [{ticker}] est vol {est_vol/1e6:.1f}M "
+                   f"> max down-day vol {max_down_vol/1e6:.1f}M")
+            lines.append(msg)
+            _notify_critical(msg)
+
+            today = dt.date.today()
+            cid = orders._make_cid("core", "vol-breakout", ticker, today)
+            # Treat watchdog buy signals as core sleeve additions so they get
+            # the same stop/trail policy as CANSLIM picks and stay visible to
+            # SEPA / stop-loss checks.
+            intent = orders.OrderIntent(
+                symbol=ticker,
+                notional=round(config.WATCHDOG_BUY_NOTIONAL, 2),
+                side="buy",
+                reason="volume-breakout-buy",
+                tranche="core",
+                client_order_id=cid,
+                stop_pct=getattr(config, "STOP_LOSS_PCT", 0.08),
+                trail_pct=getattr(config, "TRAILING_STOP_PCT", 0.12),
+            )
+            plan = orders.OrderPlan(buys=[intent], sells=[], holds=[])
+            result = orders.execute_plan(plan, broker=broker, reason="watchdog-vol-breakout")
+            if result.submitted:
+                lines.append(f"  → submitted {ticker} ${config.WATCHDOG_BUY_NOTIONAL:,.0f}")
+                _record_today_buy_signal(ticker)
+            elif result.queued:
+                # Queued for Telegram approval — counts as "fired", don't retry.
+                lines.append(f"  → queued for TG approval")
+                _record_today_buy_signal(ticker)
+            elif result.skipped:
+                reason_str = result.skipped[0][1] if result.skipped else "unknown"
+                lines.append(f"  → skipped: {reason_str} (will retry next tick)")
+
+        except Exception as exc:
+            lines.append(f"  [buy-check error {ticker}]: {exc}")
+
+    return lines
+
+
+def _is_trading_hours() -> bool:
+    """True if current wall-clock time falls within US market hours (9:30–16:00 ET, Mon–Fri).
+    Thin wrapper for tests to monkeypatch; logic lives in timeutils."""
+    from timeutils import is_rth_now
+    return is_rth_now()
+
+
+def _notify_critical(message: str) -> None:
+    """Write a CRITICAL alert to the Telegram notification queue."""
+    from notifications import append_notification
+    append_notification({"source": "watchdog.intraday", "message": message})
+
+
+def run_intraday() -> None:
+    """Lightweight intraday check: SEPA exits + stop-loss monitoring.
+
+    Designed to run every 5 min during market hours. Skips macro, news,
+    volume, and rebalance checks — those run in the full daily pass.
+    Exits immediately if outside trading hours so the cron can fire broadly.
+    """
+    if not _is_trading_hours():
+        return
+
+    now_str = dt.datetime.now().strftime("%H:%M")
+    print(f"[{now_str}] Intraday watchdog check")
+
+    broker = Broker(env=config.ALPACA_ENV)
+    snap = snapshot(broker=broker)
+    portfolio = {
+        "positions": _as_legacy_positions(snap),
+        "cash": snap.cash,
+        "initial_capital": config.INITIAL_CAPITAL,
+    }
+
+    # Ensure trailing stops on any position missing one
+    trail_result = orders.ensure_trailing_stops(broker)
+    if trail_result.submitted:
+        print(f"  Attached {len(trail_result.submitted)} trailing stop(s): "
+              + ", ".join(o.symbol for o in trail_result.submitted))
+
+    # SEPA exits — intraday wants real-time prices so R-tier / climax don't
+    # fire ~5 min late on snap-stale state. One batched latest_quote loop
+    # inside check_sepa_exits, not per-position.
+    sepa_lines = check_sepa_exits(snap, broker, live_prices=True)
+    for line in sepa_lines:
+        print(f"  SEPA: {line}")
+
+    # Price / stop-loss — use Alpaca latest_price for real-time intraday data
+    price_alerts = check_price_moves(portfolio, broker=broker)
+    critical = [a for a in price_alerts if "CRITICAL" in a[0]]
+    warnings = [a for a in price_alerts if "WARNING" in a[0]]
+    for a in critical + warnings:
+        print(f"  {a[0]} [{a[1]}] {a[2]}")
+    for a in critical:
+        _notify_critical(f"[{a[1]}] {a[2]}")
+
+    # Volume-breakout buy signals (screened stocks not yet in portfolio)
+    buy_lines = check_buy_signals(snap, broker)
+    for line in buy_lines:
+        print(f"  BUY: {line}")
+
+    if not sepa_lines and not price_alerts and not buy_lines:
+        print("  OK")
+
+
 if __name__ == "__main__":
     args = sys.argv[1:]
 
-    if "--quick" in args:
+    if "--intraday" in args:
+        run_intraday()
+    elif "--quick" in args:
         run_watchdog(quick=True)
     elif "--portfolio" in args:
         snap = snapshot()
