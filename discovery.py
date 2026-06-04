@@ -4,16 +4,18 @@ Auto Stock Discovery — refreshes the candidate watchlist by scanning the
 market through deterministic, ranked sources.
 
 Pipeline:
-  1. Gather candidates from prioritized sources (current watchlist,
-     smart-money signals from quant/data_sources, S&P 500 round-robin,
-     and optional Reddit trending).
-  2. Batch-fetch 6mo OHLCV via data.fetch_prices/fetch_ohlcv (one HTTP
-     burst), then ThreadPool-parallel info + fundamentals per ticker.
-  3. Score every dimension cross-sectionally (rank percentile) and
-     combine with config.DISCOVERY_WEIGHTS.
-  4. Rank, tag, optionally append top names to watchlist_auto.json
-     (append-only; config.py is never rewritten) and append a one-line
-     audit record to .cache/discovery.log.
+  1. Build the scan universe (config.DISCOVERY_UNIVERSE_INDICES via
+     get_universe_tickers; S&P 500 + Nasdaq-100 + S&P 400 MidCap from Wikipedia,
+     S&P 500 fallback) and merge with the watchlist + smart-money + Reddit feeds.
+  2. Stage 1 (cheap): batch-download OHLCV and rank the whole universe on
+     universe-wide relative strength + a price/liquidity gate, keeping the top
+     DISCOVERY_STAGE1_KEEP survivors (watchlist/smart-money are protected).
+  3. Stage 2 (expensive): fetch info + fundamentals only for survivors, then
+     score every dimension cross-sectionally and combine with DISCOVERY_WEIGHTS
+     (value/quality ranked within GICS sector; top growth cohort exempt from the
+     value-P/E penalty).
+  4. Rank, tag, optionally append top names to watchlist_auto.json (append-only;
+     config.py is never rewritten) and append a one-line audit record.
 
 Auto-discovered tickers live in watchlist_auto.json (config.WATCHLIST_AUTO_PATH).
 config.py loads that file and unions it with the hand-curated WATCHLIST_SEED to
@@ -31,6 +33,7 @@ Usage:
 from __future__ import annotations
 import sys
 import os
+import io
 import json
 import time
 import re
@@ -48,7 +51,6 @@ CACHE_DIR = os.path.join(os.path.dirname(__file__), ".cache")
 os.makedirs(CACHE_DIR, exist_ok=True)
 
 DISCOVERY_LOG = os.path.join(CACHE_DIR, "discovery.log")
-SP500_POINTER = os.path.join(CACHE_DIR, "disc_sp500_pointer.json")
 LASTPASS_PATH = os.path.join(CACHE_DIR, "discovery_lastpass.json")
 
 
@@ -94,29 +96,107 @@ def get_sp500_tickers() -> List[str]:
     return []
 
 
-def sp500_round_robin_slice(batch_size: int) -> List[str]:
-    """Return the next `batch_size` S&P 500 tickers, advancing the pointer.
+# Wikipedia constituent pages for the index universe. Geo-neutral (unlike the
+# iShares US holdings CSV, which is gated behind a country disclaimer for non-US
+# accounts and returns HTML instead of the file).
+WIKI_INDEX_URLS = {
+    "sp500":     "https://en.wikipedia.org/wiki/List_of_S%26P_500_companies",
+    "nasdaq100": "https://en.wikipedia.org/wiki/Nasdaq-100",
+    "sp400":     "https://en.wikipedia.org/wiki/List_of_S%26P_400_companies",
+}
+# Minimum constituent count for an index fetch to be trusted (else treated as a
+# failed/blocked fetch). Sized well below each index's real membership.
+_INDEX_MIN_COUNT = {"sp500": 400, "nasdaq100": 50, "sp400": 200}
 
-    Wraps around when the end is reached. Pointer lives in .cache/disc_sp500_pointer.json.
-    """
-    universe = get_sp500_tickers()
-    if not universe:
-        return []
+
+def _fetch_html(url: str) -> str:
+    """GET a page's HTML with a browser UA. Raises on network failure."""
+    import urllib.request
+    req = urllib.request.Request(
+        url, headers={"User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)"}
+    )
+    with urllib.request.urlopen(req, timeout=15) as resp:
+        return resp.read().decode("utf-8", "replace")
+
+
+def _index_symbols_from_html(html: str) -> List[str]:
+    """Extract index constituents from a Wikipedia page via pandas.read_html.
+
+    Picks the table holding the most valid tickers in a Ticker/Symbol column
+    (robust across pages that link tickers differently — a plain regex misses
+    the Nasdaq-100 table entirely). Returns de-duped, order-preserved symbols;
+    [] on any parse failure (fail-open)."""
     try:
-        with open(SP500_POINTER) as f:
-            pos = int(json.load(f).get("pos", 0))
-    except (FileNotFoundError, json.JSONDecodeError):
-        pos = 0
-    pos %= len(universe)
-    end = pos + batch_size
-    if end <= len(universe):
-        out = universe[pos:end]
-    else:
-        out = universe[pos:] + universe[: end - len(universe)]
-    new_pos = end % len(universe)
-    with open(SP500_POINTER, "w") as f:
-        json.dump({"pos": new_pos, "updated": dt.datetime.utcnow().isoformat()}, f)
-    return out
+        tables = pd.read_html(io.StringIO(html))
+    except Exception:
+        return []
+    best: List[str] = []
+    for tbl in tables:
+        for col in tbl.columns:
+            if str(col).strip().lower() not in ("ticker", "symbol"):
+                continue
+            syms = [str(s).strip().upper().replace("\xa0", "") for s in tbl[col].tolist()]
+            syms = [s for s in syms
+                    if s.replace(".", "").replace("-", "").isalpha() and 1 <= len(s) <= 5]
+            syms = list(dict.fromkeys(syms))
+            if len(syms) > len(best):
+                best = syms
+    return best
+
+
+def _get_wiki_index(key: str) -> List[str]:
+    """Constituents of one Wikipedia index page, cached 1 week. [] on failure."""
+    cached = _cache_get(key, ttl_hours=168)
+    if cached:
+        return cached
+    try:
+        syms = _index_symbols_from_html(_fetch_html(WIKI_INDEX_URLS[key]))
+    except Exception:
+        syms = []
+    if len(syms) >= _INDEX_MIN_COUNT.get(key, 50):
+        _cache_set(key, syms)
+    return syms
+
+
+def get_nasdaq100_tickers() -> List[str]:
+    """Nasdaq-100 constituents from Wikipedia (1-week cache)."""
+    return _get_wiki_index("nasdaq100")
+
+
+def get_sp400_tickers() -> List[str]:
+    """S&P 400 MidCap constituents from Wikipedia (1-week cache)."""
+    return _get_wiki_index("sp400")
+
+
+# Maps a config.DISCOVERY_UNIVERSE_INDICES key to the NAME of the getter that
+# supplies it. Resolved via globals() at call time (not a frozen reference) so
+# tests can monkeypatch the individual getters.
+_INDEX_GETTERS = {
+    "sp500": "get_sp500_tickers",
+    "nasdaq100": "get_nasdaq100_tickers",
+    "sp400": "get_sp400_tickers",
+}
+
+
+def get_universe_tickers() -> List[str]:
+    """Discovery scan universe = union of config.DISCOVERY_UNIVERSE_INDICES
+    (Wikipedia index constituents: S&P 500 + Nasdaq-100 + S&P 400 MidCap by
+    default — geo-neutral, ~850 large+mid-cap US names incl. leaders outside the
+    S&P 500 like MRVL). Cached 1 week. Falls back to the S&P 500 alone if the
+    union is implausibly small, so discovery never degrades to empty."""
+    cached = _cache_get("universe", ttl_hours=168)
+    if cached:
+        return cached[: config.DISCOVERY_UNIVERSE_MAX]
+    tickers: List[str] = []
+    for key in config.DISCOVERY_UNIVERSE_INDICES:
+        getter = globals().get(_INDEX_GETTERS.get(key, ""))
+        if getter:
+            tickers.extend(getter())
+    tickers = list(dict.fromkeys(tickers))
+    if len(tickers) >= 200:
+        _cache_set("universe", tickers)
+        return tickers[: config.DISCOVERY_UNIVERSE_MAX]
+    return get_sp500_tickers()[: config.DISCOVERY_UNIVERSE_MAX]
 
 
 def get_smart_money_tickers(sources: tuple = None) -> dict:
@@ -165,11 +245,12 @@ def merge_candidates(
 ) -> tuple[list, dict]:
     """Deterministic, priority-ordered candidate merge.
 
-    Order: current WATCHLIST → smart-money → Reddit (opt-in) → S&P500 round-robin slice.
-    Returns (ordered_tickers, source_map) where source_map records every feed each
-    ticker came from. Each ticker appears at most once.
+    Order: current WATCHLIST → smart-money → Reddit (opt-in) → full scan universe
+    (config.DISCOVERY_UNIVERSE_INDICES via get_universe_tickers; S&P 500 +
+    Nasdaq-100 + S&P 400 today). Returns (ordered_tickers, source_map). Each
+    ticker appears at most once.
     """
-    cap = max_scan or config.DISCOVERY_MAX_SCAN
+    cap = max_scan or config.DISCOVERY_UNIVERSE_MAX
     ordered: list = []
     sources: dict = {}
 
@@ -180,29 +261,23 @@ def merge_candidates(
         sources[ticker] = [source]
         ordered.append(ticker)
 
-    # 1. Current watchlist — always re-scored
     for t in config.WATCHLIST:
         _add(t, "watchlist")
 
-    # 2. Smart money (13F, ETF holdings, ARK, Congress)
     sm = get_smart_money_tickers()
     for t, feeds in sm.items():
         for f in feeds:
             _add(t, f)
 
-    # 3. Reddit (opt-in only)
     if include_reddit:
         for t in get_reddit_trending_tickers():
             _add(t, "reddit")
 
-    # 4. S&P 500 round-robin — fills remaining quota
-    remaining = max(0, cap - len(ordered))
-    if remaining > 0:
-        batch = min(config.DISCOVERY_SP500_BATCH, remaining)
-        for t in sp500_round_robin_slice(batch):
-            if len(ordered) >= cap:
-                break
-            _add(t, "sp500")
+    # Bulk universe — fills the rest up to the cap.
+    for t in get_universe_tickers():
+        if len(ordered) >= cap:
+            break
+        _add(t, "universe")
 
     return ordered[:cap], sources
 
@@ -339,6 +414,79 @@ def enrich_with_prices(snapshots: List[dict]) -> List[dict]:
     return snapshots
 
 
+# ── Stage-1 prescreen: universe-wide RS + liquidity gate ────────
+
+def _chunked_ohlcv(tickers: List[str], period: str = "1y", chunk: int = 150) -> pd.DataFrame:
+    """Batch-download OHLCV in chunks (yfinance chokes on 1000+ tickers at once),
+    concatenated to one MultiIndex (field, ticker) frame. Empty on total failure."""
+    frames = []
+    for i in range(0, len(tickers), chunk):
+        part = data_mod.fetch_ohlcv(tickers[i:i + chunk], period=period)
+        if not part.empty:
+            frames.append(part)
+    if not frames:
+        return pd.DataFrame()
+    return pd.concat(frames, axis=1)
+
+
+def prescreen_universe(tickers: List[str], protected: set, *, keep: Optional[int] = None):
+    """Stage 1 — cheap, batched. Rank the whole universe on universe-wide relative
+    strength, apply a price/liquidity gate, and carry the top `keep` survivors
+    (plus all `protected` names) into Stage 2.
+
+    Returns (survivors, metrics) where metrics[ticker] = {rs_pct, ret_3m,
+    dist_52w_high, sma50_dist_pct, price, avg_dollar_vol} so Stage 2 need not
+    recompute prices. Fail-open: if no price data, carry protected + the raw head
+    so a network blip never empties discovery.
+    """
+    keep = keep or config.DISCOVERY_STAGE1_KEEP
+    ohlcv = _chunked_ohlcv(tickers, period="1y")
+    if ohlcv.empty:
+        survivors = list(dict.fromkeys(list(protected) + tickers))[: max(keep, len(protected))]
+        return survivors, {}
+
+    close = ohlcv["Close"]
+    vol = ohlcv["Volume"]
+
+    def _ret(n):
+        return close.iloc[-1] / close.iloc[-n] - 1 if len(close) >= n else pd.Series(np.nan, index=close.columns)
+
+    rs_pct = (0.40 * _ret(63).fillna(0) + 0.30 * _ret(126).fillna(0)
+              + 0.30 * _ret(252).fillna(0)).rank(pct=True) * 100
+
+    metrics: dict = {}
+    for t in close.columns:
+        ser = close[t].dropna()
+        if ser.empty:
+            continue
+        last = float(ser.iloc[-1])
+        vser = vol[t].dropna() if t in vol.columns else pd.Series(dtype=float)
+        avg_dollar_vol = float((ser * vser).tail(20).mean()) if not vser.empty else 0.0
+        sma50 = ser.rolling(50).mean().iloc[-1] if len(ser) >= 50 else None
+        metrics[t] = {
+            "price": last,
+            "rs_pct": float(rs_pct.get(t)) if not pd.isna(rs_pct.get(t, np.nan)) else None,
+            "ret_3m": float(ser.iloc[-1] / ser.iloc[-63] - 1) if len(ser) >= 63 else None,
+            "dist_52w_high": float(last / ser.max() - 1) if ser.max() > 0 else None,
+            "sma50_dist_pct": (float((last - sma50) / sma50) if sma50 and sma50 > 0 else None),
+            "avg_dollar_vol": avg_dollar_vol,
+        }
+
+    def _passes_gate(t):
+        m = metrics.get(t)
+        if not m:
+            return False
+        return (m["price"] or 0) >= config.DISCOVERY_MIN_PRICE and \
+               m["avg_dollar_vol"] >= config.DISCOVERY_MIN_DOLLAR_VOLUME
+
+    gated = [t for t in metrics if _passes_gate(t)]
+    gated.sort(key=lambda t: (metrics[t]["rs_pct"] or 0.0), reverse=True)
+    survivors = gated[:keep]
+    # Protected names always advance, even if illiquid or price-less.
+    survivors = list(dict.fromkeys(survivors + [t for t in protected]))
+    return survivors, metrics
+
+
 # ── EPS acceleration (CANSLIM-aligned) ──────────────────────────
 
 def _eps_acceleration_score(quarterly_eps: list) -> float:
@@ -367,34 +515,67 @@ def _pct_rank(series: pd.Series, ascending: bool = True) -> pd.Series:
     return ranked.fillna(50.0)
 
 
+def _pct_rank_within(series: pd.Series, groups: Optional[pd.Series], ascending: bool = True) -> pd.Series:
+    """Percentile rank 0-100 computed WITHIN each group (e.g. GICS sector).
+
+    Falls back to a global rank when groups is None/empty or a group has a single
+    member (a singleton can't be ranked against peers). NaN → 50 (neutral)."""
+    if groups is None or groups.isna().all():
+        return _pct_rank(series, ascending=ascending)
+    out = pd.Series(np.nan, index=series.index)
+    global_rank = _pct_rank(series, ascending=ascending)
+    for g, idx in groups.groupby(groups).groups.items():
+        sub = series.loc[idx]
+        if len(sub) <= 1:
+            out.loc[idx] = global_rank.loc[idx]  # singleton → global
+        else:
+            out.loc[idx] = _pct_rank(sub, ascending=ascending)
+    return out.fillna(50.0)
+
+
 def compute_composite_scores(df: pd.DataFrame, weights: dict = None) -> pd.DataFrame:
-    """Cross-sectional rank for each dimension, weighted sum to `composite_score`."""
+    """Cross-sectional rank for each dimension, weighted sum to `composite_score`.
+
+    Momentum/RS factors rank market-wide; value/quality (value_pe, roe) rank
+    within GICS sector when config.DISCOVERY_SECTOR_RELATIVE and a 'sector' column
+    is present. The top growth cohort (rev_growth percentile >=
+    config.DISCOVERY_GROWTH_EXEMPT_PCTL) is not penalized on value_pe.
+    """
     if df.empty:
         df["composite_score"] = pd.Series(dtype=float)
         return df
     w = weights or config.DISCOVERY_WEIGHTS
 
+    sector = df.get("sector") if (config.DISCOVERY_SECTOR_RELATIVE and "sector" in df.columns) else None
+    if sector is not None:
+        sector = sector.replace("", np.nan)
+
     pct = pd.DataFrame(index=df.index)
     pct["rs"]            = _pct_rank(df.get("rs_pct"))
     pct["rev_growth"]    = _pct_rank(df.get("rev_growth"))
     pct["eps_q_growth"]  = _pct_rank(df.get("eps_q_growth"))
-    pct["roe"]           = _pct_rank(df.get("roe"))
+    pct["roe"]           = _pct_rank_within(df.get("roe"), sector)
     pct["mom_3m"]        = _pct_rank(df.get("ret_3m"))
-    # closer to 52w high is BETTER — dist is ≤ 0, so larger (less negative) ranks higher
     pct["dist_52w_high"] = _pct_rank(df.get("dist_52w_high"))
-    # younger IPOs rank higher: invert (ascending=False)
     pct["ipo_age"]       = _pct_rank(df.get("ipo_age_years"), ascending=False)
     pct["sma50_dist"]    = _pct_rank(df.get("sma50_dist_pct"))
-    # PE: only score POSITIVE P/E names; loss-makers excluded from this dimension
+
     pe = df.get("pe")
     inv_pe = pd.Series(np.where((pe > 0) & pe.notna(), 1.0 / pe, np.nan), index=df.index)
-    pct["value_pe"]      = _pct_rank(inv_pe)
-    # EPS acceleration is a separate boost on top of the weighted sum
-    eps_accel = df.get("quarterly_eps").apply(_eps_acceleration_score)
+    value_pe = _pct_rank_within(inv_pe, sector)
+    # Growth exemption (rank-based → scale-invariant): neutralize value_pe for the
+    # top growth cohort so high-P/E leaders aren't dinged for being expensive.
+    # Use method='min' so ties are resolved conservatively (lower rank), preventing
+    # a 2-stock tied universe from accidentally exceeding the threshold.
+    rev_growth_ser = df.get("rev_growth")
+    rev_pctl = rev_growth_ser.rank(pct=True, method="min", na_option="keep") * 100
+    rev_pctl = rev_pctl.fillna(50.0)
+    value_pe = value_pe.mask(rev_pctl >= config.DISCOVERY_GROWTH_EXEMPT_PCTL, 50.0)
+    pct["value_pe"] = value_pe
 
+    eps_accel = df.get("quarterly_eps").apply(_eps_acceleration_score)
     total_w = sum(w.values())
     score = sum(pct[k] * w[k] for k in w if k in pct.columns) / max(total_w, 1e-9)
-    # Acceleration bonus: up to +5 percentile points
     df["composite_score"] = (score + 5.0 * eps_accel).round(2)
     df["eps_accel_score"] = eps_accel
     for k in pct.columns:
@@ -493,29 +674,33 @@ def discover(
     include_reddit: bool = False,
     verbose: bool = True,
 ) -> tuple[pd.DataFrame, dict]:
-    """Run the full discovery pipeline. Returns (ranked_df, source_map)."""
+    """Two-stage discovery pipeline. Returns (ranked_df, source_map).
+
+    Stage 1 (cheap): rank the whole universe on universe-wide RS + liquidity,
+    keep the top DISCOVERY_STAGE1_KEEP survivors (+ watchlist/smart-money, which
+    are 'protected'). Stage 2 (expensive): fetch info+fundamentals only for
+    survivors, then compute the peer-relative composite.
+    """
     if verbose:
         print("  Gathering candidates...")
-    candidates, sources = merge_candidates(
-        include_reddit=include_reddit, max_scan=max_scan
-    )
-    if verbose:
-        src_counts = {}
-        for feeds in sources.values():
-            for f in feeds:
-                src_counts[f] = src_counts.get(f, 0) + 1
-        print(f"    {len(candidates)} unique tickers from "
-              + ", ".join(f"{k}={v}" for k, v in sorted(src_counts.items())))
+    candidates, sources = merge_candidates(include_reddit=include_reddit, max_scan=max_scan)
+
+    # Anything sourced by something other than the bulk universe is protected:
+    # never dropped by the Stage-1 liquidity/RS gate.
+    protected = {t for t in candidates if any(s != "universe" for s in sources.get(t, []))}
 
     if verbose:
-        print(f"\n  Fetching snapshots (parallel, {config.DISCOVERY_THREAD_WORKERS} workers)...")
-    snaps = fetch_snapshots_parallel(candidates)
+        print(f"    {len(candidates)} candidates; Stage 1 ranking on price/liquidity...")
+    survivors, price_metrics = prescreen_universe(candidates, protected)
     if verbose:
-        print(f"    {len(snaps)} valid snapshots after equity/US/micro-cap filter")
+        print(f"    {len(survivors)} survivors → Stage 2 (info + fundamentals)")
 
-    if verbose:
-        print("  Batch-downloading 1y prices...")
-    snaps = enrich_with_prices(snaps)
+    snaps = fetch_snapshots_parallel(survivors)
+    # Attach Stage-1 price metrics (no second price download).
+    for s in snaps:
+        m = price_metrics.get(s["ticker"], {})
+        for k in ("ret_3m", "rs_pct", "dist_52w_high", "sma50_dist_pct"):
+            s[k] = m.get(k)
 
     df = pd.DataFrame(snaps)
     if df.empty:

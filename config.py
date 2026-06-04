@@ -257,20 +257,33 @@ DISCOVERY_WEIGHTS = {
     "sma50_dist":    0.05,   # % above 50-day SMA (continuous)
     "value_pe":      0.05,   # inverse P/E percentile (loss-makers excluded)
 }
-# Ceiling on candidates scanned per run. Set high enough to admit the FULL S&P 500
-# (~503) on top of the watchlist + smart-money names, so no S&P name is ever
-# truncated. It's a ceiling, not a target: the actual count scanned is the deduped
-# union of all sources (~540 today), so headroom here costs nothing.
-DISCOVERY_MAX_SCAN = 800             # candidate ceiling per run after merge
-# >= S&P 500 universe size, so one round-robin slice returns every name each run
-# (the pointer still advances; it just no longer gates coverage).
-DISCOVERY_SP500_BATCH = 520          # full S&P 500 per run (was 50 → round-robin sampling)
 DISCOVERY_THREAD_WORKERS = 8         # yfinance concurrent fetchers
 DISCOVERY_STALE_DAYS = 90            # --prune: stale if not seen in N days
 DISCOVERY_REQUIRE_US = True          # screen out non-US-domiciled tickers
 DISCOVERY_TICKER_SOURCES = (         # smart-money signals to harvest
     "13F", "etf-holdings", "ark", "congress",
 )
+# ── Discovery scan universe (方案A: multi-index via Wikipedia) ──────────────
+# The discovery scan universe is the union of these index constituent lists,
+# scraped from Wikipedia (geo-neutral). S&P 500 + Nasdaq-100 + S&P 400 MidCap is
+# ~850 large+mid-cap US names — far broader than the S&P 500 alone and includes
+# growth leaders outside it (e.g. MRVL, via the Nasdaq-100). Geo-neutral by design:
+# the iShares US holdings CSV is gated behind a country disclaimer for non-US
+# accounts. discovery.get_universe_tickers falls back to S&P 500 alone if needed.
+DISCOVERY_UNIVERSE_INDICES = ("sp500", "nasdaq100", "sp400")
+DISCOVERY_UNIVERSE_MAX = 2000          # hard safety ceiling on universe size
+# Two-stage screening: Stage 1 (cheap, batched OHLCV) ranks the whole universe on
+# relative strength + liquidity and carries this many survivors into Stage 2
+# (expensive per-ticker info+fundamentals).
+DISCOVERY_STAGE1_KEEP = 250
+DISCOVERY_MIN_PRICE = 5.0              # Stage-1 gate: drop sub-$5 names
+DISCOVERY_MIN_DOLLAR_VOLUME = 5e6      # Stage-1 gate: avg daily $-volume floor
+# Peer-relative ranking: rank value/quality factors within GICS sector so a
+# high-P/E growth leader isn't graded against utilities/staples.
+DISCOVERY_SECTOR_RELATIVE = True
+# Growth exemption (rank-based, scale-invariant): names whose rev-growth percentile
+# is >= this are NOT penalized on the value-P/E factor (neutralized to 50).
+DISCOVERY_GROWTH_EXEMPT_PCTL = 66.0
 DIVIDEND_WITHHOLDING_RATE = 0.30     # W-8BEN: 30% US withholding on dividends
 
 # ── Intraday buy signals (watchdog) ─────────────────────────────

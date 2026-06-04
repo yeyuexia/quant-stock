@@ -98,11 +98,17 @@ python3 watchdog.py --quick      # price moves + bracket verification only
 python3 watchdog.py --portfolio  # live positions + P&L from Alpaca
 
 # Stock discovery
-# Each run scans the deduped union of: config.WATCHLIST + smart-money feeds +
-# the FULL S&P 500 (~503 names). DISCOVERY_SP500_BATCH=520 returns the whole
-# index every run; DISCOVERY_MAX_SCAN=800 is a ceiling that leaves room for it.
-# Note: the bulk universe is S&P 500 only — names outside the index (e.g. MRVL)
-# are NOT discovered and must be added to config.WATCHLIST_SEED by hand.
+# Two-stage scan over a broad, stable universe:
+#   Universe = config.DISCOVERY_UNIVERSE_INDICES constituents (S&P 500 +
+#     Nasdaq-100 + S&P 400 MidCap from Wikipedia, ~916 large+mid-cap US names;
+#     geo-neutral, with S&P 500 alone as fallback). Includes growth leaders
+#     outside the S&P 500 (e.g. MRVL, via the Nasdaq-100).
+#   Stage 1 (cheap): batch OHLCV -> universe-wide relative strength + liquidity
+#     gate -> keep top DISCOVERY_STAGE1_KEEP survivors (watchlist/smart-money are
+#     'protected' and always advance).
+#   Stage 2 (expensive): info + fundamentals only for survivors -> composite rank.
+#   Ranking: momentum/RS market-wide; value/quality within GICS sector; the top
+#     growth cohort is exempt from the value-P/E penalty.
 #
 # Auto-discovered names live in watchlist_auto.json (config.WATCHLIST_AUTO_PATH),
 # a GENERATED file. config.py loads it and unions it onto the hand-curated
@@ -364,6 +370,7 @@ Paper is the default. Before flipping:
 | FRED API | Free (key required) | Macro regime indicators |
 | Reddit JSON | Free | Social sentiment from finance subreddits |
 | Wikipedia | Free | S&P 500 component list |
+| Wikipedia | Free | Nasdaq-100 + S&P 400 constituents — discovery scan universe (with S&P 500) |
 
 ## File Structure
 

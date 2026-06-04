@@ -22,8 +22,8 @@ def test_merge_candidates_is_deterministic(monkeypatch):
     """Two consecutive calls with identical inputs must return identical lists."""
     monkeypatch.setattr(discovery, "get_smart_money_tickers",
                         lambda *a, **kw: {"NVDA": ["13F"], "PLTR": ["ark"]})
-    monkeypatch.setattr(discovery, "sp500_round_robin_slice",
-                        lambda n: ["A", "B", "C", "D"])
+    monkeypatch.setattr(discovery, "get_universe_tickers",
+                        lambda: ["A", "B", "C", "D"])
     monkeypatch.setattr(config, "WATCHLIST", ["AAPL", "MSFT"])
     a, _ = discovery.merge_candidates(max_scan=20)
     b, _ = discovery.merge_candidates(max_scan=20)
@@ -36,8 +36,8 @@ def test_merge_candidates_priority_order(monkeypatch):
                         lambda *a, **kw: {"SMRT1": ["13F"], "SMRT2": ["ark"]})
     monkeypatch.setattr(discovery, "get_reddit_trending_tickers",
                         lambda *a, **kw: ["REDD1"])
-    monkeypatch.setattr(discovery, "sp500_round_robin_slice",
-                        lambda n: ["SPX1", "SPX2"])
+    monkeypatch.setattr(discovery, "get_universe_tickers",
+                        lambda: ["SPX1", "SPX2"])
     monkeypatch.setattr(config, "WATCHLIST", ["WL1", "WL2"])
     ordered, _ = discovery.merge_candidates(include_reddit=True, max_scan=20)
     assert ordered[:2] == ["WL1", "WL2"]
@@ -51,61 +51,39 @@ def test_merge_candidates_dedupes_across_sources(monkeypatch):
     """A ticker present in multiple feeds appears once, with merged source list."""
     monkeypatch.setattr(discovery, "get_smart_money_tickers",
                         lambda *a, **kw: {"AAPL": ["13F", "etf-holdings"]})
-    monkeypatch.setattr(discovery, "sp500_round_robin_slice",
-                        lambda n: ["AAPL", "NVDA"])
+    monkeypatch.setattr(discovery, "get_universe_tickers",
+                        lambda: ["AAPL", "NVDA"])
     monkeypatch.setattr(config, "WATCHLIST", ["AAPL"])
     ordered, sources = discovery.merge_candidates(max_scan=20)
     assert ordered.count("AAPL") == 1
     assert "watchlist" in sources["AAPL"]
     assert "13F" in sources["AAPL"]
-    assert "sp500" in sources["AAPL"]
+    assert "universe" in sources["AAPL"]
 
-
-def test_merge_candidates_includes_full_sp500(monkeypatch):
-    """With production constants, one run must scan the ENTIRE S&P 500 — never a
-    truncated slice. The cap must leave room for the full universe on top of the
-    watchlist + a substantial smart-money set (regression: DISCOVERY_MAX_SCAN was
-    200 / DISCOVERY_SP500_BATCH 50, so a name like MRVL could be skipped run after
-    run)."""
-    universe = [f"SP{i}" for i in range(503)]
-    # Real round-robin returns the full universe when batch >= len(universe); the
-    # doubled list models the wrap so any batch >= 503 yields every name.
-    monkeypatch.setattr(discovery, "sp500_round_robin_slice",
-                        lambda n: (universe * 2)[:n])
-    monkeypatch.setattr(discovery, "get_smart_money_tickers",
-                        lambda *a, **kw: {f"SM{i}": ["13F"] for i in range(150)})
-    monkeypatch.setattr(config, "WATCHLIST", [f"WL{i}" for i in range(51)])
-    ordered, _ = discovery.merge_candidates()  # uses config production constants
-    assert set(universe).issubset(set(ordered)), \
-        "every S&P 500 name must be scanned in a single discovery run"
 
 
 def test_merge_candidates_respects_max_scan(monkeypatch):
     monkeypatch.setattr(discovery, "get_smart_money_tickers", lambda *a, **kw: {})
-    monkeypatch.setattr(discovery, "sp500_round_robin_slice", lambda n: [f"S{i}" for i in range(n)])
+    monkeypatch.setattr(discovery, "get_universe_tickers", lambda: [f"S{i}" for i in range(20)])
     monkeypatch.setattr(config, "WATCHLIST", ["A", "B", "C"])
     ordered, _ = discovery.merge_candidates(max_scan=5)
     assert len(ordered) == 5
     assert ordered[:3] == ["A", "B", "C"]
 
 
-# ── S&P 500 round-robin pointer ───────────────────────────────────
-
-def test_sp500_round_robin_advances_and_wraps(monkeypatch, tmp_path):
-    monkeypatch.setattr(discovery, "get_sp500_tickers",
-                        lambda: ["T1", "T2", "T3", "T4", "T5"])
-    monkeypatch.setattr(discovery, "SP500_POINTER", str(tmp_path / "ptr.json"))
-    first = discovery.sp500_round_robin_slice(2)
-    second = discovery.sp500_round_robin_slice(2)
-    third = discovery.sp500_round_robin_slice(2)  # wraps: T5, T1
-    assert first == ["T1", "T2"]
-    assert second == ["T3", "T4"]
-    assert third == ["T5", "T1"]
-
-
-def test_sp500_round_robin_no_universe(monkeypatch):
-    monkeypatch.setattr(discovery, "get_sp500_tickers", lambda: [])
-    assert discovery.sp500_round_robin_slice(10) == []
+def test_merge_candidates_uses_full_universe(monkeypatch):
+    """merge_candidates now sources the bulk universe from get_universe_tickers,
+    not the S&P 500 round-robin. Watchlist + smart-money still come first."""
+    universe = [f"U{i}" for i in range(1200)]
+    monkeypatch.setattr(discovery, "get_universe_tickers", lambda: universe)
+    monkeypatch.setattr(discovery, "get_smart_money_tickers", lambda *a, **k: {"NVDA": ["13F"]})
+    monkeypatch.setattr(config, "WATCHLIST", ["AAPL", "MSFT"])
+    monkeypatch.setattr(config, "DISCOVERY_UNIVERSE_MAX", 2000)
+    ordered, sources = discovery.merge_candidates()
+    assert ordered[:2] == ["AAPL", "MSFT"]      # watchlist first
+    assert "NVDA" in ordered                      # smart-money present
+    assert set(universe).issubset(set(ordered))   # whole universe scanned
+    assert "universe" in sources["U0"]            # tagged with its source
 
 
 # ── passes_criteria: fail-closed for value/quality ────────────────
@@ -605,3 +583,180 @@ def test_log_run_appends_jsonl(monkeypatch, tmp_path):
     assert rec1["candidates"] == 3
     assert rec1["valid"] == 3
     assert rec1["top_10"] == ["A", "B", "C"]
+
+
+# ── New-universe / two-stage / ranking config ─────────────────────
+
+def test_discovery_universe_config_present_and_sane():
+    import config
+    assert isinstance(config.DISCOVERY_UNIVERSE_INDICES, (tuple, list)) and config.DISCOVERY_UNIVERSE_INDICES
+    # every entry is a known index key with a Wikipedia URL
+    assert all(k in discovery.WIKI_INDEX_URLS for k in config.DISCOVERY_UNIVERSE_INDICES)
+    assert config.DISCOVERY_UNIVERSE_MAX >= 1000
+    assert 50 <= config.DISCOVERY_STAGE1_KEEP <= config.DISCOVERY_UNIVERSE_MAX
+    assert config.DISCOVERY_MIN_PRICE > 0
+    assert config.DISCOVERY_MIN_DOLLAR_VOLUME > 0
+    assert isinstance(config.DISCOVERY_SECTOR_RELATIVE, bool)
+    assert 0 <= config.DISCOVERY_GROWTH_EXEMPT_PCTL <= 100
+
+
+# ── Wikipedia multi-index universe ───────────────────────────────
+
+_WIKI_HTML = """
+<table><tr><th>Foo</th><th>Bar</th></tr><tr><td>1</td><td>2</td></tr></table>
+<table>
+  <tr><th>Company</th><th>Ticker</th></tr>
+  <tr><td>Apple</td><td>AAPL</td></tr>
+  <tr><td>Marvell</td><td>MRVL</td></tr>
+  <tr><td>Berkshire</td><td>BRK.B</td></tr>
+</table>
+"""
+
+def test_index_symbols_from_html_picks_ticker_column():
+    out = discovery._index_symbols_from_html(_WIKI_HTML)
+    assert "AAPL" in out
+    assert "MRVL" in out          # a non-S&P leader, present via Nasdaq-100
+    assert "BRK.B" in out         # dotted share-class kept
+    assert out == list(dict.fromkeys(out))  # de-duped, order preserved
+
+def test_index_symbols_from_html_bad_input_returns_empty():
+    assert discovery._index_symbols_from_html("") == []
+    assert discovery._index_symbols_from_html("<p>no tables here</p>") == []
+
+
+def test_get_universe_tickers_unions_indices_and_caches(monkeypatch, tmp_path):
+    # No real network: stub each index getter and the disk cache.
+    monkeypatch.setattr(discovery, "CACHE_DIR", str(tmp_path))
+    calls = {"n": 0}
+    def fake_sp500():
+        calls["n"] += 1
+        return ["AAPL", "MSFT"] + [f"X{i}" for i in range(300)]
+    monkeypatch.setattr(discovery, "get_sp500_tickers", fake_sp500)
+    monkeypatch.setattr(discovery, "get_nasdaq100_tickers", lambda: ["MRVL", "AAPL"])  # AAPL dupes
+    monkeypatch.setattr(discovery, "get_sp400_tickers", lambda: ["CAVA"])
+    monkeypatch.setattr(config, "DISCOVERY_UNIVERSE_INDICES", ("sp500", "nasdaq100", "sp400"))
+    u1 = discovery.get_universe_tickers()
+    assert "MRVL" in u1 and "AAPL" in u1 and "CAVA" in u1
+    assert u1.count("AAPL") == 1                 # de-duped across indices
+    # second call served from cache → no extra index fetches
+    u2 = discovery.get_universe_tickers()
+    assert u1 == u2
+    assert calls["n"] == 1
+
+def test_get_universe_tickers_falls_back_to_sp500(monkeypatch, tmp_path):
+    monkeypatch.setattr(discovery, "CACHE_DIR", str(tmp_path))
+    # All index getters return too little → union < 200 → fall back to S&P 500 alone.
+    monkeypatch.setattr(discovery, "get_sp500_tickers", lambda: ["SPX1", "SPX2", "SPX3"])
+    monkeypatch.setattr(discovery, "get_nasdaq100_tickers", lambda: [])
+    monkeypatch.setattr(discovery, "get_sp400_tickers", lambda: [])
+    monkeypatch.setattr(config, "DISCOVERY_UNIVERSE_INDICES", ("sp500", "nasdaq100", "sp400"))
+    u = discovery.get_universe_tickers()
+    assert u == ["SPX1", "SPX2", "SPX3"]
+
+
+# ── Stage-1 prescreen_universe ───────────────────────────────────
+
+def _fake_ohlcv(tickers, days=300):
+    idx = pd.date_range("2025-01-01", periods=days, freq="B")
+    cols = {}
+    for i, t in enumerate(tickers):
+        # strictly rising series; steeper slope for lower i => higher RS for early tickers
+        slope = 0.003 - 0.000002 * i
+        series = 100 * np.cumprod(1 + np.full(days, max(slope, 0.0005)))
+        cols[("Close", t)] = series
+        cols[("Volume", t)] = pd.Series(2_000_000.0, index=idx)  # $ vol ~ price*2M >> floor
+    df = pd.DataFrame(cols, index=idx)
+    df.columns = pd.MultiIndex.from_tuples(df.columns)
+    return df
+
+def test_prescreen_keeps_top_by_rs_plus_protected(monkeypatch):
+    tickers = [f"T{i}" for i in range(100)]
+    monkeypatch.setattr(discovery.data_mod, "fetch_ohlcv", lambda ts, period="1y": _fake_ohlcv(list(ts)))
+    monkeypatch.setattr(config, "DISCOVERY_STAGE1_KEEP", 10)
+    survivors, metrics = discovery.prescreen_universe(tickers, protected={"T99"})
+    assert len(survivors) <= 10 + 1            # top-10 + the protected straggler
+    assert "T0" in survivors                    # strongest RS kept
+    assert "T99" in survivors                    # protected kept despite weak RS
+    assert metrics["T0"]["rs_pct"] is not None   # metrics carried for reuse in stage 2
+
+def test_prescreen_liquidity_gate_drops_illiquid(monkeypatch):
+    tickers = ["LIQ", "ILLIQ"]
+    def fake(ts, period="1y"):
+        df = _fake_ohlcv(list(ts))
+        df[("Volume", "ILLIQ")] = 1.0           # ~$ vol far below floor
+        return df
+    monkeypatch.setattr(discovery.data_mod, "fetch_ohlcv", fake)
+    monkeypatch.setattr(config, "DISCOVERY_STAGE1_KEEP", 10)
+    survivors, _ = discovery.prescreen_universe(tickers, protected=set())
+    assert "LIQ" in survivors and "ILLIQ" not in survivors
+
+def test_prescreen_failopen_when_no_prices(monkeypatch):
+    tickers = [f"T{i}" for i in range(5)]
+    monkeypatch.setattr(discovery.data_mod, "fetch_ohlcv", lambda ts, period="1y": pd.DataFrame())
+    survivors, metrics = discovery.prescreen_universe(tickers, protected={"T0"})
+    assert "T0" in survivors                     # never lose protected names
+    assert metrics == {}
+
+
+def test_discover_is_two_stage_only_fetches_snapshots_for_survivors(monkeypatch):
+    candidates = [f"U{i}" for i in range(50)]
+    monkeypatch.setattr(discovery, "merge_candidates",
+                        lambda **k: (candidates, {t: ["universe"] for t in candidates}))
+    survivors = ["U0", "U1", "U2"]
+    price_metrics = {t: {"rs_pct": 90.0, "ret_3m": 0.1, "dist_52w_high": -0.05,
+                         "sma50_dist_pct": 0.05, "price": 100.0} for t in survivors}
+    monkeypatch.setattr(discovery, "prescreen_universe", lambda c, protected, **k: (survivors, price_metrics))
+
+    seen = {}
+    def fake_snaps(ts, workers=None):
+        seen["arg"] = list(ts)
+        return [{"ticker": t, "name": t, "price": 100.0, "market_cap": 5e9,
+                 "market_cap_B": 5.0, "pe": 20.0, "roe": 0.2, "rev_growth": 0.3,
+                 "div_yield": 0.0, "sector": "Information Technology", "country": "United States",
+                 "ipo_age_years": 4.0, "eps_q_growth": 0.2, "quarterly_eps": [], "debt_equity": 0.5,
+                 "avg_volume": 1e6} for t in ts]
+    monkeypatch.setattr(discovery, "fetch_snapshots_parallel", fake_snaps)
+
+    df, _ = discovery.discover(verbose=False)
+    assert seen["arg"] == survivors                      # ONLY survivors hit the expensive path
+    assert set(df["ticker"]) == set(survivors)
+    assert df.loc[df.ticker == "U0", "rs_pct"].iloc[0] == 90.0   # stage-1 metrics carried through
+
+
+# ── Sector-relative ranking + growth exemption ───────────────────
+
+def test_value_pe_ranked_within_sector(monkeypatch):
+    monkeypatch.setattr(config, "DISCOVERY_SECTOR_RELATIVE", True)
+    monkeypatch.setattr(config, "DISCOVERY_GROWTH_EXEMPT_PCTL", 101.0)  # disable exemption
+    df = pd.DataFrame([
+        {"ticker": "A", "sector": "Tech", "pe": 30, "rev_growth": 0.05, "roe": 0.1,
+         "rs_pct": 50, "eps_q_growth": 0.0, "ret_3m": 0.0, "dist_52w_high": -0.1,
+         "ipo_age_years": 5, "sma50_dist_pct": 0.0, "quarterly_eps": []},
+        {"ticker": "B", "sector": "Tech", "pe": 60, "rev_growth": 0.05, "roe": 0.1,
+         "rs_pct": 50, "eps_q_growth": 0.0, "ret_3m": 0.0, "dist_52w_high": -0.1,
+         "ipo_age_years": 5, "sma50_dist_pct": 0.0, "quarterly_eps": []},
+        {"ticker": "C", "sector": "Util", "pe": 10, "rev_growth": 0.05, "roe": 0.1,
+         "rs_pct": 50, "eps_q_growth": 0.0, "ret_3m": 0.0, "dist_52w_high": -0.1,
+         "ipo_age_years": 5, "sma50_dist_pct": 0.0, "quarterly_eps": []},
+    ])
+    scored = discovery.compute_composite_scores(df.copy())
+    a = scored.loc[scored.ticker == "A", "rank_value_pe"].iloc[0]
+    b = scored.loc[scored.ticker == "B", "rank_value_pe"].iloc[0]
+    assert a > b   # cheaper-within-sector ranks higher
+
+def test_growth_exemption_neutralizes_value_pe(monkeypatch):
+    monkeypatch.setattr(config, "DISCOVERY_SECTOR_RELATIVE", False)
+    monkeypatch.setattr(config, "DISCOVERY_GROWTH_EXEMPT_PCTL", 66.0)
+    df = pd.DataFrame([
+        {"ticker": "HIGROW", "sector": "Tech", "pe": 100, "rev_growth": 0.90, "roe": 0.1,
+         "rs_pct": 50, "eps_q_growth": 0.0, "ret_3m": 0.0, "dist_52w_high": -0.1,
+         "ipo_age_years": 5, "sma50_dist_pct": 0.0, "quarterly_eps": []},
+        {"ticker": "LOGROW1", "sector": "Tech", "pe": 12, "rev_growth": 0.02, "roe": 0.1,
+         "rs_pct": 50, "eps_q_growth": 0.0, "ret_3m": 0.0, "dist_52w_high": -0.1,
+         "ipo_age_years": 5, "sma50_dist_pct": 0.0, "quarterly_eps": []},
+        {"ticker": "LOGROW2", "sector": "Tech", "pe": 20, "rev_growth": 0.03, "roe": 0.1,
+         "rs_pct": 50, "eps_q_growth": 0.0, "ret_3m": 0.0, "dist_52w_high": -0.1,
+         "ipo_age_years": 5, "sma50_dist_pct": 0.0, "quarterly_eps": []},
+    ])
+    scored = discovery.compute_composite_scores(df.copy())
+    assert scored.loc[scored.ticker == "HIGROW", "rank_value_pe"].iloc[0] == 50.0
