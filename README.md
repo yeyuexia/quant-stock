@@ -99,9 +99,10 @@ python3 watchdog.py --portfolio  # live positions + P&L from Alpaca
 
 # Stock discovery
 # Two-stage scan over a broad, stable universe:
-#   Universe = config.DISCOVERY_UNIVERSE_ETFS holdings (Russell 1000 via iShares
-#     IWB full-holdings CSV, ~1000 large+mid-cap US names; Wikipedia S&P 500 is
-#     the fallback). Includes growth leaders outside the S&P 500 (e.g. MRVL).
+#   Universe = config.DISCOVERY_UNIVERSE_INDICES constituents (S&P 500 +
+#     Nasdaq-100 + S&P 400 MidCap from Wikipedia, ~916 large+mid-cap US names;
+#     geo-neutral, with S&P 500 alone as fallback). Includes growth leaders
+#     outside the S&P 500 (e.g. MRVL, via the Nasdaq-100).
 #   Stage 1 (cheap): batch OHLCV -> universe-wide relative strength + liquidity
 #     gate -> keep top DISCOVERY_STAGE1_KEEP survivors (watchlist/smart-money are
 #     'protected' and always advance).
@@ -369,7 +370,7 @@ Paper is the default. Before flipping:
 | FRED API | Free (key required) | Macro regime indicators |
 | Reddit JSON | Free | Social sentiment from finance subreddits |
 | Wikipedia | Free | S&P 500 component list |
-| iShares (IWB) | Free | Russell 1000 full holdings — discovery scan universe |
+| Wikipedia | Free | Nasdaq-100 + S&P 400 constituents — discovery scan universe (with S&P 500) |
 
 ## File Structure
 

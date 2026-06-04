@@ -4,7 +4,6 @@ scoring, US-only, smart-money harvesting)."""
 import os
 import sys
 import json
-import pathlib
 import tempfile
 import pandas as pd
 import numpy as np
@@ -609,9 +608,9 @@ def test_log_run_appends_jsonl(monkeypatch, tmp_path):
 
 def test_discovery_universe_config_present_and_sane():
     import config
-    assert isinstance(config.DISCOVERY_UNIVERSE_ETFS, dict) and config.DISCOVERY_UNIVERSE_ETFS
-    # every value is a URL string
-    assert all(isinstance(u, str) and u.startswith("http") for u in config.DISCOVERY_UNIVERSE_ETFS.values())
+    assert isinstance(config.DISCOVERY_UNIVERSE_INDICES, (tuple, list)) and config.DISCOVERY_UNIVERSE_INDICES
+    # every entry is a known index key with a Wikipedia URL
+    assert all(k in discovery.WIKI_INDEX_URLS for k in config.DISCOVERY_UNIVERSE_INDICES)
     assert config.DISCOVERY_UNIVERSE_MAX >= 1000
     assert 50 <= config.DISCOVERY_STAGE1_KEEP <= config.DISCOVERY_UNIVERSE_MAX
     assert config.DISCOVERY_MIN_PRICE > 0
@@ -620,46 +619,56 @@ def test_discovery_universe_config_present_and_sane():
     assert 0 <= config.DISCOVERY_GROWTH_EXEMPT_PCTL <= 100
 
 
-# ── iShares full-holdings CSV parser ─────────────────────────────
+# ── Wikipedia multi-index universe ───────────────────────────────
 
-_FIX = pathlib.Path(__file__).parent / "fixtures" / "ishares_iwb_sample.csv"
+_WIKI_HTML = """
+<table><tr><th>Foo</th><th>Bar</th></tr><tr><td>1</td><td>2</td></tr></table>
+<table>
+  <tr><th>Company</th><th>Ticker</th></tr>
+  <tr><td>Apple</td><td>AAPL</td></tr>
+  <tr><td>Marvell</td><td>MRVL</td></tr>
+  <tr><td>Berkshire</td><td>BRK.B</td></tr>
+</table>
+"""
 
-def test_parse_ishares_holdings_csv_extracts_equities_only():
-    text = _FIX.read_text()
-    out = discovery.parse_ishares_holdings_csv(text)
+def test_index_symbols_from_html_picks_ticker_column():
+    out = discovery._index_symbols_from_html(_WIKI_HTML)
     assert "AAPL" in out
-    assert "MRVL" in out          # the whole point: a non-S&P leader is in Russell 1000
-    assert "BRK.B" in out         # dotted share-class ticker kept
-    assert "USD" not in out       # cash row filtered (Asset Class != Equity)
-    assert "MARGIN_USD" not in out
+    assert "MRVL" in out          # a non-S&P leader, present via Nasdaq-100
+    assert "BRK.B" in out         # dotted share-class kept
     assert out == list(dict.fromkeys(out))  # de-duped, order preserved
 
-def test_parse_ishares_holdings_csv_bad_input_returns_empty():
-    assert discovery.parse_ishares_holdings_csv("") == []
-    assert discovery.parse_ishares_holdings_csv("no header here\njust,junk\n") == []
+def test_index_symbols_from_html_bad_input_returns_empty():
+    assert discovery._index_symbols_from_html("") == []
+    assert discovery._index_symbols_from_html("<p>no tables here</p>") == []
 
 
-def test_get_universe_tickers_unions_etfs_and_caches(monkeypatch, tmp_path):
-    # No real network: stub the per-ETF fetch and the disk cache.
+def test_get_universe_tickers_unions_indices_and_caches(monkeypatch, tmp_path):
+    # No real network: stub each index getter and the disk cache.
     monkeypatch.setattr(discovery, "CACHE_DIR", str(tmp_path))
     calls = {"n": 0}
-    def fake_fetch(sym, url):
+    def fake_sp500():
         calls["n"] += 1
-        return ["AAPL", "MRVL", "NVDA"] + [f"X{i}" for i in range(300)]
-    monkeypatch.setattr(discovery, "fetch_etf_full_holdings", fake_fetch)
-    monkeypatch.setattr(config, "DISCOVERY_UNIVERSE_ETFS", {"IWB": "http://x"})
+        return ["AAPL", "MSFT"] + [f"X{i}" for i in range(300)]
+    monkeypatch.setattr(discovery, "get_sp500_tickers", fake_sp500)
+    monkeypatch.setattr(discovery, "get_nasdaq100_tickers", lambda: ["MRVL", "AAPL"])  # AAPL dupes
+    monkeypatch.setattr(discovery, "get_sp400_tickers", lambda: ["CAVA"])
+    monkeypatch.setattr(config, "DISCOVERY_UNIVERSE_INDICES", ("sp500", "nasdaq100", "sp400"))
     u1 = discovery.get_universe_tickers()
-    assert "MRVL" in u1 and "AAPL" in u1
-    # second call served from cache → no extra fetch
+    assert "MRVL" in u1 and "AAPL" in u1 and "CAVA" in u1
+    assert u1.count("AAPL") == 1                 # de-duped across indices
+    # second call served from cache → no extra index fetches
     u2 = discovery.get_universe_tickers()
     assert u1 == u2
     assert calls["n"] == 1
 
 def test_get_universe_tickers_falls_back_to_sp500(monkeypatch, tmp_path):
     monkeypatch.setattr(discovery, "CACHE_DIR", str(tmp_path))
-    monkeypatch.setattr(discovery, "fetch_etf_full_holdings", lambda s, u: [])  # download blocked
+    # All index getters return too little → union < 200 → fall back to S&P 500 alone.
     monkeypatch.setattr(discovery, "get_sp500_tickers", lambda: ["SPX1", "SPX2", "SPX3"])
-    monkeypatch.setattr(config, "DISCOVERY_UNIVERSE_ETFS", {"IWB": "http://x"})
+    monkeypatch.setattr(discovery, "get_nasdaq100_tickers", lambda: [])
+    monkeypatch.setattr(discovery, "get_sp400_tickers", lambda: [])
+    monkeypatch.setattr(config, "DISCOVERY_UNIVERSE_INDICES", ("sp500", "nasdaq100", "sp400"))
     u = discovery.get_universe_tickers()
     assert u == ["SPX1", "SPX2", "SPX3"]
 

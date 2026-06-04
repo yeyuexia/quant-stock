@@ -4,9 +4,9 @@ Auto Stock Discovery — refreshes the candidate watchlist by scanning the
 market through deterministic, ranked sources.
 
 Pipeline:
-  1. Build the scan universe (config.DISCOVERY_UNIVERSE_ETFS full holdings via
-     get_universe_tickers; Russell 1000 today, S&P 500 fallback) and merge with
-     the current watchlist + smart-money + optional Reddit feeds.
+  1. Build the scan universe (config.DISCOVERY_UNIVERSE_INDICES via
+     get_universe_tickers; S&P 500 + Nasdaq-100 + S&P 400 MidCap from Wikipedia,
+     S&P 500 fallback) and merge with the watchlist + smart-money + Reddit feeds.
   2. Stage 1 (cheap): batch-download OHLCV and rank the whole universe on
      universe-wide relative strength + a price/liquidity gate, keeping the top
      DISCOVERY_STAGE1_KEEP survivors (watchlist/smart-money are protected).
@@ -33,7 +33,6 @@ Usage:
 from __future__ import annotations
 import sys
 import os
-import csv
 import io
 import json
 import time
@@ -98,63 +97,106 @@ def get_sp500_tickers() -> List[str]:
     return []
 
 
-def parse_ishares_holdings_csv(text: str) -> List[str]:
-    """Extract equity tickers from an iShares full-holdings CSV.
-
-    The file has a ~9-line preamble before a header row that starts with
-    "Ticker". We DictReader from that row and keep rows whose Asset Class is
-    "Equity", filtering to valid US-equity-style symbols. Returns de-duped,
-    order-preserved tickers; [] on any structural problem (fail-open).
-    """
-    lines = text.splitlines()
-    start = None
-    for i, line in enumerate(lines):
-        if line.lstrip('"').startswith("Ticker"):
-            start = i
-            break
-    if start is None:
-        return []
-    reader = csv.DictReader(io.StringIO("\n".join(lines[start:])))
-    out: List[str] = []
-    for row in reader:
-        if (row.get("Asset Class") or "").strip() != "Equity":
-            continue
-        t = (row.get("Ticker") or "").strip().upper()
-        if t and t.replace(".", "").replace("-", "").isalpha() and len(t) <= 5:
-            out.append(t)
-    return list(dict.fromkeys(out))
+# Wikipedia constituent pages for the index universe. Geo-neutral (unlike the
+# iShares US holdings CSV, which is gated behind a country disclaimer for non-US
+# accounts and returns HTML instead of the file).
+WIKI_INDEX_URLS = {
+    "sp500":     "https://en.wikipedia.org/wiki/List_of_S%26P_500_companies",
+    "nasdaq100": "https://en.wikipedia.org/wiki/Nasdaq-100",
+    "sp400":     "https://en.wikipedia.org/wiki/List_of_S%26P_400_companies",
+}
+# Minimum constituent count for an index fetch to be trusted (else treated as a
+# failed/blocked fetch). Sized well below each index's real membership.
+_INDEX_MIN_COUNT = {"sp500": 400, "nasdaq100": 50, "sp400": 200}
 
 
-def fetch_etf_full_holdings(symbol: str, url: str) -> List[str]:
-    """Download one ETF's full-holdings CSV and parse out equity tickers.
-    Never raises — returns [] on any network/parse failure."""
+def _fetch_html(url: str) -> str:
+    """GET a page's HTML with a browser UA. Raises on network failure."""
+    import urllib.request
+    req = urllib.request.Request(
+        url, headers={"User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)"}
+    )
+    with urllib.request.urlopen(req, timeout=15) as resp:
+        return resp.read().decode("utf-8", "replace")
+
+
+def _index_symbols_from_html(html: str) -> List[str]:
+    """Extract index constituents from a Wikipedia page via pandas.read_html.
+
+    Picks the table holding the most valid tickers in a Ticker/Symbol column
+    (robust across pages that link tickers differently — a plain regex misses
+    the Nasdaq-100 table entirely). Returns de-duped, order-preserved symbols;
+    [] on any parse failure (fail-open)."""
     try:
-        import urllib.request
-        req = urllib.request.Request(
-            url, headers={"User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)"}
-        )
-        with urllib.request.urlopen(req, timeout=20) as resp:
-            text = resp.read().decode("utf-8", "replace")
-        return parse_ishares_holdings_csv(text)
+        tables = pd.read_html(io.StringIO(html))
     except Exception:
         return []
+    best: List[str] = []
+    for tbl in tables:
+        for col in tbl.columns:
+            if str(col).strip().lower() not in ("ticker", "symbol"):
+                continue
+            syms = [str(s).strip().upper().replace("\xa0", "") for s in tbl[col].tolist()]
+            syms = [s for s in syms
+                    if s.replace(".", "").replace("-", "").isalpha() and 1 <= len(s) <= 5]
+            syms = list(dict.fromkeys(syms))
+            if len(syms) > len(best):
+                best = syms
+    return best
+
+
+def _get_wiki_index(key: str) -> List[str]:
+    """Constituents of one Wikipedia index page, cached 1 week. [] on failure."""
+    cached = _cache_get(key, ttl_hours=168)
+    if cached:
+        return cached
+    try:
+        syms = _index_symbols_from_html(_fetch_html(WIKI_INDEX_URLS[key]))
+    except Exception:
+        syms = []
+    if len(syms) >= _INDEX_MIN_COUNT.get(key, 50):
+        _cache_set(key, syms)
+    return syms
+
+
+def get_nasdaq100_tickers() -> List[str]:
+    """Nasdaq-100 constituents from Wikipedia (1-week cache)."""
+    return _get_wiki_index("nasdaq100")
+
+
+def get_sp400_tickers() -> List[str]:
+    """S&P 400 MidCap constituents from Wikipedia (1-week cache)."""
+    return _get_wiki_index("sp400")
+
+
+# Maps a config.DISCOVERY_UNIVERSE_INDICES key to the NAME of the getter that
+# supplies it. Resolved via globals() at call time (not a frozen reference) so
+# tests can monkeypatch the individual getters.
+_INDEX_GETTERS = {
+    "sp500": "get_sp500_tickers",
+    "nasdaq100": "get_nasdaq100_tickers",
+    "sp400": "get_sp400_tickers",
+}
 
 
 def get_universe_tickers() -> List[str]:
-    """Discovery scan universe = union of config.DISCOVERY_UNIVERSE_ETFS holdings,
-    cached 1 week. Falls back to the Wikipedia S&P 500 list if the CSV download
-    yields too few names (so discovery degrades gracefully, never to empty)."""
+    """Discovery scan universe = union of config.DISCOVERY_UNIVERSE_INDICES
+    (Wikipedia index constituents: S&P 500 + Nasdaq-100 + S&P 400 MidCap by
+    default — geo-neutral, ~850 large+mid-cap US names incl. leaders outside the
+    S&P 500 like MRVL). Cached 1 week. Falls back to the S&P 500 alone if the
+    union is implausibly small, so discovery never degrades to empty."""
     cached = _cache_get("universe", ttl_hours=168)
     if cached:
         return cached[: config.DISCOVERY_UNIVERSE_MAX]
     tickers: List[str] = []
-    for sym, url in config.DISCOVERY_UNIVERSE_ETFS.items():
-        tickers.extend(fetch_etf_full_holdings(sym, url))
+    for key in config.DISCOVERY_UNIVERSE_INDICES:
+        getter = globals().get(_INDEX_GETTERS.get(key, ""))
+        if getter:
+            tickers.extend(getter())
     tickers = list(dict.fromkeys(tickers))
     if len(tickers) >= 200:
         _cache_set("universe", tickers)
         return tickers[: config.DISCOVERY_UNIVERSE_MAX]
-    # Fallback: keep discovery working even if iShares blocks the download.
     return get_sp500_tickers()[: config.DISCOVERY_UNIVERSE_MAX]
 
 
@@ -230,8 +272,9 @@ def merge_candidates(
     """Deterministic, priority-ordered candidate merge.
 
     Order: current WATCHLIST → smart-money → Reddit (opt-in) → full scan universe
-    (config.DISCOVERY_UNIVERSE_ETFS via get_universe_tickers; Russell 1000 today).
-    Returns (ordered_tickers, source_map). Each ticker appears at most once.
+    (config.DISCOVERY_UNIVERSE_INDICES via get_universe_tickers; S&P 500 +
+    Nasdaq-100 + S&P 400 today). Returns (ordered_tickers, source_map). Each
+    ticker appears at most once.
     """
     cap = max_scan or config.DISCOVERY_UNIVERSE_MAX
     ordered: list = []

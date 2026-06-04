@@ -271,20 +271,14 @@ DISCOVERY_REQUIRE_US = True          # screen out non-US-domiciled tickers
 DISCOVERY_TICKER_SOURCES = (         # smart-money signals to harvest
     "13F", "etf-holdings", "ark", "congress",
 )
-# ── Discovery scan universe (方案A: Russell 1000 via iShares full holdings) ──
-# The union of these ETFs' FULL holdings is the discovery scan universe. iShares
-# publishes a daily CSV of every holding (not just the top 25), giving ~1000
-# large+mid-cap US names — far broader than the S&P 500, and it includes growth
-# leaders that sit outside the index. Wikipedia S&P 500 is the fallback if the
-# CSV download is blocked (see discovery.get_universe_tickers).
-DISCOVERY_UNIVERSE_ETFS = {
-    # iShares Russell 1000 ETF (IWB) — large + mid cap, rules-based, daily-updated.
-    "IWB": (
-        "https://www.ishares.com/us/products/239707/"
-        "ishares-russell-1000-etf/1467271812596.ajax"
-        "?fileType=csv&fileName=IWB_holdings&dataType=fund"
-    ),
-}
+# ── Discovery scan universe (方案A: multi-index via Wikipedia) ──────────────
+# The discovery scan universe is the union of these index constituent lists,
+# scraped from Wikipedia (geo-neutral). S&P 500 + Nasdaq-100 + S&P 400 MidCap is
+# ~850 large+mid-cap US names — far broader than the S&P 500 alone and includes
+# growth leaders outside it (e.g. MRVL, via the Nasdaq-100). Geo-neutral by design:
+# the iShares US holdings CSV is gated behind a country disclaimer for non-US
+# accounts. discovery.get_universe_tickers falls back to S&P 500 alone if needed.
+DISCOVERY_UNIVERSE_INDICES = ("sp500", "nasdaq100", "sp400")
 DISCOVERY_UNIVERSE_MAX = 2000          # hard safety ceiling on universe size
 # Two-stage screening: Stage 1 (cheap, batched OHLCV) ranks the whole universe on
 # relative strength + liquidity and carries this many survivors into Stage 2
