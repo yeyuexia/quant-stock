@@ -348,9 +348,12 @@ crontab -e
 
 # Executor — every 10 min, 10:00–15:50 ET
 */10 10-15 * * 1-5 cd /Users/zl/works/stock && python3 executor.py                  >> .cache/executor.log 2>&1
+
+# Discovery — weekly watchlist refresh, Sundays 8 AM ET (before Mon rebalance)
+0 8 * * 0 cd /Users/zl/works/stock && python3 discovery.py --update                 >> .cache/discovery.log 2>&1
 ```
 
-`rebalancer.py` writes `.cache/pending_plan.json` for orders ≥ `PLANNER_DIRECT_SUBMIT_THRESHOLD` (default $500) and direct-submits orders below that threshold. `executor.py` picks up the pending plan on the next 10-min tick, evaluates five circuit breakers, and slices orders across the day. Both scripts are safe to run daily: rebalancer no-ops unless the cadence threshold is reached, and executor no-ops if the pending plan is empty. The morning `watchdog.py` run is what drives daily SEPA take-profit / stop-loss exits — see [Exit Logic](#exit-logic-take-profit--stop-loss).
+`rebalancer.py` writes `.cache/pending_plan.json` for orders ≥ `PLANNER_DIRECT_SUBMIT_THRESHOLD` (default $500) and direct-submits orders below that threshold. `executor.py` picks up the pending plan on the next 10-min tick, evaluates five circuit breakers, and slices orders across the day. Both scripts are safe to run daily: rebalancer no-ops unless the cadence threshold is reached, and executor no-ops if the pending plan is empty. The morning `watchdog.py` run is what drives daily SEPA take-profit / stop-loss exits — see [Exit Logic](#exit-logic-take-profit--stop-loss). The weekly `discovery.py --update` scans the multi-index universe (S&P 500 + Nasdaq-100 + S&P 400) and appends top names to `watchlist_auto.json`; the next rebalancer/screener tick consumes the expanded watchlist (`config.py`'s hand-curated `WATCHLIST_SEED` is never rewritten).
 
 ## Switching to live
 
