@@ -257,14 +257,6 @@ DISCOVERY_WEIGHTS = {
     "sma50_dist":    0.05,   # % above 50-day SMA (continuous)
     "value_pe":      0.05,   # inverse P/E percentile (loss-makers excluded)
 }
-# Ceiling on candidates scanned per run. Set high enough to admit the FULL S&P 500
-# (~503) on top of the watchlist + smart-money names, so no S&P name is ever
-# truncated. It's a ceiling, not a target: the actual count scanned is the deduped
-# union of all sources (~540 today), so headroom here costs nothing.
-DISCOVERY_MAX_SCAN = 800             # candidate ceiling per run after merge
-# >= S&P 500 universe size, so one round-robin slice returns every name each run
-# (the pointer still advances; it just no longer gates coverage).
-DISCOVERY_SP500_BATCH = 520          # full S&P 500 per run (was 50 → round-robin sampling)
 DISCOVERY_THREAD_WORKERS = 8         # yfinance concurrent fetchers
 DISCOVERY_STALE_DAYS = 90            # --prune: stale if not seen in N days
 DISCOVERY_REQUIRE_US = True          # screen out non-US-domiciled tickers

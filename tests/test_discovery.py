@@ -86,25 +86,6 @@ def test_merge_candidates_uses_full_universe(monkeypatch):
     assert "universe" in sources["U0"]            # tagged with its source
 
 
-# ── S&P 500 round-robin pointer ───────────────────────────────────
-
-def test_sp500_round_robin_advances_and_wraps(monkeypatch, tmp_path):
-    monkeypatch.setattr(discovery, "get_sp500_tickers",
-                        lambda: ["T1", "T2", "T3", "T4", "T5"])
-    monkeypatch.setattr(discovery, "SP500_POINTER", str(tmp_path / "ptr.json"))
-    first = discovery.sp500_round_robin_slice(2)
-    second = discovery.sp500_round_robin_slice(2)
-    third = discovery.sp500_round_robin_slice(2)  # wraps: T5, T1
-    assert first == ["T1", "T2"]
-    assert second == ["T3", "T4"]
-    assert third == ["T5", "T1"]
-
-
-def test_sp500_round_robin_no_universe(monkeypatch):
-    monkeypatch.setattr(discovery, "get_sp500_tickers", lambda: [])
-    assert discovery.sp500_round_robin_slice(10) == []
-
-
 # ── passes_criteria: fail-closed for value/quality ────────────────
 
 def test_passes_criteria_fail_closed_on_missing_pe():

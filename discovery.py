@@ -51,7 +51,6 @@ CACHE_DIR = os.path.join(os.path.dirname(__file__), ".cache")
 os.makedirs(CACHE_DIR, exist_ok=True)
 
 DISCOVERY_LOG = os.path.join(CACHE_DIR, "discovery.log")
-SP500_POINTER = os.path.join(CACHE_DIR, "disc_sp500_pointer.json")
 LASTPASS_PATH = os.path.join(CACHE_DIR, "discovery_lastpass.json")
 
 
@@ -198,31 +197,6 @@ def get_universe_tickers() -> List[str]:
         _cache_set("universe", tickers)
         return tickers[: config.DISCOVERY_UNIVERSE_MAX]
     return get_sp500_tickers()[: config.DISCOVERY_UNIVERSE_MAX]
-
-
-def sp500_round_robin_slice(batch_size: int) -> List[str]:
-    """Return the next `batch_size` S&P 500 tickers, advancing the pointer.
-
-    Wraps around when the end is reached. Pointer lives in .cache/disc_sp500_pointer.json.
-    """
-    universe = get_sp500_tickers()
-    if not universe:
-        return []
-    try:
-        with open(SP500_POINTER) as f:
-            pos = int(json.load(f).get("pos", 0))
-    except (FileNotFoundError, json.JSONDecodeError):
-        pos = 0
-    pos %= len(universe)
-    end = pos + batch_size
-    if end <= len(universe):
-        out = universe[pos:end]
-    else:
-        out = universe[pos:] + universe[: end - len(universe)]
-    new_pos = end % len(universe)
-    with open(SP500_POINTER, "w") as f:
-        json.dump({"pos": new_pos, "updated": dt.datetime.utcnow().isoformat()}, f)
-    return out
 
 
 def get_smart_money_tickers(sources: tuple = None) -> dict:
