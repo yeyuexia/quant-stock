@@ -144,6 +144,14 @@ Every order then goes through five checks in `orders.execute_plan`, in this orde
 
 All five checks apply uniformly to scheduled rebalances, SEPA exits, stop-loss exits, and signal-driven macro exits. Nothing bypasses them. The executor's per-slice path (`orders.submit_limit_slice`) enforces the same rails.
 
+### Position adoption & stop enforcement
+
+Three `config.py` flags keep broker-imported positions under management and enforce stops on fractional shares:
+
+- **`ADOPT_EXTERNAL_POSITIONS`** (default `True`) — broker positions with no local metadata (manual trades, legacy holdings) are auto-tagged into a sleeve on `orders.sync_state`: leveraged ETFs (`config.ETF_LEVERAGED`) → `aggressive`, everything else → `core`, with `entry_reason = "adopted"`. Without this, untagged positions are excluded from `rebalancer._system_equity`, so the rebalancer sizes itself to near-zero capital and silently stops trading. Set `False` to keep such positions `unknown` (legacy behavior).
+- **`UNKNOWN_MV_HALT_PCT`** (default `0.20`) — if untagged (`unknown`) positions still exceed this fraction of equity, `sync_state` appends a CRITICAL "capital starved" alert. Defense-in-depth for the case where adoption is disabled or a symbol can't be classified.
+- **`ENFORCE_STOPS`** (default `True`) — the intraday watchdog submits a **market sell** on a stop-loss or trailing-stop breach. Market orders work on fractional shares, where native stop/trailing-stop orders are rejected by Alpaca. The order is idempotent per `(symbol, day)`; the daily pre-market run stays alert-only (enforcement requires the live broker passed in the intraday tick).
+
 ## Intraday Execution Layer
 
 Rebalance orders are **not** submitted in a single burst at plan time. Instead:
