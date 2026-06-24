@@ -743,3 +743,59 @@ def test_check_sepa_exits_climax_allows_ma_trail_after_fired(tmp_path, monkeypat
                and "sepa-21EMA-break" in s.intent.reason
                for s in plan.intents)
     assert any("21EMA" in line for line in notifications)
+
+
+def test_check_price_moves_enforces_stop_with_market_sell(tmp_path, monkeypatch):
+    import watchdog
+    import pandas as pd
+    from tests.fakes import FakeBroker
+
+    monkeypatch.setattr("config.ENFORCE_STOPS", True)
+    # No HALT file: point HALT_PATH at a non-existent tmp path.
+    monkeypatch.setattr("config.HALT_PATH", str(tmp_path / "HALT"))
+
+    # Price series ending well below entry → from_entry breaches core stop (-8%).
+    idx = pd.date_range(end=dt.date.today(), periods=5, freq="B")
+    df = pd.DataFrame({"AAPL": [100.0, 100.0, 100.0, 100.0, 80.0]}, index=idx)
+    monkeypatch.setattr("data.fetch_prices", lambda tickers, period="6mo": df)
+
+    portfolio = {"positions": [{
+        "ticker": "AAPL", "shares": 3.5, "entry_price": 100.0,
+        "entry_date": "", "tranche": "core",
+    }], "cash": 0.0}
+
+    fb = FakeBroker()
+    fb.set_latest_price("AAPL", 80.0)
+
+    alerts = watchdog.check_price_moves(portfolio, broker=fb)
+
+    sells = [o for o in fb._submitted if o.side == "sell"]
+    assert len(sells) == 1
+    assert sells[0].symbol == "AAPL"
+    assert any("STOP ENFORCED" in a[2] for a in alerts)
+
+
+def test_check_price_moves_alert_only_when_enforce_disabled(tmp_path, monkeypatch):
+    import watchdog
+    import pandas as pd
+    from tests.fakes import FakeBroker
+
+    monkeypatch.setattr("config.ENFORCE_STOPS", False)
+    monkeypatch.setattr("config.HALT_PATH", str(tmp_path / "HALT"))
+
+    idx = pd.date_range(end=dt.date.today(), periods=5, freq="B")
+    df = pd.DataFrame({"AAPL": [100.0, 100.0, 100.0, 100.0, 80.0]}, index=idx)
+    monkeypatch.setattr("data.fetch_prices", lambda tickers, period="6mo": df)
+
+    portfolio = {"positions": [{
+        "ticker": "AAPL", "shares": 3.5, "entry_price": 100.0,
+        "entry_date": "", "tranche": "core",
+    }], "cash": 0.0}
+
+    fb = FakeBroker()
+    fb.set_latest_price("AAPL", 80.0)
+
+    alerts = watchdog.check_price_moves(portfolio, broker=fb)
+
+    assert [o for o in fb._submitted if o.side == "sell"] == []
+    assert any("STOP-LOSS TRIGGERED" in a[2] for a in alerts)  # legacy alert intact
