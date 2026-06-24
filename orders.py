@@ -207,17 +207,24 @@ def sync_state(broker, *, alerts: Optional[list] = None) -> PortfolioSnapshot:
 
     for p in live:
         meta = old_meta.get(p.symbol)
-        if meta is None:
-            if config.ADOPT_EXTERNAL_POSITIONS:
-                tranche = "aggressive" if p.symbol in config.ETF_LEVERAGED else "core"
-                entry_reason = "adopted"
-                alerts.append(f"Adopted external position {p.symbol} ({p.qty} sh) "
-                              f"into {tranche} sleeve.")
-            else:
-                alerts.append(f"Unknown position on Alpaca: {p.symbol} ({p.qty} sh). "
-                              f"Tag with orders.tag_position('{p.symbol}', 'core'|'aggressive').")
-                tranche = "unknown"
-                entry_reason = "external"
+        cached_tranche = (meta or {}).get("tranche")
+        # Adopt when the flag is on AND the position is either brand-new
+        # (meta is None) OR already cached as 'unknown' (e.g. tagged before
+        # adoption existed, or the flag was previously off). The latter makes
+        # adoption self-healing: a stray 'unknown' is reclassified on the next
+        # sync instead of staying frozen forever (rebalancer._system_equity
+        # excludes unknown MV, so a stuck 'unknown' starves the rebalancer).
+        if config.ADOPT_EXTERNAL_POSITIONS and (meta is None or cached_tranche == "unknown"):
+            tranche = "aggressive" if p.symbol in config.ETF_LEVERAGED else "core"
+            entry_reason = "adopted"
+            origin = "external" if meta is None else "untagged"
+            alerts.append(f"Adopted {origin} position {p.symbol} ({p.qty} sh) "
+                          f"into {tranche} sleeve.")
+        elif meta is None:
+            alerts.append(f"Unknown position on Alpaca: {p.symbol} ({p.qty} sh). "
+                          f"Tag with orders.tag_position('{p.symbol}', 'core'|'aggressive').")
+            tranche = "unknown"
+            entry_reason = "external"
         else:
             tranche = meta.get("tranche", "unknown")
             entry_reason = meta.get("entry_reason", "unknown")
