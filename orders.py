@@ -208,10 +208,16 @@ def sync_state(broker, *, alerts: Optional[list] = None) -> PortfolioSnapshot:
     for p in live:
         meta = old_meta.get(p.symbol)
         if meta is None:
-            alerts.append(f"Unknown position on Alpaca: {p.symbol} ({p.qty} sh). "
-                          f"Tag with orders.tag_position('{p.symbol}', 'core'|'aggressive').")
-            tranche = "unknown"
-            entry_reason = "external"
+            if config.ADOPT_EXTERNAL_POSITIONS:
+                tranche = "aggressive" if p.symbol in config.ETF_LEVERAGED else "core"
+                entry_reason = "adopted"
+                alerts.append(f"Adopted external position {p.symbol} ({p.qty} sh) "
+                              f"into {tranche} sleeve.")
+            else:
+                alerts.append(f"Unknown position on Alpaca: {p.symbol} ({p.qty} sh). "
+                              f"Tag with orders.tag_position('{p.symbol}', 'core'|'aggressive').")
+                tranche = "unknown"
+                entry_reason = "external"
         else:
             tranche = meta.get("tranche", "unknown")
             entry_reason = meta.get("entry_reason", "unknown")
@@ -276,6 +282,13 @@ def sync_state(broker, *, alerts: Optional[list] = None) -> PortfolioSnapshot:
                     else:
                         break
 
+        # First-sight (or backfill) anchor date. The watchdog's trailing-stop
+        # peak is measured from this date forward — without it, an adopted
+        # legacy position would be measured against its full-history high and
+        # could be liquidated on the first enforced tick despite being healthy
+        # since we started managing it. Preserved across syncs once set.
+        entry_date = (meta or {}).get("entry_date") or dt.date.today().isoformat()
+
         positions.append({
             "symbol": p.symbol,
             "shares": p.qty,
@@ -284,6 +297,7 @@ def sync_state(broker, *, alerts: Optional[list] = None) -> PortfolioSnapshot:
             "unrealized_pl": p.unrealized_pl,
             "tranche": tranche,
             "entry_reason": entry_reason,
+            "entry_date": entry_date,
             "stop_order_id": stop_id,
             "trail_order_id": trail_id,
             "initial_entry_price": initial_entry_price,
@@ -292,6 +306,23 @@ def sync_state(broker, *, alerts: Optional[list] = None) -> PortfolioSnapshot:
             "r_tier_filled": r_tier_filled,
             "climax_fired": climax_fired,
         })
+
+    # ── Starvation guardrail ────────────────────────────────────
+    # Untagged ('unknown') positions are excluded from the rebalancer's
+    # addressable capital (rebalancer._system_equity). If they dominate the
+    # book, the rebalancer silently sizes itself to near-zero capital and stops
+    # trading — exactly the failure this guards against.
+    unknown_mv = sum(
+        float(p.get("market_value", 0) or 0)
+        for p in positions if p.get("tranche") == "unknown"
+    )
+    if acc.equity and unknown_mv / float(acc.equity) > config.UNKNOWN_MV_HALT_PCT:
+        pct = 100.0 * unknown_mv / float(acc.equity)
+        alerts.append(
+            f"CRITICAL: untagged positions are {pct:.0f}% of equity — "
+            f"rebalancer capital starved. Tag them or set "
+            f"config.ADOPT_EXTERNAL_POSITIONS = True."
+        )
 
     # Emit "closed" events for cached positions that vanished
     for sym, meta in old_meta.items():

@@ -22,7 +22,7 @@ import datetime as dt
 import numpy as np
 import pandas as pd
 
-from broker import Broker
+from broker import Broker, BrokerError
 import orders
 import config
 
@@ -142,7 +142,11 @@ def _as_legacy_positions(snap: orders.PortfolioSnapshot) -> list[dict]:
             "ticker": p["symbol"],
             "shares": p["shares"],
             "entry_price": p["avg_entry"],
-            "entry_date": "",
+            # Anchor the trailing-stop peak to when we started managing the
+            # position (stamped by sync_state) rather than its full price
+            # history — prevents an adopted position from being liquidated
+            # against a pre-adoption high on the first enforced tick.
+            "entry_date": p.get("entry_date", ""),
             # unknown tranche (externally-bought) falls back to core stop-loss rules
             "tranche": "core" if p.get("tranche") == "unknown" else p.get("tranche", "core"),
         }
@@ -275,6 +279,33 @@ def check_price_moves(portfolio, broker=None):
         elif from_peak <= -trail_warn_pct:
             alerts.append((Alert.WARNING, t,
                 f"Trailing stop warning{tranche_label}: {from_peak:+.1f}% from peak ${peak:.2f}"))
+
+        # ── Synthetic stop enforcement ──────────────────────────
+        # Native stop/trailing orders can't attach to fractional shares, so we
+        # enforce here with a market sell (which accepts fractional qty). Only
+        # in the intraday run (broker supplied) and only when enabled + not
+        # halted. Idempotent within a day via a deterministic client_order_id.
+        breached = (from_entry <= -stop_loss_pct) or (from_peak <= -trail_stop_pct)
+        if (breached and broker is not None and config.ENFORCE_STOPS
+                and not os.path.exists(config.HALT_PATH)):
+            cid = orders._make_cid(tranche, "stop-enforce", t, dt.date.today())
+            try:
+                broker.submit_market(t, qty=pos["shares"], side="sell",
+                                     client_order_id=cid)
+                orders._append_daily_log(
+                    f"{dt.datetime.now(dt.timezone.utc).isoformat()},CLOSED,"
+                    f"{t},{tranche},stop-enforced")
+                # We just flattened the whole position with a market sell. Drop
+                # any SEPA exit queued for it this tick so the executor doesn't
+                # later submit a second (now over-)sell for the same shares.
+                _cancel_pending_partials(t)
+                alerts.append((Alert.CRITICAL, t,
+                    f"STOP ENFORCED{tranche_label}: sold {pos['shares']} sh "
+                    f"at ${current:.2f}."))
+            except BrokerError as e:
+                if "duplicate" not in str(e).lower():
+                    alerts.append((Alert.CRITICAL, t,
+                        f"STOP ENFORCE FAILED{tranche_label}: {e}"))
 
     return alerts
 

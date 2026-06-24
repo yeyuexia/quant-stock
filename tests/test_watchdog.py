@@ -750,6 +750,149 @@ def test_check_sepa_exits_climax_allows_ma_trail_after_fired(tmp_path, monkeypat
     assert any("21EMA" in line for line in notifications)
 
 
+def test_check_price_moves_enforces_stop_with_market_sell(tmp_path, monkeypatch):
+    import watchdog
+    import pandas as pd
+    from tests.fakes import FakeBroker
+
+    monkeypatch.setattr("config.ENFORCE_STOPS", True)
+    # No HALT file: point HALT_PATH at a non-existent tmp path.
+    monkeypatch.setattr("config.HALT_PATH", str(tmp_path / "HALT"))
+
+    # Price series ending well below entry → from_entry breaches core stop (-8%).
+    idx = pd.date_range(end=dt.date.today(), periods=5, freq="B")
+    df = pd.DataFrame({"AAPL": [100.0, 100.0, 100.0, 100.0, 80.0]}, index=idx)
+    monkeypatch.setattr("data.fetch_prices", lambda tickers, period="6mo": df)
+
+    portfolio = {"positions": [{
+        "ticker": "AAPL", "shares": 3.5, "entry_price": 100.0,
+        "entry_date": "", "tranche": "core",
+    }], "cash": 0.0}
+
+    fb = FakeBroker()
+    fb.set_latest_price("AAPL", 80.0)
+
+    alerts = watchdog.check_price_moves(portfolio, broker=fb)
+
+    sells = [o for o in fb._submitted if o.side == "sell"]
+    assert len(sells) == 1
+    assert sells[0].symbol == "AAPL"
+    assert sells[0].qty == 3.5  # full fractional position sold (the whole point)
+    assert any("STOP ENFORCED" in a[2] for a in alerts)
+
+
+def test_check_price_moves_no_enforce_when_halted(tmp_path, monkeypatch):
+    """HALT file present → breach is detected but no sell is submitted."""
+    import watchdog
+    import pandas as pd
+    from tests.fakes import FakeBroker
+
+    monkeypatch.setattr("config.ENFORCE_STOPS", True)
+    halt = tmp_path / "HALT"
+    halt.write_text("paused")  # HALT present
+    monkeypatch.setattr("config.HALT_PATH", str(halt))
+
+    idx = pd.date_range(end=dt.date.today(), periods=5, freq="B")
+    df = pd.DataFrame({"AAPL": [100.0, 100.0, 100.0, 100.0, 80.0]}, index=idx)
+    monkeypatch.setattr("data.fetch_prices", lambda tickers, period="6mo": df)
+
+    portfolio = {"positions": [{
+        "ticker": "AAPL", "shares": 3.5, "entry_price": 100.0,
+        "entry_date": "", "tranche": "core",
+    }], "cash": 0.0}
+
+    fb = FakeBroker()
+    fb.set_latest_price("AAPL", 80.0)
+
+    alerts = watchdog.check_price_moves(portfolio, broker=fb)
+
+    assert [o for o in fb._submitted if o.side == "sell"] == []   # halted: no sell
+    assert any("STOP-LOSS TRIGGERED" in a[2] for a in alerts)     # but still detected
+
+
+def test_check_price_moves_alert_only_when_enforce_disabled(tmp_path, monkeypatch):
+    import watchdog
+    import pandas as pd
+    from tests.fakes import FakeBroker
+
+    monkeypatch.setattr("config.ENFORCE_STOPS", False)
+    monkeypatch.setattr("config.HALT_PATH", str(tmp_path / "HALT"))
+
+    idx = pd.date_range(end=dt.date.today(), periods=5, freq="B")
+    df = pd.DataFrame({"AAPL": [100.0, 100.0, 100.0, 100.0, 80.0]}, index=idx)
+    monkeypatch.setattr("data.fetch_prices", lambda tickers, period="6mo": df)
+
+    portfolio = {"positions": [{
+        "ticker": "AAPL", "shares": 3.5, "entry_price": 100.0,
+        "entry_date": "", "tranche": "core",
+    }], "cash": 0.0}
+
+    fb = FakeBroker()
+    fb.set_latest_price("AAPL", 80.0)
+
+    alerts = watchdog.check_price_moves(portfolio, broker=fb)
+
+    assert [o for o in fb._submitted if o.side == "sell"] == []
+    assert any("STOP-LOSS TRIGGERED" in a[2] for a in alerts)  # legacy alert intact
+
+
+# ── I1: entry_date threaded into legacy positions for peak clamping ──
+
+def test_as_legacy_positions_passes_entry_date_through():
+    import watchdog, orders
+    snap = orders.PortfolioSnapshot(
+        synced_at="2026-06-24T00:00:00+00:00", alpaca_env="paper",
+        cash=0.0, equity=1000.0,
+        positions=[{"symbol": "AAPL", "shares": 5, "avg_entry": 100.0,
+                    "market_value": 500.0, "unrealized_pl": 0.0,
+                    "tranche": "core", "entry_reason": "adopted",
+                    "entry_date": "2026-06-20"}],
+        tranches={},
+    )
+    legacy = watchdog._as_legacy_positions(snap)
+    assert legacy[0]["entry_date"] == "2026-06-20"
+
+
+# ── I2: stop-enforce prunes the queued SEPA sell to avoid double-sell ──
+
+def test_stop_enforce_cancels_pending_sepa_intent(tmp_path, monkeypatch):
+    import watchdog, datetime as dt
+    import pandas as pd
+    from tests.fakes import FakeBroker
+    from pending_plan import PendingPlan, IntentState, Baseline, write_plan, load_plan
+    from orders import OrderIntent
+
+    monkeypatch.setattr("config.ENFORCE_STOPS", True)
+    monkeypatch.setattr("config.HALT_PATH", str(tmp_path / "HALT"))
+    monkeypatch.setattr("pending_plan.PENDING_PLAN_PATH", str(tmp_path / "plan.json"))
+    monkeypatch.setattr("config.PENDING_PLAN_PATH", str(tmp_path / "plan.json"))
+
+    write_plan(PendingPlan(
+        plan_id="p-1", tranche="core",
+        created_at=dt.datetime(2026, 6, 24, 14, 0, 0, tzinfo=dt.timezone.utc),
+        baseline=Baseline(spy=450, vix=14, macro_score=0.0,
+                          news_cursor_at=dt.datetime(2026, 6, 24, 14, 0, 0,
+                                                     tzinfo=dt.timezone.utc)),
+        intents=[IntentState(intent=OrderIntent(
+            symbol="AAPL", notional=1000.0, side="sell",
+            reason="sepa-2R", tranche="core", client_order_id="c1"))],
+    ))
+
+    idx = pd.date_range(end=dt.date.today(), periods=5, freq="B")
+    df = pd.DataFrame({"AAPL": [100.0, 100.0, 100.0, 100.0, 80.0]}, index=idx)
+    monkeypatch.setattr("data.fetch_prices", lambda tickers, period="6mo": df)
+
+    portfolio = {"positions": [{
+        "ticker": "AAPL", "shares": 3.5, "entry_price": 100.0,
+        "entry_date": "", "tranche": "core"}], "cash": 0.0}
+    fb = FakeBroker(); fb.set_latest_price("AAPL", 80.0)
+
+    watchdog.check_price_moves(portfolio, broker=fb)
+
+    assert [o for o in fb._submitted if o.side == "sell"]   # a stop sell happened
+    plan = load_plan()
+    syms_reasons = [(s.intent.symbol, s.intent.reason) for s in plan.intents]
+    assert ("AAPL", "sepa-2R") not in syms_reasons          # SEPA sell pruned
 # ======================================================================
 # Post-review additions (formerly test_watchdog_optimizations.py)
 # ======================================================================

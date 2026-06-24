@@ -81,6 +81,7 @@ def test_sync_state_carries_forward_known_tranche(tmp_path, monkeypatch):
 
 def test_sync_state_marks_unknown_tranche(tmp_path, monkeypatch):
     from orders import sync_state
+    monkeypatch.setattr("config.ADOPT_EXTERNAL_POSITIONS", False)
 
     _portfolio_cache(tmp_path, monkeypatch, None)  # no cache
 
@@ -92,6 +93,37 @@ def test_sync_state_marks_unknown_tranche(tmp_path, monkeypatch):
 
     assert snap.positions[0]["tranche"] == "unknown"
     assert any("unknown" in a.lower() and "NVDA" in a for a in alerts)
+
+
+def test_sync_state_adopts_external_position_into_core(tmp_path, monkeypatch):
+    from orders import sync_state
+    monkeypatch.setattr("config.ADOPT_EXTERNAL_POSITIONS", True)
+
+    _portfolio_cache(tmp_path, monkeypatch, None)  # no cache → external
+
+    fb = FakeBroker()
+    fb.seed_position("AAPL", qty=5, avg_entry=100, mv=520)
+
+    alerts: list = []
+    snap = sync_state(fb, alerts=alerts)
+
+    assert snap.positions[0]["tranche"] == "core"
+    assert snap.positions[0]["entry_reason"] == "adopted"
+    assert any("adopted" in a.lower() and "AAPL" in a for a in alerts)
+
+
+def test_sync_state_adopts_leveraged_etf_into_aggressive(tmp_path, monkeypatch):
+    from orders import sync_state
+    monkeypatch.setattr("config.ADOPT_EXTERNAL_POSITIONS", True)
+
+    _portfolio_cache(tmp_path, monkeypatch, None)
+
+    fb = FakeBroker()
+    fb.seed_position("SOXL", qty=5, avg_entry=100, mv=520)  # in config.ETF_LEVERAGED
+
+    snap = sync_state(fb, alerts=[])
+    assert snap.positions[0]["tranche"] == "aggressive"
+    assert snap.positions[0]["entry_reason"] == "adopted"
 
 
 def test_sync_state_drops_closed_positions(tmp_path, monkeypatch):
@@ -128,6 +160,23 @@ def test_sync_state_flags_missing_bracket(tmp_path, monkeypatch):
     alerts: list = []
     sync_state(fb, alerts=alerts)
     assert any("bracket" in a.lower() and "SPY" in a for a in alerts)
+
+
+def test_sync_state_alerts_when_untagged_starves_rebalancer(tmp_path, monkeypatch):
+    from orders import sync_state
+    monkeypatch.setattr("config.ADOPT_EXTERNAL_POSITIONS", False)  # keep them unknown
+    monkeypatch.setattr("config.UNKNOWN_MV_HALT_PCT", 0.20)
+
+    _portfolio_cache(tmp_path, monkeypatch, None)
+
+    fb = FakeBroker()
+    fb.equity = 100_000.0
+    fb.seed_position("NVDA", qty=100, avg_entry=500, mv=90_000)  # 90% of equity, untagged
+
+    alerts: list = []
+    sync_state(fb, alerts=alerts)
+
+    assert any("capital starved" in a.lower() for a in alerts)
 
 
 # ── reconcile_to_targets ────────────────────────────────────────
@@ -1368,6 +1417,39 @@ def test_execute_plan_cash_aware_does_not_affect_sell_only_plan(tmp_path, monkey
     assert not any("cash-aware" in s[1] for s in result.skipped)
 
 
+# ── entry_date stamping (I1: anchor trailing-stop peak to adoption time) ──
+
+def test_sync_state_stamps_entry_date_for_adopted_position(tmp_path, monkeypatch):
+    import datetime as dt
+    from orders import sync_state
+    monkeypatch.setattr("config.ADOPT_EXTERNAL_POSITIONS", True)
+    _portfolio_cache(tmp_path, monkeypatch, None)
+    fb = FakeBroker()
+    fb.seed_position("AAPL", qty=5, avg_entry=100, mv=520)
+    snap = sync_state(fb, alerts=[])
+    assert snap.positions[0]["entry_date"] == dt.date.today().isoformat()
+
+
+def test_sync_state_preserves_entry_date_across_syncs(tmp_path, monkeypatch):
+    from orders import sync_state
+    old = {
+        "synced_at": "2026-04-16T14:00:00+00:00", "alpaca_env": "paper",
+        "cash": 0.0, "equity": 0.0,
+        "positions": [
+            {"symbol": "SPY", "shares": 10.0, "avg_entry": 500.0,
+             "market_value": 5000.0, "unrealized_pl": 0.0,
+             "tranche": "core", "entry_reason": "core rebalance",
+             "entry_date": "2026-01-02",
+             "stop_order_id": None, "trail_order_id": None},
+        ],
+        "tranches": {"core": {"last_rebalance": "2026-04-16"},
+                     "aggressive": {"last_rebalance": "2026-04-16"}},
+    }
+    _portfolio_cache(tmp_path, monkeypatch, old)
+    fb = FakeBroker()
+    fb.seed_position("SPY", qty=10, avg_entry=500, mv=5050)
+    snap = sync_state(fb, alerts=[])
+    assert snap.positions[0]["entry_date"] == "2026-01-02"
 # ======================================================================
 # Post-review additions (formerly test_orders_optimizations.py)
 # ======================================================================
