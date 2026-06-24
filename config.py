@@ -92,6 +92,23 @@ ETF_ALLOCATION_PCT = _params["etf_allocation_pct"]
 STOCK_ALLOCATION_PCT = _params["stock_allocation_pct"]
 USE_LEVERAGED_ETFS = _params["use_leveraged_etfs"]
 
+# ── Position-adoption & stop-enforcement flags ──────────────────
+# Broker-imported positions (manual trades, legacy holdings) arrive with no
+# local metadata. When True, sync_state tags them into a sleeve so the
+# rebalancer manages them and stop logic applies. When False, they stay
+# 'unknown' (legacy behavior).
+ADOPT_EXTERNAL_POSITIONS = True
+
+# Defense-in-depth: if untagged ('unknown') market value exceeds this fraction
+# of equity, sync_state raises a loud alert — the rebalancer would otherwise
+# silently size itself to near-zero capital.
+UNKNOWN_MV_HALT_PCT = 0.20
+
+# When True, the intraday watchdog submits a market sell on a stop/trailing
+# breach (works on fractional shares, unlike native stop orders). When False,
+# the watchdog only alerts (legacy behavior).
+ENFORCE_STOPS = True
+
 # ── Aggressive Tranche Parameters ───────────────────────────────
 # Pure leveraged ETF momentum — top-2 picks, daily rebalance cadence
 # (5% REBALANCE_BAND_PCT throttles churn; hysteresis prevents whipsaw).
