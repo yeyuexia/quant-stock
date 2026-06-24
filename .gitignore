@@ -7,3 +7,6 @@ __pycache__/
 pending_orders.json
 portfolio.json
 watchlist_auto.json
+
+# Transient fcntl lock sidecars (runtime artifacts)
+*.lock
