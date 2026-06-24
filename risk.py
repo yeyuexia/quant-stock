@@ -45,21 +45,28 @@ def portfolio_stats(returns: pd.DataFrame, weights: np.ndarray,
 
 
 def half_kelly(win_rate: float, avg_win: float, avg_loss: float) -> float:
-    """Half-Kelly position sizing. Returns fraction of capital to risk."""
-    if avg_loss == 0:
-        return 0
+    """Half-Kelly position sizing. Returns fraction of capital to risk.
+
+    Robust against near-zero avg_loss (which would divide-by-zero on exact
+    equality but also produce absurd Kelly values for very-tiny losses).
+    Also rejects negative/zero win_rate or negative avg_win as nonsensical.
+    """
+    if abs(avg_loss) < 1e-9 or avg_win <= 0 or win_rate <= 0:
+        return 0.0
     b = avg_win / abs(avg_loss)
     p = win_rate
     kelly = p - (1 - p) / b
-    return max(0, kelly / 2)  # half-Kelly for safety
+    return max(0.0, kelly / 2)  # half-Kelly for safety
 
 
 def position_size(capital: float, weight: float, price: float,
                   max_pct: float = 0.25) -> int:
-    """Calculate number of shares to buy, respecting max position size."""
+    """Calculate number of shares to buy, respecting max position size.
+    Returns 0 on non-positive capital / weight / price (defensive)."""
+    if capital <= 0 or weight <= 0 or price <= 0:
+        return 0
     alloc = capital * min(weight, max_pct)
-    shares = int(alloc / price) if price > 0 else 0
-    return shares
+    return int(alloc / price)
 
 
 def correlation_matrix(returns: pd.DataFrame) -> pd.DataFrame:

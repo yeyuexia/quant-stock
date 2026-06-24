@@ -1,6 +1,10 @@
 # tests/test_baseline.py
 import datetime as dt
 from unittest.mock import patch
+import baseline
+import os
+import pytest
+import sys
 
 
 def test_capture_baseline_calls_all_sources():
@@ -98,3 +102,88 @@ class _SeriesIloc:
         self._v = values
     def __getitem__(self, idx):
         return self._v[idx]
+
+
+# ======================================================================
+# Post-review additions (formerly test_baseline_optimizations.py)
+# ======================================================================
+
+"""Regression tests for baseline.py hardening (validation + retry + cached md client)."""
+import os
+import sys
+import pytest
+from unittest.mock import patch
+
+sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
+
+import baseline
+
+
+def test_capture_baseline_rejects_zero_spy(monkeypatch):
+    monkeypatch.setattr(baseline, "_fetch_spy", lambda: 0.0)
+    monkeypatch.setattr(baseline, "_fetch_vix", lambda: 14.0)
+    monkeypatch.setattr(baseline, "_fetch_macro_score", lambda: 0.0)
+    with pytest.raises(RuntimeError, match="invalid spy"):
+        baseline.capture_baseline()
+
+
+def test_capture_baseline_rejects_negative_spy(monkeypatch):
+    monkeypatch.setattr(baseline, "_fetch_spy", lambda: -1.0)
+    monkeypatch.setattr(baseline, "_fetch_vix", lambda: 14.0)
+    monkeypatch.setattr(baseline, "_fetch_macro_score", lambda: 0.0)
+    with pytest.raises(RuntimeError, match="invalid spy"):
+        baseline.capture_baseline()
+
+
+def test_capture_baseline_rejects_nan_vix(monkeypatch):
+    monkeypatch.setattr(baseline, "_fetch_spy", lambda: 480.0)
+    monkeypatch.setattr(baseline, "_fetch_vix", lambda: float("nan"))
+    monkeypatch.setattr(baseline, "_fetch_macro_score", lambda: 0.0)
+    with pytest.raises(RuntimeError, match="invalid vix"):
+        baseline.capture_baseline()
+
+
+def test_capture_baseline_rejects_nan_macro(monkeypatch):
+    monkeypatch.setattr(baseline, "_fetch_spy", lambda: 480.0)
+    monkeypatch.setattr(baseline, "_fetch_vix", lambda: 14.0)
+    monkeypatch.setattr(baseline, "_fetch_macro_score", lambda: float("nan"))
+    with pytest.raises(RuntimeError, match="invalid macro"):
+        baseline.capture_baseline()
+
+
+def test_retry_succeeds_on_second_attempt():
+    calls = {"n": 0}
+    def flaky():
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise RuntimeError("transient")
+        return 480.0
+    assert baseline._retry(flaky) == 480.0
+    assert calls["n"] == 2
+
+
+def test_md_client_is_cached_across_calls(monkeypatch):
+    """Module-level _MD_CLIENT — second access returns same instance."""
+    monkeypatch.setenv("ALPACA_API_KEY", "test")
+    monkeypatch.setenv("ALPACA_API_SECRET", "test")
+    monkeypatch.setattr(baseline, "_MD_CLIENT", None)
+
+    construct_count = {"n": 0}
+
+    class FakeClient:
+        def __init__(self, **kw):
+            construct_count["n"] += 1
+
+    with patch("alpaca.data.historical.StockHistoricalDataClient", FakeClient):
+        c1 = baseline._md_client()
+        c2 = baseline._md_client()
+    assert c1 is c2
+    assert construct_count["n"] == 1
+
+
+def test_md_client_raises_when_creds_missing(monkeypatch):
+    monkeypatch.setattr(baseline, "_MD_CLIENT", None)
+    monkeypatch.delenv("ALPACA_API_KEY", raising=False)
+    monkeypatch.delenv("ALPACA_API_SECRET", raising=False)
+    with pytest.raises(RuntimeError, match="ALPACA_API_KEY"):
+        baseline._md_client()

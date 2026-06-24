@@ -1,9 +1,9 @@
 """Circuit breakers that evaluate market state against plan baselines.
 
 Each breaker is a pure function: takes a Baseline + current observations,
-returns a BreakerResult. evaluate_all() (added later) orchestrates all five.
-Sticky state (which breakers have tripped this plan) lives in PendingPlan,
-not here.
+returns a BreakerResult. Sticky state (which breakers have tripped this
+plan) lives in PendingPlan, not here. Audit logging (news hits etc.) is
+the caller's responsibility — the breakers themselves never touch disk.
 """
 from __future__ import annotations
 from dataclasses import dataclass
@@ -24,6 +24,11 @@ class BreakerResult:
 
 
 def check_spy_drop(baseline: Baseline, spy_now: float) -> BreakerResult:
+    if baseline.spy <= 0:
+        return BreakerResult(
+            breaker="A", tripped=False, scope="none",
+            message=f"invalid baseline SPY {baseline.spy!r}",
+        )
     change = (spy_now - baseline.spy) / baseline.spy
     threshold = -config.CIRCUIT_BREAKERS["spy_drop_pct"]
     if change <= threshold:
@@ -43,6 +48,11 @@ def check_spy_drop(baseline: Baseline, spy_now: float) -> BreakerResult:
 
 
 def check_vix_spike(baseline: Baseline, vix_now: float) -> BreakerResult:
+    if baseline.vix <= 0:
+        return BreakerResult(
+            breaker="B", tripped=False, scope="none",
+            message=f"invalid baseline VIX {baseline.vix!r}",
+        )
     cb = config.CIRCUIT_BREAKERS
     threshold = max(baseline.vix * cb["vix_multiplier"], cb["vix_absolute"])
     if vix_now >= threshold:
@@ -115,10 +125,10 @@ def check_news_shock(
     threshold = config.CIRCUIT_BREAKERS["news_corroboration_pct"]
     tripped = move >= threshold
 
-    # Audit log — every hit, regardless of corroboration (spec §6)
-    from news_shock import log_hit
-    for h in hits:
-        log_hit(h, corroborated=tripped)
+    # NOTE: audit logging of `hits` is the CALLER's responsibility (executor
+    # iterates hits and calls news_shock.log_hit). Keeping this function
+    # pure makes it testable without filesystem fixtures and matches the
+    # module-level docstring's "no disk" contract.
 
     if not tripped:
         return BreakerResult(

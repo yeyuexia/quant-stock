@@ -97,3 +97,105 @@ def test_full_day_shadow_mode_submits_nothing(tmp_path, monkeypatch):
     obs_by_hour = {(99, 99): _quiet_obs}
     b = _run_day(monkeypatch, tmp_path, obs_by_hour=obs_by_hour, shadow=True)
     assert len(b._submitted) == 0
+
+
+# ── Per-breaker contract tests (one full day per breaker) ──────────
+# Mirror test_full_day_breaker_trip_aborts_after_morning for B/C/D/E so
+# each circuit breaker has at least one full-path e2e regression.
+
+
+def _obs_with(*, spy=480.0, vix=14.0, macro=0.12, spy_15min_ago=480.0,
+              symbol_prices=None, news_hits=None):
+    """Factory helper — builds the duck-typed observations object the
+    executor expects (see _fetch_current_observations)."""
+    sp = symbol_prices if symbol_prices is not None else {"SPY": spy}
+    nh = news_hits if news_hits is not None else []
+    class O:
+        pass
+    O.spy = spy
+    O.vix = vix
+    O.macro = macro
+    O.symbol_prices = sp
+    O.spy_15min_ago = spy_15min_ago
+    O.news_hits = nh
+    return lambda: O()
+
+
+def test_full_day_breaker_B_vix_spike(tmp_path, monkeypatch):
+    """VIX spikes past max(baseline×1.5, 25.0) at 11:00 → buys abort."""
+    obs_by_hour = {
+        (10, 0):  _quiet_obs,
+        (10, 30): _quiet_obs,
+        # baseline VIX 14 × 1.5 = 21, abs floor 25 — pick 30 to clear both
+        (11, 0):  _obs_with(vix=30.0),
+        (99, 99): _obs_with(vix=30.0),
+    }
+    _run_day(monkeypatch, tmp_path, obs_by_hour=obs_by_hour)
+
+    loaded = load_plan()
+    assert loaded.intents[0].status == "aborted"
+    assert "B" in loaded.breakers_tripped
+
+
+def test_full_day_breaker_C_single_name_drop(tmp_path, monkeypatch):
+    """SPY (the plan's only symbol) drops 6% from decision_price at 11:00,
+    but SPY benchmark stays flat — only C trips, not A. The intent is
+    aborted with key C:SPY (per-symbol scope)."""
+    obs_by_hour = {
+        (10, 0):  _quiet_obs,
+        (10, 30): _quiet_obs,
+        # spy benchmark stays at baseline so A doesn't fire; per-symbol
+        # price for SPY drops 6%, tripping C (threshold 5%).
+        (11, 0):  _obs_with(symbol_prices={"SPY": 451.0}),
+        (99, 99): _obs_with(symbol_prices={"SPY": 451.0}),
+    }
+    _run_day(monkeypatch, tmp_path, obs_by_hour=obs_by_hour)
+
+    loaded = load_plan()
+    assert loaded.intents[0].status == "aborted"
+    assert "C:SPY" in loaded.breakers_tripped
+
+
+def test_full_day_breaker_D_news_shock_corroborated(tmp_path, monkeypatch):
+    """News hit + SPY moves > 0.5% in the 15-min window → D trips."""
+    from news_shock import NewsHit
+
+    def news_obs():
+        hit = NewsHit(
+            title="Fed announces emergency rate cut",
+            source="reuters",
+            ts=dt.datetime(2026, 4, 17, 14, 55, tzinfo=dt.timezone.utc),
+            matched="rate cut",
+        )
+        return _obs_with(
+            spy=477.0, spy_15min_ago=480.0,   # -0.625% — won't fire A (need 1.5%)
+            news_hits=[hit],                   # but D fires: corroboration only needs 0.5%
+        )()
+
+    obs_by_hour = {
+        (10, 0):  _quiet_obs,
+        (10, 30): _quiet_obs,
+        (11, 0):  lambda: news_obs(),
+        (99, 99): lambda: news_obs(),
+    }
+    _run_day(monkeypatch, tmp_path, obs_by_hour=obs_by_hour)
+
+    loaded = load_plan()
+    assert loaded.intents[0].status == "aborted"
+    assert "D" in loaded.breakers_tripped
+
+
+def test_full_day_breaker_E_macro_flip(tmp_path, monkeypatch):
+    """Macro score drops 0.3+ from baseline at 11:00 → E trips."""
+    obs_by_hour = {
+        (10, 0):  _quiet_obs,
+        (10, 30): _quiet_obs,
+        # baseline macro 0.12, drop to -0.20 → drop = 0.32 (≥ 0.30 threshold)
+        (11, 0):  _obs_with(macro=-0.20),
+        (99, 99): _obs_with(macro=-0.20),
+    }
+    _run_day(monkeypatch, tmp_path, obs_by_hour=obs_by_hour)
+
+    loaded = load_plan()
+    assert loaded.intents[0].status == "aborted"
+    assert "E" in loaded.breakers_tripped

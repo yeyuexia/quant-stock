@@ -70,9 +70,9 @@ def test_rebalancer_run_accepts_protocol_target_builder(tmp_path, monkeypatch):
     monkeypatch.setattr(bl, "_fetch_macro_score", lambda: 0.0)
 
     class FakeBuilder:
-        def build(self, *, tranche, broker):
+        def build(self, *, tranche, broker, tranche_capital):
             return TargetBuilderOutput(
-                targets={"SPY": 0.10}, capital=90_000.0,
+                targets={"SPY": 0.10}, capital=tranche_capital,
                 rationale="test", confidence=1.0, provider="fake",
             )
 

@@ -14,6 +14,8 @@ from config import (
 
 
 def _momentum_score(prices: pd.Series, end_idx: int, months: list[int]) -> float:
+    """Backtest-local momentum score. Returns -infinity for insufficient
+    history (sorts to bottom in the rank step) — was -999 magic number."""
     scores, weights = [], []
     for m in sorted(months):
         days = m * 21
@@ -24,7 +26,7 @@ def _momentum_score(prices: pd.Series, end_idx: int, months: list[int]) -> float
         w = 1.0 / m
         scores.append(ret * w)
         weights.append(w)
-    return sum(scores) / sum(weights) if weights else -999
+    return sum(scores) / sum(weights) if weights else float("-inf")
 
 
 def backtest_momentum(years: int = 5) -> pd.DataFrame:
@@ -39,9 +41,9 @@ def backtest_momentum(years: int = 5) -> pd.DataFrame:
     # Benchmark: SPY buy-and-hold
     spy = prices["SPY"].dropna()
 
-    # Monthly rebalance dates (last trading day of each month)
-    monthly = prices.resample("ME").last().index
-    # Need enough history for lookback
+    # Need enough history for lookback. (A previously-computed monthly
+    # rebalance-dates index was dead — the rebalance trigger uses
+    # current_month != prev_month inside the loop below.)
     min_history = max(MOMENTUM_LOOKBACK_MONTHS) * 21
     start_idx = min_history + SMA_FILTER_PERIOD
 

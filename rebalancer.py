@@ -22,33 +22,61 @@ from broker import Broker
 
 # ── Target builders ─────────────────────────────────────────────
 
-def _build_core_targets() -> tuple[dict[str, float], float]:
+def _system_equity(snap: "orders.PortfolioSnapshot") -> float:
+    """Total account equity minus the market value of unknown-tranche positions.
+
+    Unknown positions are ones the system didn't open (manual trades, legacy
+    holdings) — they shouldn't be counted toward the budget that core/aggressive
+    sleeves try to allocate against.
+    """
+    unknown_mv = sum(
+        float(p.get("market_value", 0) or 0)
+        for p in snap.by_tranche("unknown")
+    )
+    return max(0.0, float(snap.equity) - unknown_mv)
+
+
+def _build_core_targets(tranche_capital: float) -> tuple[dict[str, float], float]:
     """Compose core-tranche targets from momentum + screener + macro.
-    Returns (targets_dict, tranche_capital_dollars)."""
+
+    Returns (targets_dict, tranche_capital). targets are fractions of
+    tranche_capital that should sum to ≤ 1.0; any unallocated remainder sits
+    in cash. The macro-shrunk equity portion has a hard BIL floor so we never
+    silently drop the stock sleeve into cash when the screener returns nothing.
+    """
     from momentum import generate_signals
     from macro import macro_risk_adjustment
 
-    capital = config.INITIAL_CAPITAL * (1 - config.AGGRESSIVE_TRANCHE_PCT)
     macro_adj = macro_risk_adjustment(1.0)
     etf_pct = config.ETF_ALLOCATION_PCT * macro_adj
     stock_pct = config.STOCK_ALLOCATION_PCT * macro_adj
-    # Remainder goes to BIL as macro hedge (captured as a target).
-    safe_pct = max(0.0, 1.0 - etf_pct - stock_pct - config.CASH_BUFFER_PCT)
 
-    signals = generate_signals()
+    # Load current core holdings once so generate_signals can apply hysteresis
+    # and the stock sleeve can skip already-held pivot refreshes.
+    cache = orders._load_portfolio_cache()
+    held_core = {
+        p["symbol"] for p in cache.get("positions", [])
+        if p.get("tranche") == "core"
+    }
+
     targets: dict[str, float] = {}
+
+    # ── ETF sleeve (with hysteresis) ───────────────────────────
+    signals = generate_signals(held_etfs=held_core)
     for sym, w in signals["holdings"]:
         targets[sym] = targets.get(sym, 0.0) + w * etf_pct
 
-    # Stock sleeve: top-3 by composite score + entry-pivot persistence (SEPA Phase 2).
+    # ── Stock sleeve (with empty/sparse → BIL fallback) ────────
     from screener import screen_stocks
     df = screen_stocks()
+    stock_allocated = 0.0
     if df is not None and not df.empty:
-        top = df.head(3)
-        per = stock_pct / max(1, len(top))
-        # Identify currently-held symbols so we don't refresh existing pivot records.
-        cache = orders._load_portfolio_cache()
-        held = {p["symbol"] for p in cache.get("positions", [])}
+        top = df.head(config.STOCK_SLEEVE_TOP_N)
+        n = len(top)
+        # Even-weight, capped at MAX_POSITION_PCT to avoid single-stock concentration
+        # when the screener returns fewer than STOCK_SLEEVE_TOP_N picks.
+        per = min(stock_pct / n, config.MAX_POSITION_PCT)
+
         pivots = orders._load_entry_pivots()
         today_str = dt.datetime.now(dt.timezone.utc).date().isoformat()
         pivots_dirty = False
@@ -56,35 +84,64 @@ def _build_core_targets() -> tuple[dict[str, float], float]:
         for _, row in top.iterrows():
             sym = row["ticker"]
             targets[sym] = targets.get(sym, 0.0) + per
-            if sym in held:
-                continue  # Already held — keep the existing pivot record.
+            stock_allocated += per
+            if sym in held_core:
+                continue  # keep existing pivot
             base_hi = row.get("base_hi")
-            if base_hi is None or _pd.isna(base_hi):
-                continue
-            pivots[sym] = {"pivot": float(base_hi), "entry_date": today_str}
+            price = row.get("price")
+            if base_hi is not None and not _pd.isna(base_hi):
+                pivot = float(base_hi)
+            elif price is not None and not _pd.isna(price):
+                # Fallback: stock passed RS/ADR/EMA but didn't form a clean VCP base.
+                # Use the screening close so SEPA failed-breakout still has a reference.
+                pivot = float(price)
+            else:
+                continue  # no usable reference at all
+            pivots[sym] = {"pivot": pivot, "entry_date": today_str}
             pivots_dirty = True
         if pivots_dirty:
             orders._save_entry_pivots(pivots)
 
-    if safe_pct > 0.01:
-        targets[config.SAFE_HAVEN] = targets.get(config.SAFE_HAVEN, 0.0) + safe_pct
+    # Anything in stock_pct not actually allocated (empty screener, capped picks,
+    # short top list) gets rolled into the defensive BIL bucket — never silently
+    # left in cash.
+    stock_unallocated = max(0.0, stock_pct - stock_allocated)
 
-    return targets, capital
+    # Cash buffer only materializes when macro_adj is low enough that
+    # etf_pct + stock_pct + buffer < 1.0. In healthy regimes (macro_adj ≈ 1.0)
+    # the configured ETF+stock allocations are typically ≥ 1.0 so the buffer
+    # is absorbed — by design.
+    safe_pct = max(0.0, 1.0 - etf_pct - stock_pct - config.CASH_BUFFER_PCT)
+    bil_total = safe_pct + stock_unallocated
+    if bil_total > 0.005:
+        targets[config.SAFE_HAVEN] = targets.get(config.SAFE_HAVEN, 0.0) + bil_total
+
+    return targets, tranche_capital
 
 
-def _build_aggressive_targets() -> tuple[dict[str, float], float]:
-    """Top-N leveraged ETFs by momentum, equal-weighted. Uses ALL leveraged ETFs
-    from config._ETF_LEVERAGED regardless of PORTFOLIO_MODE, because the
-    aggressive tranche is always leveraged-ETF-only."""
-    import pandas as pd
+def _build_aggressive_targets(tranche_capital: float) -> tuple[dict[str, float], float]:
+    """Top-N leveraged ETFs by momentum, equal-weighted.
+
+    Uses ALL leveraged ETFs from config.ETF_LEVERAGED regardless of
+    PORTFOLIO_MODE — the aggressive tranche is always leveraged-ETF-only.
+    Applies hysteresis: a held leveraged ETF that slips out of the top-N is
+    kept as long as it stays within top-(N + hysteresis_depth) AND still
+    above its 200-day SMA. Prevents whipsaw when rank flickers.
+    """
     from data import fetch_prices
     from momentum import _momentum_score
 
-    capital = config.INITIAL_CAPITAL * config.AGGRESSIVE_TRANCHE_PCT
     top_n = config.AGGRESSIVE_PARAMS["momentum_top_n"]
     cash_buf = config.AGGRESSIVE_PARAMS["cash_buffer_pct"]
+    hyst_depth = config.AGGRESSIVE_PARAMS.get("hysteresis_depth", 0)
 
-    leveraged = config._ETF_LEVERAGED
+    cache = orders._load_portfolio_cache()
+    held_agg = {
+        p["symbol"] for p in cache.get("positions", [])
+        if p.get("tranche") == "aggressive"
+    }
+
+    leveraged = config.ETF_LEVERAGED
     prices = fetch_prices(leveraged + [config.SAFE_HAVEN], period="1y")
     rows = []
     for t in leveraged:
@@ -100,29 +157,40 @@ def _build_aggressive_targets() -> tuple[dict[str, float], float]:
 
     rows.sort(key=lambda r: r[1], reverse=True)
     top = rows[:top_n]
+    # Hysteresis: rows ranked top_n+1..top_n+hyst_depth that are currently held
+    # also keep their slot (SMA filter was already applied above).
+    sticky = [r for r in rows[top_n : top_n + hyst_depth] if r[0] in held_agg]
+    selected = top + sticky
+
     targets: dict[str, float] = {}
-    if not top:
+    if not selected:
         targets[config.SAFE_HAVEN] = 1.0 - cash_buf
     else:
-        w = (1.0 - cash_buf) / len(top)
-        for sym, _ in top:
+        # Same weight cap as core: divide by max(len, top_n) so sticky picks
+        # don't push total above 1 - cash_buffer.
+        deployable = 1.0 - cash_buf
+        w = deployable / max(len(selected), top_n)
+        for sym, _ in selected:
             targets[sym] = w
-    return targets, capital
+        remainder = deployable - w * len(selected)
+        if remainder > 0.005:
+            targets[config.SAFE_HAVEN] = targets.get(config.SAFE_HAVEN, 0.0) + remainder
+    return targets, tranche_capital
 
 
 class RuleBasedCoreTargetBuilder:
     """Rule-based target builder for the core tranche.
 
-    Wraps the existing _build_core_targets() — behavior identical.
-    Implements planning.TargetBuilder."""
+    Implements planning.TargetBuilder. Caller supplies tranche_capital so
+    the system can compound — capital is no longer pinned to INITIAL_CAPITAL."""
 
-    def build(self, *, tranche, broker):
+    def build(self, *, tranche, broker, tranche_capital):
         from planning import TargetBuilderOutput
-        targets, capital = _build_core_targets()
+        targets, capital = _build_core_targets(tranche_capital)
         return TargetBuilderOutput(
             targets=targets,
             capital=capital,
-            rationale="core: dual-momentum ETF rotation + value/quality screen + macro overlay + BIL safe-haven",
+            rationale="core: dual-momentum ETF rotation + CANSLIM screen + macro overlay + BIL safe-haven",
             confidence=1.0,
             provider="rule-based-core",
         )
@@ -131,12 +199,12 @@ class RuleBasedCoreTargetBuilder:
 class RuleBasedAggressiveTargetBuilder:
     """Rule-based target builder for the aggressive tranche.
 
-    Wraps the existing _build_aggressive_targets() — behavior identical.
-    Implements planning.TargetBuilder."""
+    Implements planning.TargetBuilder. Caller supplies tranche_capital so
+    the system can compound — capital is no longer pinned to INITIAL_CAPITAL."""
 
-    def build(self, *, tranche, broker):
+    def build(self, *, tranche, broker, tranche_capital):
         from planning import TargetBuilderOutput
-        targets, capital = _build_aggressive_targets()
+        targets, capital = _build_aggressive_targets(tranche_capital)
         return TargetBuilderOutput(
             targets=targets,
             capital=capital,
@@ -184,10 +252,22 @@ def run(
                       f"(cadence {config.REBALANCE_DAYS[tranche]}d). Exiting.")
                 return None
 
+    # Dynamic tranche capital: tracks Alpaca account equity (minus unknown-tranche
+    # positions) so the system compounds. Falls back to INITIAL_CAPITAL × split
+    # only if the system equity calc produces nothing (defensive — shouldn't fire
+    # in normal operation).
+    system_equity = _system_equity(snap)
+    if system_equity <= 0:
+        system_equity = config.INITIAL_CAPITAL
+    if tranche == "aggressive":
+        tranche_capital = system_equity * config.AGGRESSIVE_TRANCHE_PCT
+    else:
+        tranche_capital = system_equity * (1 - config.AGGRESSIVE_TRANCHE_PCT)
+
     builder = target_builder or _TARGET_BUILDERS[tranche]
     # Accept both Protocol (.build(...)) and callable (legacy tests) forms.
     if hasattr(builder, "build"):
-        result = builder.build(tranche=tranche, broker=broker)
+        result = builder.build(tranche=tranche, broker=broker, tranche_capital=tranche_capital)
         targets, tranche_capital = result.targets, result.capital
     else:
         targets, tranche_capital = builder()
@@ -302,7 +382,12 @@ def _write_pending_plan(tranche, intents, *, broker):
 
     try:
         from momentum import generate_signals
-        sig = generate_signals()
+        cache = orders._load_portfolio_cache()
+        held_core = {
+            p["symbol"] for p in cache.get("positions", [])
+            if p.get("tranche") == "core"
+        }
+        sig = generate_signals(held_etfs=held_core)
         for ticker, _w, rank in sig.get("holdings_ranked", []):
             if ticker in symbols:
                 ranks[ticker] = rank
@@ -391,10 +476,9 @@ def _write_pending_plan(tranche, intents, *, broker):
 
 def _notify_plan_to_telegram(tranche: str, intents: list, baseline) -> None:
     """Append a new-plan summary to TELEGRAM_NOTIFY_PATH. No-op if unset."""
-    path = getattr(config, "TELEGRAM_NOTIFY_PATH", None)
-    if not path or not intents:
+    if not intents:
         return
-    import json
+    from notifications import append_notification
 
     lines = [f"📋 New Plan — {tranche} tranche"]
     lines.append(
@@ -412,22 +496,11 @@ def _notify_plan_to_telegram(tranche: str, intents: list, baseline) -> None:
     lines.append("")
     lines.append(f"Total: ${total:,.0f} across {len(intents)} intents")
 
-    os.makedirs(os.path.dirname(path), exist_ok=True)
-    existing = []
-    if os.path.exists(path):
-        try:
-            with open(path) as f:
-                existing = json.load(f)
-        except Exception:
-            existing = []
-    existing.append({
-        "ts": dt.datetime.now(dt.timezone.utc).isoformat(),
+    append_notification({
         "source": "rebalancer",
         "tranche": tranche,
         "message": "\n".join(lines),
     })
-    with open(path, "w") as f:
-        json.dump(existing, f, indent=2, default=str)
 
 
 def main():

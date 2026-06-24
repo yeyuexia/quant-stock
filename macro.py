@@ -7,7 +7,7 @@ the momentum strategy to improve timing.
 
 Key indicators:
   1. Yield Curve (10Y-2Y spread) — inverted = recession warning
-  2. Credit Spreads (BAA-AAA) — widening = stress
+  2. Credit Spreads (HY OAS) — widening = stress
   3. Unemployment Claims — rising = slowdown
   4. ISM Manufacturing PMI — below 50 = contraction
   5. Fed Funds Rate trajectory — tightening vs easing
@@ -18,64 +18,71 @@ Each indicator produces a score from -1 (bearish) to +1 (bullish).
 The composite score drives portfolio risk adjustment.
 """
 import os
-import json
+import re
 import time
 import datetime as dt
 import pandas as pd
-import numpy as np
+
+from fileio import atomic_write_csv
 
 CACHE_DIR = os.path.join(os.path.dirname(__file__), ".cache")
 os.makedirs(CACHE_DIR, exist_ok=True)
 
-# Load from .env file
-_env_path = os.path.join(os.path.dirname(__file__), ".env")
-if os.path.exists(_env_path):
-    with open(_env_path) as _f:
-        for _line in _f:
-            _line = _line.strip()
-            if _line and not _line.startswith("#") and "=" in _line:
-                _k, _v = _line.split("=", 1)
-                os.environ.setdefault(_k.strip(), _v.strip())
+# Load .env via python-dotenv (was a brittle hand-rolled parser before —
+# couldn't handle quoted values, escapes, etc., and inconsistent with
+# rebalancer.py / executor.py which already used load_dotenv).
+try:
+    from dotenv import load_dotenv
+    load_dotenv(os.path.join(os.path.dirname(__file__), ".env"))
+except ImportError:
+    pass  # python-dotenv not installed; rely on env vars already being set
 
 FRED_API_KEY = os.environ.get("FRED_API_KEY", "")
 
-# FRED series IDs
-SERIES = {
-    "yield_10y":    "DGS10",          # 10-Year Treasury
-    "yield_2y":     "DGS2",           # 2-Year Treasury
-    "yield_3m":     "DGS3MO",         # 3-Month Treasury
-    "fed_funds":    "FEDFUNDS",       # Federal Funds Rate
-    "baa_yield":    "DBAA",           # Moody's BAA Corporate
-    "aaa_yield":    "DAAA",           # Moody's AAA Corporate
-    "unemployment": "UNRATE",         # Unemployment Rate
-    "claims":       "ICSA",           # Initial Jobless Claims
-    "cpi_yoy":      "CPIAUCSL",       # CPI (we compute YoY)
-    "ism_mfg":      "MANEMP",         # Manufacturing Employment (proxy)
-    "nfci":         "NFCI",           # Chicago Fed Financial Conditions
-    "m2":           "M2SL",           # M2 Money Supply
-    "sp500":        "SP500",          # S&P 500
-}
+_FRED_CACHE_TTL_SECONDS = 12 * 3600
+_FRED_RETRY_BACKOFF_MS  = 300
 
 
-def _fetch_fred_series(series_id, start="2020-01-01"):
-    """Fetch a single FRED series. Uses fredapi if API key available,
-    otherwise falls back to yfinance for market data."""
-    cache_path = os.path.join(CACHE_DIR, f"fred_{series_id}.csv")
-    if os.path.exists(cache_path):
+def _sanitize_series_id(series_id: str) -> str:
+    """Filename-safe form of a FRED series ID. Future-proof against IDs
+    that might contain unexpected characters."""
+    return re.sub(r"[^A-Z0-9_-]", "_", series_id)
+
+
+def _fetch_fred_series(series_id: str, *, force: bool = False) -> pd.Series:
+    """Fetch a single FRED series (or yfinance fallback for a few aliases).
+
+    `force=True` ignores the 12h cache — used by `python3 macro.py --refresh`
+    when a fresh Fed announcement / data print should override stale cache.
+    """
+    cache_path = os.path.join(CACHE_DIR, f"fred_{_sanitize_series_id(series_id)}.csv")
+    if not force and os.path.exists(cache_path):
         age = time.time() - os.path.getmtime(cache_path)
-        if age < 12 * 3600:  # 12-hour cache
+        if age < _FRED_CACHE_TTL_SECONDS:
             df = pd.read_csv(cache_path, index_col=0, parse_dates=True)
             return df.iloc[:, 0]
 
     if FRED_API_KEY:
         from fredapi import Fred
         fred = Fred(api_key=FRED_API_KEY)
-        data = fred.get_series(series_id, observation_start=start)
-        data = data.dropna()
-        data.to_frame(series_id).to_csv(cache_path)
-        return data
+        # 1-retry on transient FRED errors. Without this, a single network
+        # blip makes the indicator return empty → composite gets diluted
+        # toward 0 (see macro_regime_score normalization).
+        last_exc = None
+        for attempt in range(2):
+            try:
+                data = fred.get_series(series_id).dropna()
+                atomic_write_csv(cache_path, data.to_frame(series_id))
+                return data
+            except Exception as e:
+                last_exc = e
+                if attempt == 0:
+                    time.sleep(_FRED_RETRY_BACKOFF_MS / 1000.0)
+        # Both attempts failed — caller will see an empty series and (post-M8)
+        # exclude this indicator from the composite, rather than poison it.
+        return pd.Series(dtype=float)
     else:
-        # No FRED key — use yfinance as fallback for key rates
+        # No FRED key — use yfinance as fallback for the handful of mapped series
         return _fallback_fetch(series_id, cache_path)
 
 
@@ -99,7 +106,7 @@ def _fallback_fetch(series_id, cache_path):
             else:
                 s = data["Close"]
             s = s.dropna()
-            s.to_frame(series_id).to_csv(cache_path)
+            atomic_write_csv(cache_path, s.to_frame(series_id))
             return s
 
     return pd.Series(dtype=float)
@@ -108,18 +115,24 @@ def _fallback_fetch(series_id, cache_path):
 def get_yield_curve_signal():
     """Yield curve: 10Y-2Y spread.
     Inverted (<0) = strong recession signal = bearish.
-    Steep (>1.5) = early expansion = bullish."""
+    Steep (>1.5) = early expansion = bullish.
+
+    Returns signal=0 + value=None when either leg is missing — composite
+    score then excludes this indicator entirely (don't fabricate a 2Y
+    proxy; that was the old bug — a hardcoded 4.0 would silently mislead
+    when actual 2Y diverged from the 2021-era assumption).
+    """
     try:
         y10 = _fetch_fred_series("DGS10")
         y2 = _fetch_fred_series("DGS2")
         if y10.empty or y2.empty:
-            # Fallback: use yfinance for treasury yields
-            y10 = _fetch_fred_series("DGS10")
-            if y10.empty:
-                return {"signal": 0, "value": None, "label": "N/A"}
-            spread = y10.iloc[-1] - 4.0  # rough estimate
-        else:
-            spread = y10.iloc[-1] - y2.iloc[-1]
+            missing = "10Y" if y10.empty else "2Y"
+            return {
+                "signal": 0,
+                "value": None,
+                "label": f"Yield curve: {missing} unavailable",
+            }
+        spread = y10.iloc[-1] - y2.iloc[-1]
 
         if spread < -0.5:
             signal = -1.0
@@ -142,23 +155,24 @@ def get_yield_curve_signal():
 
 
 def get_credit_spread_signal():
-    """Credit spread: BAA-AAA.
+    """Credit spread: HY OAS (ICE BofA, BAMLH0A0HYM2, in bps).
     Widening = stress = bearish. Tightening = calm = bullish."""
     try:
-        baa = _fetch_fred_series("DBAA")
-        aaa = _fetch_fred_series("DAAA")
-        if baa.empty or aaa.empty:
-            return {"signal": 0, "value": None, "label": "Credit spreads: N/A"}
+        oas = _fetch_fred_series("BAMLH0A0HYM2")
+        if oas.empty:
+            return {"signal": 0, "value": None, "label": "HY OAS: N/A"}
 
-        spread = baa.iloc[-1] - aaa.iloc[-1]
-        # Historical median ~1.0%, stress >2%
-        if spread > 2.5:
+        spread = oas.iloc[-1]
+        # Bands: stress >600, crisis >800. Neutral midpoint is 450
+        # (close to the long-run median of ~400 bps; we leave a small
+        # buffer so a slightly above-median print doesn't tip negative).
+        if spread > 800:
             signal = -1.0
-        elif spread > 1.8:
+        elif spread > 600:
             signal = -0.5
-        elif spread > 1.2:
+        elif spread > 450:
             signal = 0.0
-        elif spread > 0.8:
+        elif spread > 350:
             signal = 0.5
         else:
             signal = 1.0
@@ -166,29 +180,43 @@ def get_credit_spread_signal():
         return {
             "signal": signal,
             "value": spread,
-            "label": f"BAA-AAA Spread: {spread:.2f}%",
+            "label": f"HY OAS: {spread:.0f} bps",
         }
     except Exception as e:
-        return {"signal": 0, "value": None, "label": f"Credit spreads: error ({e})"}
+        return {"signal": 0, "value": None, "label": f"HY OAS: error ({e})"}
 
 
 def get_unemployment_signal():
-    """Unemployment rate trend.
-    Rising = bearish. Falling = bullish."""
+    """Unemployment rate + Sahm Rule recession indicator.
+
+    Official Sahm Rule (Claudia Sahm 2019): the current 3-month moving
+    average of U-3 unemployment rises ≥ 0.5pp above its lowest 3-month MA
+    over the prior 12 months. The previous implementation here used a 6m
+    MA and single-month minimum, which neither matched the rule nor had
+    stable timing — fired earlier than official Sahm in some scenarios,
+    later in others. Naming it 'Sahm' in the watchdog notification was
+    misleading.
+    """
     try:
         unemp = _fetch_fred_series("UNRATE")
-        if unemp.empty or len(unemp) < 6:
+        if unemp.empty or len(unemp) < 14:
+            # Need 12 rolling-3m MAs → at least 14 monthly prints.
             return {"signal": 0, "value": None, "label": "Unemployment: N/A"}
 
         current = unemp.iloc[-1]
-        avg_6m = unemp.iloc[-6:].mean()
-        avg_12m = unemp.iloc[-12:].mean() if len(unemp) >= 12 else avg_6m
+        ma3 = unemp.rolling(3).mean().dropna()
+        if len(ma3) < 12:
+            return {"signal": 0, "value": None, "label": "Unemployment: insufficient history"}
 
-        # Sahm Rule inspired: if 3-month avg rises 0.5% above 12-month low
-        low_12m = unemp.iloc[-12:].min() if len(unemp) >= 12 else unemp.min()
-        sahm = avg_6m - low_12m
+        # Sahm = current 3m MA − minimum of the last 12 3m MAs.
+        # `.tail(12)` includes the current month's 3m MA in the comparison
+        # window, matching the official definition.
+        current_ma3 = ma3.iloc[-1]
+        low_ma3_12 = ma3.tail(12).min()
+        sahm = current_ma3 - low_ma3_12
 
-        if sahm > 0.5:
+        avg_12m = unemp.iloc[-12:].mean()
+        if sahm >= 0.5:
             signal = -1.0  # Sahm Rule triggered
         elif current > avg_12m + 0.3:
             signal = -0.5
@@ -232,11 +260,17 @@ def get_fed_funds_signal():
         else:
             signal = 0.0   # on hold
 
-        direction = "cutting" if change_3m < 0 else "hiking" if change_3m > 0 else "holding"
+        # Direction string uses the same 6m horizon as the signal — old
+        # version used change_3m which could disagree with the signal
+        # (e.g., 6m aggressive cuts but most recent 3m flat → label said
+        # "holding" while signal said bullish).
+        direction = ("cutting" if change_6m < 0
+                     else "hiking" if change_6m > 0
+                     else "holding")
         return {
             "signal": signal,
             "value": current,
-            "label": f"Fed Funds: {current:.2f}% ({direction}, Δ3m: {change_3m:+.2f})",
+            "label": f"Fed Funds: {current:.2f}% ({direction}, Δ6m: {change_6m:+.2f})",
         }
     except Exception as e:
         return {"signal": 0, "value": None, "label": f"Fed Funds: error ({e})"}
@@ -278,7 +312,13 @@ def get_market_breadth_signal():
             return {"signal": 0, "value": None, "label": "Breadth: N/A"}
 
         current = sp.iloc[-1]
-        sma200 = sp.iloc[-200:].mean()
+        # rolling(200).mean().iloc[-1] is the correct "200-day SMA at the
+        # latest point" — sp.iloc[-200:].mean() happened to coincide for
+        # a clean daily series but isn't equivalent under any missing-day
+        # interpolation FRED might do.
+        sma200 = sp.rolling(200).mean().iloc[-1]
+        if pd.isna(sma200):
+            return {"signal": 0, "value": None, "label": "Breadth: insufficient history"}
         pct_above = (current / sma200 - 1) * 100
 
         if pct_above > 10:
@@ -330,9 +370,17 @@ def macro_regime_score():
         "market_breadth": get_market_breadth_signal(),
     }
 
-    composite = 0
-    total_weight = 0
+    # Normalize over only the indicators that actually returned data.
+    # Failed indicators (result["value"] is None) used to contribute 0 to
+    # the numerator but still consumed weight in the denominator → score
+    # got pulled toward 0 whenever FRED was partially down, which the
+    # macro_risk_adjustment caller would misread as "regime turning neutral"
+    # and reduce equity exposure for no real reason.
+    composite = 0.0
+    total_weight = 0.0
     for name, result in indicators.items():
+        if result.get("value") is None:
+            continue
         w = INDICATOR_WEIGHTS.get(name, 0.1)
         composite += result["signal"] * w
         total_weight += w
@@ -369,14 +417,51 @@ def macro_composite_score() -> float:
 def macro_risk_adjustment(base_equity_pct: float) -> float:
     """Adjust equity allocation based on macro regime.
 
-    In expansion: hold full equity allocation.
-    In contraction: reduce to 50% of target.
+    Linear scaling: score 1.0 → 100% of target, score -1.0 → 40% of target.
+    Caps are defensive — score is already bounded [-1, +1] upstream.
     """
     result = macro_regime_score()
     score = result["score"]
-
-    # Linear scaling: score 1.0 → 100% of target, score -1.0 → 40% of target
-    adj = 0.7 + 0.3 * score  # ranges from 0.4 to 1.0
-    adj = max(0.4, min(1.0, adj))
-
+    adj = max(0.4, min(1.0, 0.7 + 0.3 * score))
     return base_equity_pct * adj
+
+
+# ── CLI: force-refresh all FRED cache ────────────────────────────
+
+_REFRESH_SERIES = (
+    "DGS10", "DGS2", "FEDFUNDS", "BAMLH0A0HYM2", "UNRATE",
+    "NFCI", "SP500",
+)
+
+
+def force_refresh_all() -> dict:
+    """Re-fetch every FRED series the composite consumes, bypassing the
+    12h cache. Use after a Fed announcement / data print to make sure the
+    next macro_regime_score reads fresh values rather than stale cache."""
+    results: dict = {}
+    for series_id in _REFRESH_SERIES:
+        try:
+            s = _fetch_fred_series(series_id, force=True)
+            results[series_id] = "OK" if not s.empty else "empty"
+        except Exception as e:
+            results[series_id] = f"error: {e}"
+    return results
+
+
+def main():
+    import sys
+    if "--refresh" in sys.argv[1:]:
+        print("Forcing FRED cache refresh...")
+        for sid, status in force_refresh_all().items():
+            print(f"  {sid:18s} {status}")
+        return
+    # Default: print current regime
+    result = macro_regime_score()
+    print(f"Macro regime: {result['regime'].upper()} "
+          f"(score: {result['score']:+.3f})")
+    for name, ind in result["indicators"].items():
+        print(f"  {name:18s} {ind['signal']:+.1f}  {ind['label']}")
+
+
+if __name__ == "__main__":
+    main()

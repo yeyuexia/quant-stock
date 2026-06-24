@@ -42,8 +42,21 @@ def main() -> int:
         if env_name in os.environ:
             setattr(applier, attr_name, os.environ[env_name])
 
-    with open(args.proposals_file) as f:
-        review_data = json.load(f)
+    if not os.path.exists(args.proposals_file):
+        print(f"ERROR: proposals file not found: {args.proposals_file}",
+              file=sys.stderr)
+        return 2
+    try:
+        with open(args.proposals_file) as f:
+            review_data = json.load(f)
+    except json.JSONDecodeError as e:
+        print(f"ERROR: {args.proposals_file} is not valid JSON: {e}",
+              file=sys.stderr)
+        return 2
+    if not isinstance(review_data, dict):
+        print(f"ERROR: {args.proposals_file} root must be a JSON object",
+              file=sys.stderr)
+        return 2
 
     from quant.schema import ProposedChange
     raw_changes = review_data.get("proposed_changes", [])
