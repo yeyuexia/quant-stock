@@ -142,7 +142,11 @@ def _as_legacy_positions(snap: orders.PortfolioSnapshot) -> list[dict]:
             "ticker": p["symbol"],
             "shares": p["shares"],
             "entry_price": p["avg_entry"],
-            "entry_date": "",
+            # Anchor the trailing-stop peak to when we started managing the
+            # position (stamped by sync_state) rather than its full price
+            # history — prevents an adopted position from being liquidated
+            # against a pre-adoption high on the first enforced tick.
+            "entry_date": p.get("entry_date", ""),
             # unknown tranche (externally-bought) falls back to core stop-loss rules
             "tranche": "core" if p.get("tranche") == "unknown" else p.get("tranche", "core"),
         }
@@ -291,6 +295,10 @@ def check_price_moves(portfolio, broker=None):
                 orders._append_daily_log(
                     f"{dt.datetime.now(dt.timezone.utc).isoformat()},CLOSED,"
                     f"{t},{tranche},stop-enforced")
+                # We just flattened the whole position with a market sell. Drop
+                # any SEPA exit queued for it this tick so the executor doesn't
+                # later submit a second (now over-)sell for the same shares.
+                _cancel_pending_partials(t)
                 alerts.append((Alert.CRITICAL, t,
                     f"STOP ENFORCED{tranche_label}: sold {pos['shares']} sh "
                     f"at ${current:.2f}."))

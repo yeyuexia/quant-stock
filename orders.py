@@ -282,6 +282,13 @@ def sync_state(broker, *, alerts: Optional[list] = None) -> PortfolioSnapshot:
                     else:
                         break
 
+        # First-sight (or backfill) anchor date. The watchdog's trailing-stop
+        # peak is measured from this date forward — without it, an adopted
+        # legacy position would be measured against its full-history high and
+        # could be liquidated on the first enforced tick despite being healthy
+        # since we started managing it. Preserved across syncs once set.
+        entry_date = (meta or {}).get("entry_date") or dt.date.today().isoformat()
+
         positions.append({
             "symbol": p.symbol,
             "shares": p.qty,
@@ -290,6 +297,7 @@ def sync_state(broker, *, alerts: Optional[list] = None) -> PortfolioSnapshot:
             "unrealized_pl": p.unrealized_pl,
             "tranche": tranche,
             "entry_reason": entry_reason,
+            "entry_date": entry_date,
             "stop_order_id": stop_id,
             "trail_order_id": trail_id,
             "initial_entry_price": initial_entry_price,

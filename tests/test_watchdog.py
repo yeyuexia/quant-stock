@@ -799,3 +799,62 @@ def test_check_price_moves_alert_only_when_enforce_disabled(tmp_path, monkeypatc
 
     assert [o for o in fb._submitted if o.side == "sell"] == []
     assert any("STOP-LOSS TRIGGERED" in a[2] for a in alerts)  # legacy alert intact
+
+
+# ── I1: entry_date threaded into legacy positions for peak clamping ──
+
+def test_as_legacy_positions_passes_entry_date_through():
+    import watchdog, orders
+    snap = orders.PortfolioSnapshot(
+        synced_at="2026-06-24T00:00:00+00:00", alpaca_env="paper",
+        cash=0.0, equity=1000.0,
+        positions=[{"symbol": "AAPL", "shares": 5, "avg_entry": 100.0,
+                    "market_value": 500.0, "unrealized_pl": 0.0,
+                    "tranche": "core", "entry_reason": "adopted",
+                    "entry_date": "2026-06-20"}],
+        tranches={},
+    )
+    legacy = watchdog._as_legacy_positions(snap)
+    assert legacy[0]["entry_date"] == "2026-06-20"
+
+
+# ── I2: stop-enforce prunes the queued SEPA sell to avoid double-sell ──
+
+def test_stop_enforce_cancels_pending_sepa_intent(tmp_path, monkeypatch):
+    import watchdog, datetime as dt
+    import pandas as pd
+    from tests.fakes import FakeBroker
+    from pending_plan import PendingPlan, IntentState, Baseline, write_plan, load_plan
+    from orders import OrderIntent
+
+    monkeypatch.setattr("config.ENFORCE_STOPS", True)
+    monkeypatch.setattr("config.HALT_PATH", str(tmp_path / "HALT"))
+    monkeypatch.setattr("pending_plan.PENDING_PLAN_PATH", str(tmp_path / "plan.json"))
+    monkeypatch.setattr("config.PENDING_PLAN_PATH", str(tmp_path / "plan.json"))
+
+    write_plan(PendingPlan(
+        plan_id="p-1", tranche="core",
+        created_at=dt.datetime(2026, 6, 24, 14, 0, 0, tzinfo=dt.timezone.utc),
+        baseline=Baseline(spy=450, vix=14, macro_score=0.0,
+                          news_cursor_at=dt.datetime(2026, 6, 24, 14, 0, 0,
+                                                     tzinfo=dt.timezone.utc)),
+        intents=[IntentState(intent=OrderIntent(
+            symbol="AAPL", notional=1000.0, side="sell",
+            reason="sepa-2R", tranche="core", client_order_id="c1"))],
+    ))
+
+    idx = pd.date_range(end=dt.date.today(), periods=5, freq="B")
+    df = pd.DataFrame({"AAPL": [100.0, 100.0, 100.0, 100.0, 80.0]}, index=idx)
+    monkeypatch.setattr("data.fetch_prices", lambda tickers, period="6mo": df)
+
+    portfolio = {"positions": [{
+        "ticker": "AAPL", "shares": 3.5, "entry_price": 100.0,
+        "entry_date": "", "tranche": "core"}], "cash": 0.0}
+    fb = FakeBroker(); fb.set_latest_price("AAPL", 80.0)
+
+    watchdog.check_price_moves(portfolio, broker=fb)
+
+    assert [o for o in fb._submitted if o.side == "sell"]   # a stop sell happened
+    plan = load_plan()
+    syms_reasons = [(s.intent.symbol, s.intent.reason) for s in plan.intents]
+    assert ("AAPL", "sepa-2R") not in syms_reasons          # SEPA sell pruned
