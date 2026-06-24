@@ -27,9 +27,11 @@ class TargetBuilder(Protocol):
 
     Implementations may be pure rule-based (current behavior) or LLM-backed.
     `broker` is passed so implementations can read the live portfolio snapshot
-    if they need to (e.g., to avoid proposing symbols already held)."""
+    if they need to (e.g., to avoid proposing symbols already held).
+    `tranche_capital` is the dollar budget the caller wants this tranche to
+    target — derived from live Alpaca equity so the system compounds."""
 
-    def build(self, *, tranche: str, broker) -> TargetBuilderOutput: ...
+    def build(self, *, tranche: str, broker, tranche_capital: float) -> TargetBuilderOutput: ...
 
 
 @dataclass(frozen=True)

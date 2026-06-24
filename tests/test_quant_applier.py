@@ -1,4 +1,10 @@
 from quant.schema import ProposedChange
+from quant import applier
+import datetime as dt
+import json
+import os
+import pytest
+import sys
 
 
 def _change(**kwargs):
@@ -181,3 +187,108 @@ def test_classify_keywords_swap_is_high():
     proposed = ["tariff", "fomc"]  # removed fed, added fomc
     c = _change(key="NEWS_SHOCK_KEYWORDS", current_value=current, proposed_value=proposed)
     assert classify_change(c) == "high"
+
+
+# ======================================================================
+# Post-review additions (formerly test_quant_applier_optimizations.py)
+# ======================================================================
+
+"""Regression tests for quant/applier.py hardening (locks + 24h expiry + bool reject)."""
+import datetime as dt
+import json
+import os
+import sys
+import pytest
+
+sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
+
+from quant import applier
+from quant.schema import ProposedChange
+
+
+def _change_opt(key="STOP_LOSS_PCT", proposed=0.10, current=0.08):
+    return ProposedChange(
+        key=key, current_value=current, proposed_value=proposed,
+        rationale="r", detailed_plan="p", expected_effect="e",
+        risk_tier="low", confidence=0.8,
+    )
+
+
+# ── bool reject ───────────────────────────────────────────────────
+
+def test_classify_rejects_bool_proposed_for_numeric_key():
+    """bool is int subclass — must reject so True doesn't become STOP_LOSS_PCT=1."""
+    c = _change_opt(proposed=True)
+    assert applier.classify_change(c) == "rejected_out_of_bounds"
+
+
+# ── locked writes ─────────────────────────────────────────────────
+
+def test_merge_overrides_creates_lock_sidecar(tmp_path, monkeypatch):
+    monkeypatch.setattr(applier, "OVERRIDES_PATH", str(tmp_path / "ov.json"))
+    applier._merge_overrides([_change_opt()])
+    assert (tmp_path / "ov.json").exists()
+    assert (tmp_path / "ov.json.lock").exists()
+
+
+def test_append_proposals_creates_lock_sidecar(tmp_path, monkeypatch):
+    monkeypatch.setattr(applier, "PROPOSALS_PATH", str(tmp_path / "pr.json"))
+    # Force high-risk classification by using a key not in low-risk numeric/list
+    applier._append_proposals([_change_opt(key="MOMENTUM_TOP_N", proposed=5, current=4)])
+    assert (tmp_path / "pr.json").exists()
+    assert (tmp_path / "pr.json.lock").exists()
+
+
+# ── 24h expiry, not HKT-local ─────────────────────────────────────
+
+def test_proposal_expiry_is_24h_in_utc(tmp_path, monkeypatch):
+    monkeypatch.setattr(applier, "PROPOSALS_PATH", str(tmp_path / "pr.json"))
+    applier._append_proposals([_change_opt(key="MOMENTUM_TOP_N", proposed=5, current=4)])
+    with open(tmp_path / "pr.json") as f:
+        data = json.load(f)
+    assert len(data) == 1
+    created = dt.datetime.fromisoformat(data[0]["created_at"])
+    expires = dt.datetime.fromisoformat(data[0]["expires_at"])
+    delta = expires - created
+    # Allow 1s slack for test scheduling jitter
+    assert dt.timedelta(hours=23, minutes=59) < delta < dt.timedelta(hours=24, minutes=1)
+
+
+# ── append-only audit log uses atomic_append_text ─────────────────
+
+def test_audit_log_appends_jsonl(tmp_path, monkeypatch):
+    from quant.schema import ApplierResult
+    monkeypatch.setattr(applier, "AUDIT_LOG_PATH", str(tmp_path / "audit.log"))
+    r = ApplierResult()
+    r.applied_low.append(_change_opt())
+    applier._append_audit_log(r, None, dry_run=False)
+    applier._append_audit_log(r, None, dry_run=True)
+    lines = (tmp_path / "audit.log").read_text().strip().splitlines()
+    assert len(lines) == 2
+    # Each line is independently valid JSON
+    for line in lines:
+        json.loads(line)
+
+
+# ── existing happy-path classification still works ────────────────
+
+def test_classify_low_risk_numeric_within_band():
+    c = _change_opt(proposed=0.085, current=0.08)  # ~6% change, within 20% band
+    assert applier.classify_change(c) == "low"
+
+
+def test_classify_low_risk_numeric_outside_band_bumps_to_high():
+    c = _change_opt(proposed=0.12, current=0.08)  # 50% change, outside 20% band
+    assert applier.classify_change(c) == "high"
+
+
+def test_classify_low_risk_list_removal_bumps_to_high():
+    c = _change_opt(key="WATCHLIST",
+                current=["AAPL", "NVDA", "MSFT"],
+                proposed=["AAPL", "NVDA"])  # MSFT removed
+    assert applier.classify_change(c) == "high"
+
+
+def test_classify_unknown_key_is_forbidden():
+    c = _change_opt(key="ALPACA_API_KEY", proposed="evil_key", current="real_key")
+    assert applier.classify_change(c) == "forbidden"

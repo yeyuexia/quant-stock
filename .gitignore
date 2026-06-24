@@ -6,3 +6,7 @@ __pycache__/
 .pytest_cache/
 pending_orders.json
 portfolio.json
+watchlist_auto.json
+
+# Transient fcntl lock sidecars (runtime artifacts)
+*.lock

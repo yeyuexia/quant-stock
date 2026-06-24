@@ -21,3 +21,8 @@
 # writes strategy overrides + Telegram notification to .cache/.
 # Runs Mon-Fri in ET; stays on same calendar day since close + 3h is still evening.
 0 19 * * 1-5 /Users/zl/works/stock/scripts/cron-wrapper.sh scripts/quant_review_local.py >> /Users/zl/works/stock/.cache/quant.log 2>&1
+
+# Discovery — weekly watchlist refresh, Sundays 8 AM ET (before Mon rebalance).
+# Scans the multi-index universe (S&P 500 + Nasdaq-100 + S&P 400) two-stage and
+# appends the top names to watchlist_auto.json. config.py seed is never rewritten.
+0 8 * * 0 /Users/zl/works/stock/scripts/cron-wrapper.sh discovery.py --update >> /Users/zl/works/stock/.cache/discovery.log 2>&1

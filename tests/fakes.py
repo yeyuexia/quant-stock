@@ -22,6 +22,12 @@ class FakeBroker:
     market_open: bool = True
     latest_prices: dict[str, float] = field(default_factory=dict)
     latest_quotes: dict[str, tuple[float, float]] = field(default_factory=dict)
+    # Default is None (strict): unseeded symbols raise. Tests that don't
+    # care about the specific price can opt into a default with
+    # FakeBroker(default_price=100.0). Strict-by-default catches the case
+    # where a test passes only because the FakeBroker silently invented a
+    # price for a symbol the production code shouldn't have queried.
+    default_price: Optional[float] = None
 
     _positions: dict[str, Position] = field(default_factory=dict)
     _open_orders: list[Order] = field(default_factory=list)
@@ -68,11 +74,17 @@ class FakeBroker:
     def is_market_open(self) -> bool:
         return self.market_open
 
-    def _latest_price(self, symbol: str) -> float:
+    def latest_price(self, symbol: str) -> float:
         p = self.latest_prices.get(symbol)
-        if p is None:
+        if p is not None:
+            return p
+        if self.default_price is None:
             raise BrokerError(f"FakeBroker: no latest price seeded for {symbol}")
-        return p
+        return self.default_price
+
+    # Back-compat alias matching the real Broker — old test callers used
+    # the underscored form when it was "private".
+    _latest_price = latest_price
 
     def latest_quote(self, symbol: str) -> tuple[float, float]:
         if symbol in self.latest_quotes:
@@ -91,7 +103,8 @@ class FakeBroker:
         return self._submit(symbol, notional=notional, qty=qty, side=side,
                              cid=client_order_id, type_="limit")
 
-    def submit_bracket(self, symbol, *, notional, stop_loss_pct, trailing_stop_pct, client_order_id):
+    def submit_bracket(self, symbol, *, notional, stop_price, client_order_id,
+                       take_profit_price=None):
         return self._submit(symbol, notional=notional, qty=None, side="buy",
                              cid=client_order_id, type_="bracket")
 
@@ -99,7 +112,10 @@ class FakeBroker:
         return self._submit(symbol, notional=None, qty=qty, side="sell",
                              cid=client_order_id, type_="trailing_stop")
 
-    def get_filled_notional(self, client_order_id: str) -> float:
+    def get_filled_notional(self, client_order_id: str) -> Optional[float]:
+        # FakeBroker assumes lookups always succeed → returns 0.0 (not None).
+        # Tests that want to simulate the broker-query-failed case can
+        # override via monkeypatch.
         return self._fills.get(client_order_id, 0.0)
 
     def cancel_order(self, order_id: str) -> None:

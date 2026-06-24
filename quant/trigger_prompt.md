@@ -46,7 +46,13 @@ Run these commands in order using your Bash tool:
 - **Low-risk allowlist** (auto-applies if within bounds):
   - `WATCHLIST` — additions only, ≤100 total
   - `NEWS_SHOCK_KEYWORDS` — additions only, ≤30 total
-  - `STOP_LOSS_PCT` — within ±20% of current AND in [0.04, 0.20]
+  - `STOP_LOSS_PCT` — within ±20% of current AND in [0.04, 0.20]. Note: this
+    is now an **upper bound** on the per-symbol initial stop; the effective
+    stop is `min(STOP_LOSS_PCT, ATR_STOP_MULTIPLIER × ATR(14) / last_close)`
+    for core entries.
+  - `ATR_STOP_MULTIPLIER` — within ±25% of current AND in [1.0, 4.0]. Scales
+    the ATR contribution to the core-tranche initial stop. Lower = tighter
+    stops on volatile names; higher = more breathing room.
   - `TRAILING_STOP_PCT` — within ±20% AND in [0.06, 0.25]
   - `CASH_BUFFER_PCT` — within ±50% AND in [0.02, 0.20]
 
@@ -54,7 +60,8 @@ Run these commands in order using your Bash tool:
   - `WATCHLIST` removals; `NEWS_SHOCK_KEYWORDS` removals
   - `MOMENTUM_TOP_N`
   - `ETF_ALLOCATION_PCT`; `STOCK_ALLOCATION_PCT`
-  - `SCREEN_MIN_ROE`; `SCREEN_MAX_PE`; `SCREEN_MAX_DEBT_EQUITY`
+  - `SCREEN_RS_MIN`; `SCREEN_ADR_MIN`; `SCREEN_EMA_FAST`; `SCREEN_EMA_SLOW`
+  - `SCREEN_BASE_WEEKS_MIN`; `SCREEN_BASE_WEEKS_MAX`; `SCREEN_BASE_DEPTH_MAX`; `SCREEN_TIGHTNESS_PCT_MAX`
   - `MOMENTUM_LOOKBACK_MONTHS`
   - `SAFE_HAVEN`
   - Out-of-bound changes to the low-risk numeric keys

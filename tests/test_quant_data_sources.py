@@ -377,12 +377,19 @@ def test_fetch_all_externals_survives_hung_fetcher():
     """If one fetcher hangs past the timeout, the orchestrator must still
     return 5 signals — not raise concurrent.futures.TimeoutError (regression
     from live smoke test 2026-04-19)."""
-    import time
+    import threading
     from quant import data_sources
     from quant.schema import ExternalSignal
 
+    # Block on an Event rather than time.sleep — the orchestrator's 1 s
+    # timeout is what should unblock the worker. We set the event in a
+    # finally block so the ThreadPoolExecutor's non-daemon worker exits
+    # before pytest tries to shut down (was: time.sleep(10), which made
+    # this single test the longest in the suite).
+    _release = threading.Event()
+
     def slow():
-        time.sleep(10)   # much longer than our 1s budget below
+        _release.wait(timeout=5)   # safety cap, should never hit
         return ExternalSignal(source="slow", as_of=dt.datetime.now(dt.timezone.utc), data=[])
 
     def fast(name):
@@ -390,19 +397,22 @@ def test_fetch_all_externals_survives_hung_fetcher():
             source=name, as_of=dt.datetime.now(dt.timezone.utc), data=[]
         )
 
-    with patch.object(data_sources, "fetch_13f_filings", slow), \
-         patch.object(data_sources, "fetch_reddit_trending", fast("reddit")), \
-         patch.object(data_sources, "fetch_popular_etf_holdings", fast("etf-holdings")), \
-         patch.object(data_sources, "fetch_ark_trades", fast("ark")), \
-         patch.object(data_sources, "fetch_congress_trades", fast("congress")):
-        signals = data_sources.fetch_all_externals(timeout_per_source=1)
+    try:
+        with patch.object(data_sources, "fetch_13f_filings", slow), \
+             patch.object(data_sources, "fetch_reddit_trending", fast("reddit")), \
+             patch.object(data_sources, "fetch_popular_etf_holdings", fast("etf-holdings")), \
+             patch.object(data_sources, "fetch_ark_trades", fast("ark")), \
+             patch.object(data_sources, "fetch_congress_trades", fast("congress")):
+            signals = data_sources.fetch_all_externals(timeout_per_source=1)
 
-    assert len(signals) == 5
-    by_source = {s.source: s for s in signals}
-    # The hung fetcher's slot is present with error="timed out"
-    assert "13F" in by_source
-    assert by_source["13F"].error is not None
-    assert "timed out" in by_source["13F"].error.lower() or "timeout" in by_source["13F"].error.lower()
+        assert len(signals) == 5
+        by_source = {s.source: s for s in signals}
+        # The hung fetcher's slot is present with error="timed out"
+        assert "13F" in by_source
+        assert by_source["13F"].error is not None
+        assert "timed out" in by_source["13F"].error.lower() or "timeout" in by_source["13F"].error.lower()
+    finally:
+        _release.set()
     # Fast fetchers returned cleanly
     for src in ("reddit", "etf-holdings", "ark", "congress"):
         assert by_source[src].error is None

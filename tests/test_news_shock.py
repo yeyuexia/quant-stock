@@ -3,6 +3,11 @@ import datetime as dt
 from news_shock import (
     match_headlines, NewsHit, dedupe_by_title_hash, log_hit,
 )
+import logging
+import news_shock
+import os
+import pytest
+import sys
 
 
 def _hl(title, source="test", ts=None):
@@ -63,3 +68,84 @@ def test_log_hit_appends_to_csv(tmp_path, monkeypatch):
     assert "reuters" in content
     assert "fed" in content
     assert "True" in content
+
+
+# ======================================================================
+# Post-review additions (formerly test_news_shock_optimizations.py)
+# ======================================================================
+
+"""Regression tests for news_shock.py hardening — log_hit lock + fetch logging."""
+import datetime as dt
+import logging
+import os
+import sys
+import pytest
+
+sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
+
+import news_shock
+
+
+def test_log_hit_creates_lock_sidecar(tmp_path, monkeypatch):
+    log_path = tmp_path / "news.csv"
+    monkeypatch.setattr(news_shock, "NEWS_SHOCK_LOG", str(log_path))
+
+    hit = news_shock.NewsHit(
+        title="Fed surprise rate cut", source="yahoo",
+        ts=dt.datetime(2026, 5, 24, 14, tzinfo=dt.timezone.utc),
+        matched="rate cut",
+    )
+    news_shock.log_hit(hit, corroborated=True)
+    assert log_path.exists()
+    assert (tmp_path / "news.csv.lock").exists()
+    content = log_path.read_text()
+    assert "Fed surprise rate cut" in content
+    assert "True" in content
+
+
+def test_log_hit_writes_header_once(tmp_path, monkeypatch):
+    log_path = tmp_path / "news.csv"
+    monkeypatch.setattr(news_shock, "NEWS_SHOCK_LOG", str(log_path))
+
+    hit1 = news_shock.NewsHit(
+        title="One", source="yahoo",
+        ts=dt.datetime(2026, 5, 24, 14, tzinfo=dt.timezone.utc),
+        matched="one",
+    )
+    hit2 = news_shock.NewsHit(
+        title="Two", source="yahoo",
+        ts=dt.datetime(2026, 5, 24, 15, tzinfo=dt.timezone.utc),
+        matched="two",
+    )
+    news_shock.log_hit(hit1, corroborated=False)
+    news_shock.log_hit(hit2, corroborated=True)
+
+    lines = log_path.read_text().splitlines()
+    # 1 header + 2 rows
+    assert len(lines) == 3
+    assert lines[0].startswith("ts,source,matched,corroborated,title")
+
+
+def test_yahoo_fetch_failure_logs_warning(monkeypatch, caplog):
+    def boom(*a, **kw):
+        raise RuntimeError("yfinance API broken")
+    monkeypatch.setattr("yfinance.Ticker", boom)
+    with caplog.at_level(logging.WARNING, logger="news_shock"):
+        out = news_shock._fetch_yahoo_headlines(
+            dt.datetime(2026, 5, 24, tzinfo=dt.timezone.utc)
+        )
+    assert out == []
+    assert any("yahoo headlines fetch failed" in r.message for r in caplog.records)
+
+
+def test_reddit_fetch_failure_logs_warning(monkeypatch, caplog):
+    import urllib.request
+    def boom(*a, **kw):
+        raise RuntimeError("reddit 503")
+    monkeypatch.setattr(urllib.request, "urlopen", boom)
+    with caplog.at_level(logging.WARNING, logger="news_shock"):
+        out = news_shock._fetch_reddit_headlines(
+            dt.datetime(2026, 5, 24, tzinfo=dt.timezone.utc)
+        )
+    assert out == []
+    assert any("reddit headlines fetch failed" in r.message for r in caplog.records)
