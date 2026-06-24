@@ -152,6 +152,23 @@ def test_sync_state_flags_missing_bracket(tmp_path, monkeypatch):
     assert any("bracket" in a.lower() and "SPY" in a for a in alerts)
 
 
+def test_sync_state_alerts_when_untagged_starves_rebalancer(tmp_path, monkeypatch):
+    from orders import sync_state
+    monkeypatch.setattr("config.ADOPT_EXTERNAL_POSITIONS", False)  # keep them unknown
+    monkeypatch.setattr("config.UNKNOWN_MV_HALT_PCT", 0.20)
+
+    _portfolio_cache(tmp_path, monkeypatch, None)
+
+    fb = FakeBroker()
+    fb.equity = 100_000.0
+    fb.seed_position("NVDA", qty=100, avg_entry=500, mv=90_000)  # 90% of equity, untagged
+
+    alerts: list = []
+    sync_state(fb, alerts=alerts)
+
+    assert any("capital starved" in a.lower() for a in alerts)
+
+
 # ── reconcile_to_targets ────────────────────────────────────────
 
 def _snap(positions, cash=10_000, equity=100_000):

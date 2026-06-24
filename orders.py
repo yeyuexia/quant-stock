@@ -299,6 +299,23 @@ def sync_state(broker, *, alerts: Optional[list] = None) -> PortfolioSnapshot:
             "climax_fired": climax_fired,
         })
 
+    # ── Starvation guardrail ────────────────────────────────────
+    # Untagged ('unknown') positions are excluded from the rebalancer's
+    # addressable capital (rebalancer._system_equity). If they dominate the
+    # book, the rebalancer silently sizes itself to near-zero capital and stops
+    # trading — exactly the failure this guards against.
+    unknown_mv = sum(
+        float(p.get("market_value", 0) or 0)
+        for p in positions if p.get("tranche") == "unknown"
+    )
+    if acc.equity and unknown_mv / float(acc.equity) > config.UNKNOWN_MV_HALT_PCT:
+        pct = 100.0 * unknown_mv / float(acc.equity)
+        alerts.append(
+            f"CRITICAL: untagged positions are {pct:.0f}% of equity — "
+            f"rebalancer capital starved. Tag them or set "
+            f"config.ADOPT_EXTERNAL_POSITIONS = True."
+        )
+
     # Emit "closed" events for cached positions that vanished
     for sym, meta in old_meta.items():
         if sym not in live_symbols:
