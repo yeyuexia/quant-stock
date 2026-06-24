@@ -208,10 +208,16 @@ def sync_state(broker, *, alerts: Optional[list] = None) -> PortfolioSnapshot:
     for p in live:
         meta = old_meta.get(p.symbol)
         if meta is None:
-            alerts.append(f"Unknown position on Alpaca: {p.symbol} ({p.qty} sh). "
-                          f"Tag with orders.tag_position('{p.symbol}', 'core'|'aggressive').")
-            tranche = "unknown"
-            entry_reason = "external"
+            if config.ADOPT_EXTERNAL_POSITIONS:
+                tranche = "aggressive" if p.symbol in config.ETF_LEVERAGED else "core"
+                entry_reason = "adopted"
+                alerts.append(f"Adopted external position {p.symbol} ({p.qty} sh) "
+                              f"into {tranche} sleeve.")
+            else:
+                alerts.append(f"Unknown position on Alpaca: {p.symbol} ({p.qty} sh). "
+                              f"Tag with orders.tag_position('{p.symbol}', 'core'|'aggressive').")
+                tranche = "unknown"
+                entry_reason = "external"
         else:
             tranche = meta.get("tranche", "unknown")
             entry_reason = meta.get("entry_reason", "unknown")

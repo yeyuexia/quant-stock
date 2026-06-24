@@ -71,6 +71,7 @@ def test_sync_state_carries_forward_known_tranche(tmp_path, monkeypatch):
 
 def test_sync_state_marks_unknown_tranche(tmp_path, monkeypatch):
     from orders import sync_state
+    monkeypatch.setattr("config.ADOPT_EXTERNAL_POSITIONS", False)
 
     _portfolio_cache(tmp_path, monkeypatch, None)  # no cache
 
@@ -82,6 +83,37 @@ def test_sync_state_marks_unknown_tranche(tmp_path, monkeypatch):
 
     assert snap.positions[0]["tranche"] == "unknown"
     assert any("unknown" in a.lower() and "NVDA" in a for a in alerts)
+
+
+def test_sync_state_adopts_external_position_into_core(tmp_path, monkeypatch):
+    from orders import sync_state
+    monkeypatch.setattr("config.ADOPT_EXTERNAL_POSITIONS", True)
+
+    _portfolio_cache(tmp_path, monkeypatch, None)  # no cache → external
+
+    fb = FakeBroker()
+    fb.seed_position("AAPL", qty=5, avg_entry=100, mv=520)
+
+    alerts: list = []
+    snap = sync_state(fb, alerts=alerts)
+
+    assert snap.positions[0]["tranche"] == "core"
+    assert snap.positions[0]["entry_reason"] == "adopted"
+    assert any("adopted" in a.lower() and "AAPL" in a for a in alerts)
+
+
+def test_sync_state_adopts_leveraged_etf_into_aggressive(tmp_path, monkeypatch):
+    from orders import sync_state
+    monkeypatch.setattr("config.ADOPT_EXTERNAL_POSITIONS", True)
+
+    _portfolio_cache(tmp_path, monkeypatch, None)
+
+    fb = FakeBroker()
+    fb.seed_position("SOXL", qty=5, avg_entry=100, mv=520)  # in config.ETF_LEVERAGED
+
+    snap = sync_state(fb, alerts=[])
+    assert snap.positions[0]["tranche"] == "aggressive"
+    assert snap.positions[0]["entry_reason"] == "adopted"
 
 
 def test_sync_state_drops_closed_positions(tmp_path, monkeypatch):
