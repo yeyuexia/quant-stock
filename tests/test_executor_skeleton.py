@@ -52,6 +52,12 @@ def test_executor_respects_market_closed(tmp_path, monkeypatch):
     monkeypatch.setattr(orders, "HALT_PATH", str(tmp_path / "no_halt"))
     monkeypatch.setattr(executor, "HALT_PATH", str(tmp_path / "no_halt"))
     monkeypatch.setattr("pending_plan.PENDING_PLAN_PATH", str(tmp_path / "p.json"))
+    # run_tick gates on the LOCAL clock via _is_rth_now() (not the broker), so
+    # pin _now_et to a Saturday — otherwise this test only passes when the wall
+    # clock happens to be outside RTH and fails (hitting the live data fetch)
+    # when run during market hours.
+    monkeypatch.setattr(executor, "_now_et",
+                        lambda: dt.datetime(2026, 4, 18, 11, 0))  # Sat
     write_plan(_plan())
     b = FakeBroker(market_open=False)
     result = executor.run_tick(broker=b)

@@ -5,6 +5,8 @@ import pandas as pd
 import pytest
 
 from indicators import atr
+import os
+import sys
 
 
 def _series(values):
@@ -77,3 +79,53 @@ def test_atr_wilder_step_matches_recurrence():
     expected = (1.0 * 13 + 2.0) / 14
     assert result is not None
     assert math.isclose(result, expected, rel_tol=1e-9)
+
+
+# ======================================================================
+# Post-review additions (formerly test_indicators_optimizations.py)
+# ======================================================================
+
+"""Regression tests for indicators.py defensive validation."""
+import os
+import sys
+import pandas as pd
+import pytest
+
+sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
+
+from indicators import atr
+
+
+def test_atr_returns_none_on_invalid_period():
+    s = pd.Series([100, 101, 102, 103, 104])
+    assert atr(s, s, s, period=0) is None
+    assert atr(s, s, s, period=-1) is None
+
+
+def test_atr_returns_none_on_short_history():
+    s = pd.Series([100, 101, 102])
+    assert atr(s, s, s, period=14) is None
+
+
+def test_atr_returns_none_on_bad_high_low():
+    """If high < low (data error), refuse to compute — wrong ATR would
+    propagate into wrong ATR-scaled stop placement."""
+    high = pd.Series([100, 101, 90, 103])    # bar 3: high < low
+    low  = pd.Series([99,  100, 95, 102])
+    close = pd.Series([100, 101, 92, 103])
+    # Pad to ensure length passes
+    high = pd.concat([high, pd.Series([105] * 20)], ignore_index=True)
+    low  = pd.concat([low,  pd.Series([104] * 20)], ignore_index=True)
+    close = pd.concat([close, pd.Series([104.5] * 20)], ignore_index=True)
+    assert atr(high, low, close, period=14) is None
+
+
+def test_atr_basic_synthetic():
+    """Constant 1-point range → ATR should converge to 1."""
+    n = 100
+    high = pd.Series([101.0] * n)
+    low = pd.Series([100.0] * n)
+    close = pd.Series([100.5] * n)
+    val = atr(high, low, close, period=14)
+    assert val is not None
+    assert abs(val - 1.0) < 0.01
