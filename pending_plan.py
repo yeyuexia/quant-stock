@@ -3,18 +3,31 @@
 A PendingPlan represents one tranche's rebalance for one day. The executor
 reads it on each tick, submits slices, updates per-intent state, and writes
 it back. Plans are discarded at end-of-day or on next rebalancer run.
+
+All disk writes go through fileio.atomic_write_json (fcntl lock + tmp+rename)
+so the executor's read-modify-write cycle never collides with a concurrent
+rebalancer.run() that's appending more intents.
 """
 from __future__ import annotations
+import dataclasses as _dc
 import datetime as dt
 import json
+import logging
 import os
 from dataclasses import dataclass, field, asdict
 from typing import Optional
 
 import config
+from fileio import atomic_write_json
 from orders import OrderIntent
 
+_log = logging.getLogger(__name__)
+
 PENDING_PLAN_PATH = config.PENDING_PLAN_PATH
+
+# OrderIntent fields that the JSON might persist — used to filter unknown
+# fields if a plan was written by an older schema version.
+_ORDER_INTENT_FIELDS = {f.name for f in _dc.fields(OrderIntent)}
 
 
 @dataclass
@@ -44,25 +57,51 @@ class PendingPlan:
     baseline: Baseline
     intents: list[IntentState]
     breakers_tripped: list[str] = field(default_factory=list)
+    # Cross-tick news-hit dedupe state: {title_hash -> ISO timestamp of last
+    # observation}. Pruned each tick to the news dedupe window so it doesn't
+    # grow unbounded over the trading day.
+    news_hits_seen: dict = field(default_factory=dict)
 
 
 def write_plan(plan: PendingPlan) -> None:
-    os.makedirs(os.path.dirname(PENDING_PLAN_PATH), exist_ok=True)
-    with open(PENDING_PLAN_PATH, "w") as f:
-        json.dump(_plan_to_dict(plan), f, indent=2, default=str)
+    """Atomic, lock-protected write of the pending plan."""
+    atomic_write_json(PENDING_PLAN_PATH, _plan_to_dict(plan))
 
 
 def load_plan() -> Optional[PendingPlan]:
+    """Read pending plan; returns None if missing or corrupt.
+
+    Corrupt files used to crash the executor — now we log a warning and
+    return None, letting the executor treat it like "no plan today" and
+    the next rebalancer run will rebuild a clean plan.
+    """
     if not os.path.exists(PENDING_PLAN_PATH):
         return None
-    with open(PENDING_PLAN_PATH) as f:
-        data = json.load(f)
-    return _dict_to_plan(data)
+    try:
+        with open(PENDING_PLAN_PATH) as f:
+            data = json.load(f)
+    except (json.JSONDecodeError, ValueError, OSError) as e:
+        _log.warning(
+            "load_plan: %s unreadable (%s); treating as no plan",
+            PENDING_PLAN_PATH, e,
+        )
+        return None
+    try:
+        return _dict_to_plan(data)
+    except (KeyError, TypeError, ValueError) as e:
+        _log.warning(
+            "load_plan: %s schema mismatch (%s); treating as no plan",
+            PENDING_PLAN_PATH, e,
+        )
+        return None
 
 
 def clear_plan() -> None:
     if os.path.exists(PENDING_PLAN_PATH):
-        os.remove(PENDING_PLAN_PATH)
+        try:
+            os.remove(PENDING_PLAN_PATH)
+        except OSError as e:
+            _log.warning("clear_plan: remove failed: %s", e)
 
 
 def _plan_to_dict(plan: PendingPlan) -> dict:
@@ -89,6 +128,7 @@ def _plan_to_dict(plan: PendingPlan) -> dict:
             for s in plan.intents
         ],
         "breakers_tripped": list(plan.breakers_tripped),
+        "news_hits_seen": dict(plan.news_hits_seen),
     }
 
 
@@ -100,7 +140,13 @@ def _dict_to_plan(d: dict) -> PendingPlan:
     )
     intents = []
     for s in d["intents"]:
-        i = OrderIntent(**s["intent"])
+        raw_intent = s["intent"]
+        # Filter unknown fields so a plan written by an older OrderIntent
+        # schema (or a future one with extra fields) still loads. Unknown
+        # fields used to raise TypeError from OrderIntent(**...).
+        intent_kwargs = {k: v for k, v in raw_intent.items()
+                         if k in _ORDER_INTENT_FIELDS}
+        i = OrderIntent(**intent_kwargs)
         intents.append(IntentState(
             intent=i,
             status=s.get("status", "active"),
@@ -117,4 +163,5 @@ def _dict_to_plan(d: dict) -> PendingPlan:
         baseline=baseline,
         intents=intents,
         breakers_tripped=d.get("breakers_tripped", []),
+        news_hits_seen=d.get("news_hits_seen", {}),
     )

@@ -12,13 +12,17 @@ check SPY corroboration → log → return BreakerResult.
 from __future__ import annotations
 import csv
 import datetime as dt
+import fcntl
 import hashlib
+import logging
 import os
 import re
 from dataclasses import dataclass
 from typing import Iterable
 
 import config
+
+_log = logging.getLogger(__name__)
 
 NEWS_SHOCK_LOG = config.NEWS_SHOCK_LOG
 
@@ -82,13 +86,28 @@ def dedupe_by_title_hash(hits: Iterable, window_minutes: int) -> list:
 
 
 def log_hit(hit: NewsHit, corroborated: bool) -> None:
-    os.makedirs(os.path.dirname(NEWS_SHOCK_LOG), exist_ok=True)
-    exists = os.path.exists(NEWS_SHOCK_LOG)
-    with open(NEWS_SHOCK_LOG, "a", newline="") as f:
-        w = csv.writer(f)
-        if not exists:
-            w.writerow(["ts", "source", "matched", "corroborated", "title"])
-        w.writerow([hit.ts.isoformat(), hit.source, hit.matched, corroborated, hit.title])
+    """Append a news-hit observation to the CSV audit log.
+
+    Lock-protected (fcntl on `.lock` sidecar) so concurrent ticks across
+    executor + watchdog can't garble each other's rows mid-flush. Header
+    is written exactly once on first append.
+    """
+    parent = os.path.dirname(NEWS_SHOCK_LOG)
+    if parent:
+        os.makedirs(parent, exist_ok=True)
+    lock_path = NEWS_SHOCK_LOG + ".lock"
+    with open(lock_path, "w") as lk:
+        try:
+            fcntl.flock(lk.fileno(), fcntl.LOCK_EX)
+        except OSError:
+            pass  # filesystem doesn't support locking — fall through
+        exists = os.path.exists(NEWS_SHOCK_LOG)
+        with open(NEWS_SHOCK_LOG, "a", newline="") as f:
+            w = csv.writer(f)
+            if not exists:
+                w.writerow(["ts", "source", "matched", "corroborated", "title"])
+            w.writerow([hit.ts.isoformat(), hit.source, hit.matched,
+                        corroborated, hit.title])
 
 
 def fetch_recent_headlines(since: dt.datetime) -> list:
@@ -107,7 +126,10 @@ def _fetch_yahoo_headlines(since: dt.datetime) -> list:
     try:
         import yfinance as yf
         news = yf.Ticker("^GSPC").news or []
-    except Exception:
+    except Exception as e:
+        # Silent failure used to make a broken yfinance .news endpoint
+        # impossible to detect — breaker D would just never fire. Log it.
+        _log.warning("yahoo headlines fetch failed: %s", e)
         return []
     out = []
     for n in news:
@@ -130,11 +152,12 @@ def _fetch_reddit_headlines(since: dt.datetime) -> list:
         import json
         req = urllib.request.Request(
             "https://www.reddit.com/r/stocks/hot.json?limit=25",
-            headers={"User-Agent": "stock-tracker/1.0"},
+            headers={"User-Agent": "stock-tracker/1.0 (research)"},
         )
         with urllib.request.urlopen(req, timeout=5) as r:
             data = json.load(r)
-    except Exception:
+    except Exception as e:
+        _log.warning("reddit headlines fetch failed: %s", e)
         return []
     out = []
     for child in data.get("data", {}).get("children", []):
@@ -153,3 +176,8 @@ def _fetch_reddit_headlines(since: dt.datetime) -> list:
 def _title_hash(title: str) -> str:
     normalized = re.sub(r"\s+", " ", title.lower().strip())
     return hashlib.sha1(normalized.encode()).hexdigest()[:12]
+
+
+def title_hash(title: str) -> str:
+    """Public wrapper for the title fingerprint used by dedupe."""
+    return _title_hash(title)

@@ -444,7 +444,7 @@ def _set_climax_fired(symbol: str) -> None:
         with open(path, "r") as f:
             try:
                 cache = _json.load(f)
-            except (json.JSONDecodeError, ValueError):
+            except (_json.JSONDecodeError, ValueError):
                 cache = {}
         for p in cache.get("positions", []):
             if p["symbol"] == symbol:

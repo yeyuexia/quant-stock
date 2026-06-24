@@ -16,6 +16,7 @@ Core modes (set via PORTFOLIO_MODE env var):
   growth       — aggressive, small/mid-cap heavy, leveraged ETFs in core too
 """
 import os
+import json
 
 # ── Portfolio Mode ──────────────────────────────────────────────
 # Set via: PORTFOLIO_MODE=growth python3 run.py
@@ -479,7 +480,6 @@ TELEGRAM_NOTIFY_PATH = os.path.join(os.path.dirname(__file__), ".cache",
                                     "telegram_notifications.json")
 
 # ── Strategy overrides (written by quant review subagent) ────────
-import json
 import logging as _logging
 
 _OVERRIDES_PATH = os.path.join(os.path.dirname(__file__), ".cache", "strategy_overrides.json")

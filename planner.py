@@ -26,9 +26,21 @@ def build_priced_intents(
 ) -> list[OrderIntent]:
     out = []
     for raw in intents:
+        if raw.side not in ("buy", "sell"):
+            # Refuse to enrich an intent with a corrupt side; previously the
+            # else branch silently treated unknown sides as "sell" which
+            # would compute a sell-side max_price (below market) for a
+            # mislabelled buy → executor would skip every slice forever.
+            out.append(raw)
+            continue
         tier = _tier_for(raw.symbol, ctx)
         asset = ctx.asset_class.get(raw.symbol, "stock")
-        bps = config.EXECUTION_TIERS[tier][f"{asset}_bps"]
+        try:
+            bps = config.EXECUTION_TIERS[tier][f"{asset}_bps"]
+        except KeyError:
+            # Unknown tier or asset class — fall back to MED stock to keep
+            # the intent moving rather than crash the whole plan write.
+            bps = config.EXECUTION_TIERS["MED"]["stock_bps"]
         tolerance = bps / 10_000.0
         if ctx.tranche == "aggressive":
             tolerance *= config.AGGRESSIVE_TIER_MULTIPLIER
