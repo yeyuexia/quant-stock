@@ -123,3 +123,63 @@ def test_caps_prompt_rows(monkeypatch):
     assert "T19" in prompt   # _MAX_ROWS_IN_PROMPT - 1
     assert "T20" not in prompt
     assert "T49" not in prompt
+
+
+import json
+
+
+def _seed_strategies(tmp_path, monkeypatch):
+    import strategies
+    monkeypatch.setattr(strategies, "STRATEGIES_DIR", str(tmp_path / "strat"))
+    strategies.write_strategy_result("value", [
+        {"ticker": "AAA", "score": 2.0, "rank": 1, "factors": {}},
+        {"ticker": "BBB", "score": 1.0, "rank": 2, "factors": {}},
+    ])
+    strategies.write_strategy_result("canslim", [
+        {"ticker": "AAA", "score": 9.0, "rank": 1, "factors": {}},
+        {"ticker": "CCC", "score": 8.0, "rank": 2, "factors": {}},
+    ])
+    monkeypatch.setattr(investor_agent, "BUY_CANDIDATES_PATH",
+                        str(tmp_path / "buy_candidates.json"))
+
+
+def test_select_falls_back_to_rules_when_llm_unavailable(tmp_path, monkeypatch):
+    _seed_strategies(tmp_path, monkeypatch)
+    picks = investor_agent.select_candidates(
+        top_n=2, owned=set(), llm_fn=lambda prompt: None)  # LLM "fails"
+    tickers = [p["ticker"] for p in picks]
+    assert len(picks) == 2
+    assert "AAA" in tickers          # consensus name (in both lists) ranks first
+    assert picks[0]["ticker"] == "AAA"
+    assert set(picks[0]["strategies"]) == {"value", "canslim"}
+    # persisted
+    saved = json.loads(open(investor_agent.BUY_CANDIDATES_PATH).read())
+    assert len(saved["picks"]) == 2
+
+
+def test_select_excludes_owned(tmp_path, monkeypatch):
+    _seed_strategies(tmp_path, monkeypatch)
+    picks = investor_agent.select_candidates(
+        top_n=4, owned={"AAA"}, llm_fn=lambda prompt: None)
+    assert "AAA" not in [p["ticker"] for p in picks]
+
+
+def test_select_uses_valid_llm_output(tmp_path, monkeypatch):
+    _seed_strategies(tmp_path, monkeypatch)
+    def fake_llm(prompt):
+        return json.dumps({"picks": [
+            {"ticker": "CCC", "rationale": "cheap turnaround"},
+            {"ticker": "BBB", "rationale": "quality compounder"},
+        ]})
+    picks = investor_agent.select_candidates(top_n=2, owned=set(), llm_fn=fake_llm)
+    assert [p["ticker"] for p in picks] == ["CCC", "BBB"]
+    assert picks[0]["rationale"] == "cheap turnaround"
+
+
+def test_select_rejects_hallucinated_ticker_and_falls_back(tmp_path, monkeypatch):
+    _seed_strategies(tmp_path, monkeypatch)
+    picks = investor_agent.select_candidates(
+        top_n=2, owned=set(),
+        llm_fn=lambda prompt: json.dumps({"picks": [{"ticker": "ZZZ", "rationale": "x"}]}))
+    # ZZZ not in the pool → invalid → rule fallback
+    assert [p["ticker"] for p in picks][0] == "AAA"

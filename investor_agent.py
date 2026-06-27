@@ -5,7 +5,10 @@ review is read-only commentary on the screener's top-N list — no file or
 shell tool use needed, so we run with default permission mode (the previous
 `bypassPermissions` was unnecessary and wider than needed).
 """
+import datetime as dt
+import json
 import logging
+import os
 import shutil
 import subprocess
 from typing import Optional
@@ -90,3 +93,117 @@ def run_investor_review(df: pd.DataFrame) -> Optional[str]:
 
     text = (result.stdout or "").strip()
     return text if text else None
+
+
+BUY_CANDIDATES_PATH = os.path.join(os.path.dirname(__file__), ".cache",
+                                   "buy_candidates.json")
+
+
+def _merge_pool(results: dict) -> list:
+    """Merge rows across strategies → deduped pool, best rank kept, strategies
+    recorded. Consensus (appears in more strategies) sorts first, then best rank."""
+    pool = {}
+    for name, payload in results.items():
+        for row in payload.get("rows", []):
+            t = row.get("ticker")
+            if not t:
+                continue
+            entry = pool.setdefault(t, {"ticker": t, "strategies": [],
+                                        "best_rank": 10**9, "score": None})
+            entry["strategies"].append(name)
+            entry["best_rank"] = min(entry["best_rank"], int(row.get("rank", 10**9)))
+            sc = row.get("score")
+            if isinstance(sc, (int, float)):
+                entry["score"] = sc if entry["score"] is None else max(entry["score"], sc)
+    ranked = sorted(pool.values(),
+                    key=lambda e: (-len(e["strategies"]), e["best_rank"]))
+    return ranked
+
+
+def _build_prompt(per_strategy: dict, pool: list, top_n: int) -> str:
+    lines = ["You are a portfolio analyst. Pick the best BUY candidates.",
+             f"Return STRICT JSON: {{\"picks\":[{{\"ticker\":..,\"rationale\":\"<=15 words\"}}]}} with EXACTLY {top_n} picks.",
+             "Only choose tickers from this candidate pool:"]
+    for e in pool:
+        lines.append(f"  {e['ticker']} (strategies: {','.join(e['strategies'])}, best_rank {e['best_rank']})")
+    lines.append("\nPer-strategy lists:")
+    for name, payload in per_strategy.items():
+        tickers = ", ".join(r["ticker"] for r in payload.get("rows", [])[:10])
+        lines.append(f"  {name}: {tickers}")
+    return "\n".join(lines)
+
+
+def _default_llm(prompt: str):
+    """Call the local claude CLI; None on any failure."""
+    if shutil.which("claude") is None:
+        _log.warning("select_candidates: `claude` CLI not on PATH")
+        return None
+    try:
+        result = subprocess.run(["claude", "-p", prompt], capture_output=True,
+                                text=True, timeout=_CLAUDE_TIMEOUT_SEC)
+    except Exception as e:
+        _log.warning("select_candidates: claude call failed: %s", e)
+        return None
+    if result.returncode != 0:
+        _log.warning("select_candidates: claude exited %d", result.returncode)
+        return None
+    return result.stdout
+
+
+def _parse_llm(text, valid_tickers, top_n) -> "list | None":
+    """Parse {'picks':[{ticker,rationale}]}; None if unusable."""
+    if not text:
+        return None
+    try:
+        start, end = text.index("{"), text.rindex("}") + 1
+        data = json.loads(text[start:end])
+        picks = data["picks"]
+    except (ValueError, KeyError, json.JSONDecodeError):
+        return None
+    out = []
+    for p in picks:
+        t = p.get("ticker")
+        if t in valid_tickers:
+            out.append({"ticker": t, "rationale": str(p.get("rationale", ""))[:120]})
+    if len(out) < top_n:
+        return None
+    return out[:top_n]
+
+
+def select_candidates(top_n=None, owned=None, llm_fn=None) -> list:
+    """Review all strategy results, pick top_n buy candidates, persist them."""
+    import config
+    import strategies
+    top_n = top_n if top_n is not None else config.ENSEMBLE_TOP_N
+    llm_fn = llm_fn or _default_llm
+    if owned is None:
+        try:
+            import orders
+            owned = {p["symbol"] for p in orders._load_portfolio_cache().get("positions", [])}
+        except Exception:
+            owned = set()
+
+    results = strategies.load_strategy_results()
+    pool = [e for e in _merge_pool(results) if e["ticker"] not in owned]
+
+    picks = None
+    if pool:
+        valid = {e["ticker"] for e in pool}
+        by_ticker = {e["ticker"]: e for e in pool}
+        parsed = _parse_llm(llm_fn(_build_prompt(results, pool, top_n)), valid, top_n)
+        if parsed is not None:
+            picks = [{"ticker": p["ticker"], "rationale": p["rationale"],
+                      "strategies": by_ticker[p["ticker"]]["strategies"]}
+                     for p in parsed]
+        else:
+            picks = [{"ticker": e["ticker"], "rationale": "rule-ranked fallback",
+                      "strategies": e["strategies"]} for e in pool[:top_n]]
+    picks = picks or []
+
+    os.makedirs(os.path.dirname(BUY_CANDIDATES_PATH), exist_ok=True)
+    tmp = BUY_CANDIDATES_PATH + ".tmp"
+    with open(tmp, "w") as f:
+        json.dump({"generated_at": dt.datetime.now(dt.timezone.utc).isoformat(),
+                   "picks": picks}, f)
+    os.replace(tmp, BUY_CANDIDATES_PATH)
+    return picks
