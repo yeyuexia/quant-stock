@@ -414,16 +414,27 @@ WATCHLIST_AUTO = _load_auto_watchlist()
 # reads. The quant-subagent override allowlist still targets this name.
 WATCHLIST = _union_watchlist(WATCHLIST_SEED, WATCHLIST_AUTO)
 
-# ── Value+Quality screen + ensemble ─────────────────────────────
-VS_MIN_DOLLAR_VOLUME = 2_000_000     # ADV * price liquidity gate
-VS_MIN_PRICE = 5.0                   # no penny stocks
-VS_MIN_MARKET_CAP = 300_000_000      # no micro-caps
-VS_TOP_N = 20                        # value_screen emits this many
-VS_WEIGHTS = {"value": 0.5, "quality": 0.35, "improving": 0.15}
-ENSEMBLE_TOP_N = 4                   # agent's final buy candidates
-ENSEMBLE_STRATEGIES = ["value", "canslim"]   # registered strategy names
-ENSEMBLE_CANDIDATES_MAX_AGE_HOURS = 24       # buy_candidates.json staleness limit
-ENSEMBLE_STRATEGY_TIMEOUT_SEC = 90           # per-strategy hang bound (off the watchdog critical path)
+# ── Value screen (two-track Russell 3000) + ensemble ────────────
+VS_MIN_PRICE = 5.0
+VS_MIN_MARKET_CAP = 300_000_000
+VS_MIN_DOLLAR_VOLUME = 5_000_000        # ≈ $5M/day liquidity gate (Knob 1)
+VS_PREFILTER_MAX = 500                  # cap survivors sent to fundamentals
+VS_FETCH_WORKERS = 12                   # concurrent .info fetches
+VS_TOP_N = 20                           # final rows emitted
+RUSSELL3000_IWV_URL = ("https://www.ishares.com/us/products/239726/"
+                       "ishares-russell-3000-etf/1467271812596.ajax"
+                       "?fileType=csv&fileName=IWV_holdings&dataType=fund")
+VS_TRACK_A = {"peg_max": 1.0, "pe_max": 20.0, "ev_ebitda_max": 12.0,
+              "rev_growth_min": 0.15, "eps_growth_min": 0.10,
+              "gross_margin_min": 0.30, "debt_equity_max": 1.0,
+              "current_ratio_min": 1.5}
+VS_TRACK_B = {"ps_max": 6.0, "rev_growth_min": 0.25, "gross_margin_min": 0.40,
+              "debt_equity_max": 1.0, "cash_runway_quarters_min": 6,
+              "max_dilution": 0.10}
+ENSEMBLE_TOP_N = 4
+ENSEMBLE_STRATEGIES = ["value", "canslim"]
+ENSEMBLE_CANDIDATES_MAX_AGE_HOURS = 24
+ENSEMBLE_STRATEGY_TIMEOUT_SEC = 240     # cold-cache Russell-3000 value run needs room
 
 # ── Alpaca broker ───────────────────────────────────────────────
 # ALPACA_LIVE_CONFIRM is intentionally not surfaced here — broker.py reads it
