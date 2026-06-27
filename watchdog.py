@@ -979,6 +979,24 @@ def log_daily(portfolio, total_value, total_pnl_pct):
             w.writerow(row)
 
 
+def _run_daily_ensemble() -> None:
+    """Generate ensemble buy candidates once (strategies in parallel + the
+    Claude agent pick), writing .cache/buy_candidates.json for the intraday
+    buy checks to read. Runs in the DAILY pre-market watchdog — never the
+    intraday tick — so the slow/costly LLM call stays off the 5-minute loop.
+    Fail-open: a generation failure must never break the watchdog run."""
+    try:
+        import run_ensemble
+        picks = run_ensemble.run()
+        if picks:
+            print("  Ensemble candidates: " +
+                  ", ".join(p["ticker"] for p in picks))
+        else:
+            print("  Ensemble produced no candidates (watchdog falls back to screener).")
+    except Exception as e:
+        print(f"  ! ensemble candidate generation failed (non-fatal): {e}")
+
+
 # ── Main ──────────────────────────────────────────────────────
 
 def run_watchdog(quick=False):
@@ -1001,6 +1019,13 @@ def run_watchdog(quick=False):
         "initial_capital": config.INITIAL_CAPITAL,
         "last_rebalance": max(_last_rebalances) if _last_rebalances else None,
     }
+
+    # Generate ensemble buy candidates once, pre-market (strategies + agent).
+    # The intraday check_buy_signals reads .cache/buy_candidates.json. Skipped
+    # in quick mode (price + stop-loss only) — keeps the LLM off the fast path.
+    if not quick:
+        header("ENSEMBLE CANDIDATES")
+        _run_daily_ensemble()
 
     # Safety net: attach trailing stops to any known-tranche position missing one.
     # Rebalancer normally does this at submit time; this catches anything that

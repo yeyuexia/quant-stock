@@ -312,13 +312,21 @@ Each strategy writes its result to `.cache/strategies/{name}.json` with schema: 
 **Integration with watchdog**:
 - `watchdog._get_screened_stocks()` reads `.cache/buy_candidates.json` and gates intraday buy signals on the picks list — only candidates approved by the ensemble can trigger auto-buy entries
 
-**Daily entrypoint** (`run_ensemble.py`):
-```python
-python3 run_ensemble.py
-# or via cron (managed by the controller):
-# 45 20 * * 1-5 /Users/zl/works/stock/scripts/cron-wrapper.sh run_ensemble.py
+**Trigger** — the candidate generation (strategies + the one Claude agent pick)
+runs **once per day, inside the daily pre-market watchdog** (`run_watchdog` →
+`_run_daily_ensemble`), not on a separate cron and not in the every-5-min
+intraday tick. Rationale: the agent makes one slow/costly LLM call, and its
+inputs (the screens) are daily — so running it more often adds cost and churn
+without new information. The intraday watchdog stays a pure reader of
+`.cache/buy_candidates.json`, deciding *when* to buy via the existing coded
+volume-breakout rule. The two strategies run in parallel. `_run_daily_ensemble`
+is fail-open: a generation error leaves the prior candidates (or the screener
+fallback) in place and never breaks the watchdog.
+
+Run it manually for a dry preview:
+```bash
+python3 run_ensemble.py   # runs strategies, prints picks, writes buy_candidates.json
 ```
-Runs all strategies, prints the picks (led by consensus), writes `.cache/buy_candidates.json`.
 
 **Configuration** (`config.py`):
 - `ENSEMBLE_STRATEGIES` — list of strategies to run (e.g., `['value', 'canslim']`)

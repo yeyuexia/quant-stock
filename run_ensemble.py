@@ -10,10 +10,17 @@ import investor_agent
 logging.basicConfig(level=logging.INFO)
 
 
+def run():
+    """Run every registered strategy (isolated, in parallel) then the agent
+    selection. Returns the agent's picks. Used by both the CLI and the daily
+    watchdog so candidate generation has a single code path.
+    """
+    strategies.run_strategies(strategies.default_registry())
+    return investor_agent.select_candidates()
+
+
 def main():
-    paths = strategies.run_strategies(strategies.default_registry())
-    print(f"strategies written: {paths}")
-    picks = investor_agent.select_candidates()
+    picks = run()
     for p in picks:
         print(f"  {p['ticker']:<6} [{','.join(p['strategies'])}] {p['rationale']}")
 

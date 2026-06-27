@@ -1525,3 +1525,22 @@ def test_get_screened_stocks_fresh_candidates_preferred(tmp_path, monkeypatch):
 
     df = watchdog._get_screened_stocks()
     assert list(df["ticker"]) == ["FRESH_PICK"]
+
+
+# ── daily ensemble trigger (option C: run_ensemble once from daily watchdog) ──
+
+def test_run_daily_ensemble_failopen(monkeypatch):
+    import watchdog, run_ensemble
+    def boom():
+        raise RuntimeError("ensemble blew up")
+    monkeypatch.setattr(run_ensemble, "run", boom)
+    watchdog._run_daily_ensemble()   # must NOT raise — fail-open
+
+
+def test_run_daily_ensemble_invokes_run(monkeypatch):
+    import watchdog, run_ensemble
+    called = []
+    monkeypatch.setattr(run_ensemble, "run",
+                        lambda: called.append(True) or [{"ticker": "AAA"}])
+    watchdog._run_daily_ensemble()
+    assert called == [True]

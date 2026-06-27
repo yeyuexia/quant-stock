@@ -45,18 +45,29 @@ def load_strategy_results() -> dict:
     return out
 
 
+def _run_one_strategy(item) -> "str | None":
+    """Run a single (name, callable); write its result. Returns the path, or
+    None if the callable raised (isolation — one strategy never affects others)."""
+    name, fn = item
+    try:
+        rows = fn()
+    except Exception as e:
+        _log.warning("run_strategies: strategy %s failed: %s", name, e)
+        return None
+    return write_strategy_result(name, rows or [])
+
+
 def run_strategies(registry: dict) -> list:
-    """Run each registered name->callable() that returns rows; write each.
-    A callable that raises is logged and skipped (isolation)."""
-    paths = []
-    for name, fn in registry.items():
-        try:
-            rows = fn()
-        except Exception as e:
-            _log.warning("run_strategies: strategy %s failed: %s", name, e)
-            continue
-        paths.append(write_strategy_result(name, rows or []))
-    return paths
+    """Run each registered name->callable() concurrently (they are I/O-bound on
+    yfinance) and write each result. A callable that raises is logged and
+    skipped; each strategy writes its own file, so there is no shared state."""
+    from concurrent.futures import ThreadPoolExecutor
+    items = list(registry.items())
+    if not items:
+        return []
+    with ThreadPoolExecutor(max_workers=len(items)) as ex:
+        results = list(ex.map(_run_one_strategy, items))
+    return [p for p in results if p]
 
 
 def _canslim_rows() -> list:
