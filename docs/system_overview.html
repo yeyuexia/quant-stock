@@ -182,22 +182,22 @@
   <div class="pipe">
     <div class="stage s-signal"><h4><span class="dot"></span>1 · Signals</h4>
       <p>Momentum, CANSLIM screen + VCP bases, value/quality, macro regime.</p>
-      <div class="files"><code>momentum.py</code> <code>screener.py</code> <code>value_screen.py</code> <code>macro.py</code></div></div>
+      <div class="files"><code>quant/signals/momentum.py</code> <code>quant/signals/screener.py</code> <code>quant/strategies/value/screen.py</code> <code>quant/signals/macro.py</code></div></div>
     <div class="stage s-select"><h4><span class="dot"></span>2 · Selection</h4>
       <p>Strategies write ranked lists; the AI agent picks the top&nbsp;4 buy candidates.</p>
-      <div class="files"><code>strategies.py</code> <code>investor_agent.py</code></div></div>
+      <div class="files"><code>quant/strategies/contract.py</code> <code>quant/agent/investor.py</code></div></div>
     <div class="stage s-timing"><h4><span class="dot"></span>3 · Timing</h4>
       <p>Watchdog monitors candidates &amp; holdings; coded rules decide buy / exit moments.</p>
-      <div class="files"><code>watchdog.py</code> <code>sepa_exits.py</code></div></div>
+      <div class="files"><code>quant/monitor/watchdog.py</code> <code>quant/risk/sepa_exits.py</code></div></div>
     <div class="stage s-exec"><h4><span class="dot"></span>4 · Execution</h4>
       <p>Targets become sliced orders; circuit breakers gate intraday submission.</p>
-      <div class="files"><code>rebalancer.py</code> <code>planner.py</code> <code>executor.py</code></div></div>
+      <div class="files"><code>quant/execution/rebalancer.py</code> <code>quant/execution/planner.py</code> <code>quant/execution/executor.py</code></div></div>
     <div class="stage s-safety"><h4><span class="dot"></span>5 · Safety &amp; Broker</h4>
       <p>Every order funnels through the policy layer, then to Alpaca.</p>
-      <div class="files"><code>orders.py</code> <code>broker.py</code> → Alpaca</div></div>
+      <div class="files"><code>quant/execution/orders.py</code> <code>quant/execution/broker.py</code> → Alpaca</div></div>
   </div>
   <div class="arrows"><span></span><span>→</span><span>→</span><span>→</span><span>→</span></div>
-  <p class="faint">Invariant: <strong>every</strong> order — from a rebalance, a buy signal, a stop, or a SEPA exit — passes through <code>orders.py</code>, which enforces HALT / paper-live guard / daily caps / large-order approval. <code>broker.py</code> is pure I/O with no policy.</p>
+  <p class="faint">Invariant: <strong>every</strong> order — from a rebalance, a buy signal, a stop, or a SEPA exit — passes through <code>quant/execution/orders.py</code>, which enforces HALT / paper-live guard / daily caps / large-order approval. <code>quant/execution/broker.py</code> is pure I/O with no policy.</p>
   <div class="callout">🔍 <strong>Explore it interactively:</strong> the <a href="architecture.html">interactive architecture graph</a> lets you pan, zoom, drag the nodes around, and click any one to see what it does and how it connects.</div>
 </div></section>
 
@@ -277,7 +277,7 @@
     <details class="card"><summary><span class="lay" style="background:var(--timing)"></span>sepa_exits.py<span class="tag">timing</span></summary>
       <div class="body">Pure Minervini SEPA exit rules: R-multiple scale-outs, failed-breakout detection, climax-top detection, and a 21-EMA trailing backstop. The watchdog calls into it.</div></details>
     <details class="card"><summary><span class="lay" style="background:var(--exec)"></span>rebalancer.py<span class="tag">execution</span></summary>
-      <div class="body">Builds target weights per tranche from the signals, sends the tiny actionable slice through <code>orders.py</code>, and writes the rest to <code>pending_plan.json</code> for the intraday executor.</div></details>
+      <div class="body">Builds target weights per tranche from the signals, sends the tiny actionable slice through <code>quant/execution/orders.py</code>, and writes the rest to <code>pending_plan.json</code> for the intraday executor.</div></details>
     <details class="card"><summary><span class="lay" style="background:var(--exec)"></span>executor.py<span class="tag">execution</span></summary>
       <div class="body">Intraday driver (every 10 min, RTH). Consumes the pending plan, evaluates 5 circuit breakers (SPY drop, VIX spike, single-name shock, news shock, macro flip), and submits sliced marketable-limit orders.</div></details>
     <details class="card"><summary><span class="lay" style="background:var(--exec)"></span>planner.py / planning.py<span class="tag">execution</span></summary>
@@ -293,7 +293,7 @@
 <section id="safety"><div class="wrap">
   <div class="eyebrow">Why it doesn't blow up</div>
   <h2>Risk &amp; safety rails</h2>
-  <p class="muted">Every order — no matter the trigger — passes these in <code>orders.py</code>:</p>
+  <p class="muted">Every order — no matter the trigger — passes these in <code>quant/execution/orders.py</code>:</p>
   <div class="rails">
     <div class="rail"><h4>HALT kill-switch</h4><p>Drop a <code>.cache/HALT</code> file and all order logic exits cleanly. <code>touch</code> to pause, <code>rm</code> to resume.</p></div>
     <div class="rail"><h4>Paper / live guard</h4><p>Live trading needs <em>both</em> <code>ALPACA_ENV=live</code> and an explicit confirm flag. Any single-flag typo stays on paper.</p></div>

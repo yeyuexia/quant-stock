@@ -16,14 +16,14 @@ cp .env.example .env
 # edit .env
 
 # 1. See what the system would do (read-only analysis)
-python3 run.py
+python3 -m quant.app.daily_report
 
 # 2. Dry-run the rebalancer (prints plan, submits nothing)
-python3 rebalancer.py --tranche core --dry-run
-python3 rebalancer.py --tranche aggressive --dry-run
+python3 -m quant.execution.rebalancer --tranche core --dry-run
+python3 -m quant.execution.rebalancer --tranche aggressive --dry-run
 
 # 3. When ready, let it place orders on the paper account
-python3 rebalancer.py --tranche core
+python3 -m quant.execution.rebalancer --tranche core
 ```
 
 ## Architecture
@@ -49,38 +49,38 @@ python3 rebalancer.py --tranche core
      portfolio.json (cache)    pending_orders.json (Telegram queue)
 ```
 
-**Invariant:** every order — from any trigger — passes through `orders.py`, which enforces HALT / paper-live guard / daily caps / large-order approval. `broker.py` is pure I/O and has no policy.
+**Invariant:** every order — from any trigger — passes through `quant/execution/orders.py`, which enforces HALT / paper-live guard / daily caps / large-order approval. `quant/execution/broker.py` is pure I/O and has no policy.
 
 ## Modules
 
 | File | Role |
 |---|---|
-| `broker.py` | Thin Alpaca SDK wrapper. Raises `BrokerError` on any API failure; returns plain dataclasses (no SDK objects leak out). Reuses one `StockHistoricalDataClient` for all quote/trade fetches; caches `is_market_open` for 30s; `close_all_positions` is paper-only-guarded; `submit_bracket` takes absolute `stop_price` (caller computes from policy); `get_filled_notional` returns `None` on query failure so executor can distinguish "unfilled" from "unknown". Public method: `latest_price` (was `_latest_price` — old name kept as alias). |
-| `orders.py` | Policy layer: `sync_state` (with 1-retry + cache fallback), `reconcile_to_targets` (with `MAX_POSITION_PCT` cap), `execute_plan` (greedy cash fill, defensive symbols sorted first), `submit_exit` / `submit_partial_exit` (accept `current_price` to avoid redundant broker calls), `ensure_trailing_stops`, pending-queue helpers (`approve_pending` re-checks cash + caps), `tag_position`. All disk writes go through `fileio.atomic_write_json` (fcntl lock + tmp-rename). Event log lives in `.cache/orders_events.csv` (distinct from watchdog's `daily_log.csv`). |
-| `fileio.py` | Lock-protected JSON I/O helpers (`atomic_write_json`, `read_modify_write_json`, `atomic_append_text`) shared across orders / notifications / watchdog. Uses `.lock` sidecars + atomic tmp-rename. |
-| `rebalancer.py` | Cron entry point. Builds target weights per tranche, runs the tiny portion through `orders.py`, writes the rest to `.cache/pending_plan.json`. |
-| `planner.py` / `planning.py` | Enrich raw `OrderIntent`s with tier (HIGH/MED), `max_price` / `min_price`, and `slice_count`. Pure functions; no I/O. |
-| `executor.py` | Intraday driver (every 10 min, 10:00–15:50 ET). Consumes the pending plan, evaluates five circuit breakers, submits sliced marketable-limit orders. Optimized for the daily-cadence world: tripped breakers skip re-evaluation; sticky aborts re-apply to mid-day merged intents; cross-tick news dedupe; one cached `get_open_orders` per tick; lazy SPY-15min fetch; local-clock RTH check; idle ticks skip disk writes; broker reads have 1-retry. |
-| `notifications.py` | fcntl-locked append helper for `.cache/telegram_notifications.json` — used by rebalancer, executor, watchdog, and the quant subagent. Prevents concurrent-writer message loss. |
-| `breakers.py` / `news_shock.py` / `pending_plan.py` | Circuit-breaker evaluators and the on-disk plan format read/written by rebalancer + executor. |
-| `watchdog.py` | Daily monitor (8:30 ET) + lightweight intraday tick (every 5 min, RTH-gated). Reads live state via `orders.sync_state` with cache fallback on broker failure (transitions-only TG notification: degraded / recovered, no spam). Verifies brackets; routes SEPA exits (intraday only, with batched real-time `latest_quote` for fast R-tier triggers) and macro-driven exits (daily, act-before-persist so failed acts retry tomorrow). Buy signals dedup per day AND only stamp on successful submit so HALT'd / cash-gated signals still retry. Other optimizations: batched SEPA OHLCV (1 yf call vs N), batched buy-signal yfinance, batched daily `check_volume` + `check_portfolio_status`, U-shape intraday volume projection, append-only `daily_log.csv`, sidecar `.lock` files across all writes, single Broker instance per run. |
-| `timeutils.py` | Shared `now_et()` + `is_rth_now()` helpers used by both executor and watchdog. |
-| `sepa_exits.py` | Pure rule library for Minervini SEPA exits: R-multiple, failed-breakout, climax detection, 21EMA backstop. Watchdog calls into it. Hardened against corrupt position metadata (R ≤ 0 → None, bad entry_date / missing pivot → False+log not crash); `climax_check` takes explicit `symbol` arg so multi-ticker frames look at the right column; tuning defaults fall back to `config.SEPA_*` so callers can't drift; `config.SEPA_R_TIERS` must be monotonic-ascending in R (validated at config import). |
-| `run.py` | Read-only daily reporter: `python3 run.py` (all sections) / `--section macro` / `--skip backtest` / `--with-review` (LLM cost, off by default) / `--backtest-years N`. Each section wrapped in `safe_section` — runtime errors print a "skipped" marker so partial output stays useful; bug-class exceptions (AttributeError / NameError / TypeError) re-raise so they're not silently swallowed. Risk analysis uses signals' real weights (renormalized over non-SAFE_HAVEN holdings); broker import is lazy so a broken SDK doesn't kill the report; ET-stamped header. |
-| `config.py` | All parameters, mode selection, watchlist, safety caps. Merges `.cache/strategy_overrides.json` from the quant subagent at load time. Unknown `PORTFOLIO_MODE` raises (no silent fallback); list overrides (WATCHLIST etc.) have min/max length bounds; tests are isolated from local strategy overrides via the `_isolate_strategy_overrides` conftest fixture. `WATCHLIST` = the hand-curated `WATCHLIST_SEED` literal unioned with auto-discovered names loaded from `watchlist_auto.json` (fail-open if missing/corrupt). Public symbol: `config.ETF_LEVERAGED` (was `_ETF_LEVERAGED` — old name kept as alias). |
-| `momentum.py` / `screener.py` / `sentiment.py` / `risk.py` / `backtest.py` / `discovery.py` / `indicators.py` / `baseline.py` / `investor_agent.py` | Signal and analytics modules. |
-| `data.py` | yfinance fetch + cache layer. String tickers auto-wrap to `[...]` (no garbage cache keys); `fetch_ohlcv` always returns MultiIndex columns regardless of ticker count; all writes go through `fileio.atomic_write_*` (fcntl + tmp+rename); `fetch_info` is fail-open like `fetch_fundamentals` (consistent contract); `fetch_fundamentals` reuses `fetch_info`'s cache to avoid double `Ticker.info` round-trips; logger warnings on partial-failure paths so silent yfinance degradation is observable; 1-retry helper + module-level `ThreadPoolExecutor` shared across all timeout-guarded fetches. |
-| `macro.py` | FRED-based regime detector. 1-retry on transient FRED errors; atomic CSV cache writes (fcntl + tmp+rename); proper Sahm Rule implementation (rolling 3m MA vs min of prior 12 3m MAs); yield-curve returns N/A on missing data (no magic 4.0 fallback); composite normalizes over only the indicators that returned data so partial outages don't dilute the score toward 0. CLI: `python3 macro.py` (print regime) / `python3 macro.py --refresh` (force-fetch all series). |
+| `quant/execution/broker.py` | Thin Alpaca SDK wrapper. Raises `BrokerError` on any API failure; returns plain dataclasses (no SDK objects leak out). Reuses one `StockHistoricalDataClient` for all quote/trade fetches; caches `is_market_open` for 30s; `close_all_positions` is paper-only-guarded; `submit_bracket` takes absolute `stop_price` (caller computes from policy); `get_filled_notional` returns `None` on query failure so executor can distinguish "unfilled" from "unknown". Public method: `latest_price` (was `_latest_price` — old name kept as alias). |
+| `quant/execution/orders.py` | Policy layer: `sync_state` (with 1-retry + cache fallback), `reconcile_to_targets` (with `MAX_POSITION_PCT` cap), `execute_plan` (greedy cash fill, defensive symbols sorted first), `submit_exit` / `submit_partial_exit` (accept `current_price` to avoid redundant broker calls), `ensure_trailing_stops`, pending-queue helpers (`approve_pending` re-checks cash + caps), `tag_position`. All disk writes go through `fileio.atomic_write_json` (fcntl lock + tmp-rename). Event log lives in `.cache/orders_events.csv` (distinct from watchdog's `daily_log.csv`). |
+| `quant/infra/fileio.py` | Lock-protected JSON I/O helpers (`atomic_write_json`, `read_modify_write_json`, `atomic_append_text`) shared across orders / notifications / watchdog. Uses `.lock` sidecars + atomic tmp-rename. |
+| `quant/execution/rebalancer.py` | Cron entry point. Builds target weights per tranche, runs the tiny portion through `quant/execution/orders.py`, writes the rest to `.cache/pending_plan.json`. |
+| `quant/execution/planner.py` / `quant/execution/planning.py` | Enrich raw `OrderIntent`s with tier (HIGH/MED), `max_price` / `min_price`, and `slice_count`. Pure functions; no I/O. |
+| `quant/execution/executor.py` | Intraday driver (every 10 min, 10:00–15:50 ET). Consumes the pending plan, evaluates five circuit breakers, submits sliced marketable-limit orders. Optimized for the daily-cadence world: tripped breakers skip re-evaluation; sticky aborts re-apply to mid-day merged intents; cross-tick news dedupe; one cached `get_open_orders` per tick; lazy SPY-15min fetch; local-clock RTH check; idle ticks skip disk writes; broker reads have 1-retry. |
+| `quant/infra/notifications.py` | fcntl-locked append helper for `.cache/telegram_notifications.json` — used by rebalancer, executor, watchdog, and the quant subagent. Prevents concurrent-writer message loss. |
+| `quant/execution/breakers.py` / `quant/signals/news_shock.py` / `quant/execution/pending_plan.py` | Circuit-breaker evaluators and the on-disk plan format read/written by rebalancer + executor. |
+| `quant/monitor/watchdog.py` | Daily monitor (8:30 ET) + lightweight intraday tick (every 5 min, RTH-gated). Reads live state via `orders.sync_state` with cache fallback on broker failure (transitions-only TG notification: degraded / recovered, no spam). Verifies brackets; routes SEPA exits (intraday only, with batched real-time `latest_quote` for fast R-tier triggers) and macro-driven exits (daily, act-before-persist so failed acts retry tomorrow). Buy signals dedup per day AND only stamp on successful submit so HALT'd / cash-gated signals still retry. Other optimizations: batched SEPA OHLCV (1 yf call vs N), batched buy-signal yfinance, batched daily `check_volume` + `check_portfolio_status`, U-shape intraday volume projection, append-only `daily_log.csv`, sidecar `.lock` files across all writes, single Broker instance per run. |
+| `quant/infra/timeutils.py` | Shared `now_et()` + `is_rth_now()` helpers used by both executor and watchdog. |
+| `quant/risk/sepa_exits.py` | Pure rule library for Minervini SEPA exits: R-multiple, failed-breakout, climax detection, 21EMA backstop. Watchdog calls into it. Hardened against corrupt position metadata (R ≤ 0 → None, bad entry_date / missing pivot → False+log not crash); `climax_check` takes explicit `symbol` arg so multi-ticker frames look at the right column; tuning defaults fall back to `config.SEPA_*` so callers can't drift; `config.SEPA_R_TIERS` must be monotonic-ascending in R (validated at config import). |
+| `quant/app/daily_report.py` | Read-only daily reporter: `python3 -m quant.app.daily_report` (all sections) / `--section macro` / `--skip backtest` / `--with-review` (LLM cost, off by default) / `--backtest-years N`. Each section wrapped in `safe_section` — runtime errors print a "skipped" marker so partial output stays useful; bug-class exceptions (AttributeError / NameError / TypeError) re-raise so they're not silently swallowed. Risk analysis uses signals' real weights (renormalized over non-SAFE_HAVEN holdings); broker import is lazy so a broken SDK doesn't kill the report; ET-stamped header. |
+| `quant/config.py` | All parameters, mode selection, watchlist, safety caps. Merges `.cache/strategy_overrides.json` from the quant subagent at load time. Unknown `PORTFOLIO_MODE` raises (no silent fallback); list overrides (WATCHLIST etc.) have min/max length bounds; tests are isolated from local strategy overrides via the `_isolate_strategy_overrides` conftest fixture. `WATCHLIST` = the hand-curated `WATCHLIST_SEED` literal unioned with auto-discovered names loaded from `watchlist_auto.json` (fail-open if missing/corrupt). Public symbol: `config.ETF_LEVERAGED` (was `_ETF_LEVERAGED` — old name kept as alias). |
+| `quant/signals/momentum.py` / `quant/signals/screener.py` / `quant/signals/sentiment.py` / `quant/risk/risk.py` / `quant/app/backtest.py` / `quant/data/universe.py` / `quant/signals/indicators.py` / `quant/signals/baseline.py` / `quant/agent/investor.py` | Signal and analytics modules. |
+| `quant/data/market.py` | yfinance fetch + cache layer. String tickers auto-wrap to `[...]` (no garbage cache keys); `fetch_ohlcv` always returns MultiIndex columns regardless of ticker count; all writes go through `fileio.atomic_write_*` (fcntl + tmp+rename); `fetch_info` is fail-open like `fetch_fundamentals` (consistent contract); `fetch_fundamentals` reuses `fetch_info`'s cache to avoid double `Ticker.info` round-trips; logger warnings on partial-failure paths so silent yfinance degradation is observable; 1-retry helper + module-level `ThreadPoolExecutor` shared across all timeout-guarded fetches. |
+| `quant/signals/macro.py` | FRED-based regime detector. 1-retry on transient FRED errors; atomic CSV cache writes (fcntl + tmp+rename); proper Sahm Rule implementation (rolling 3m MA vs min of prior 12 3m MAs); yield-curve returns N/A on missing data (no magic 4.0 fallback); composite normalizes over only the indicators that returned data so partial outages don't dilute the score toward 0. CLI: `python3 macro.py` (print regime) / `python3 macro.py --refresh` (force-fetch all series). |
 | `tests/` | `pytest` unit tests (615 tests across 47 files, ~18 s) + opt-in Alpaca paper integration tests (`-m integration`). One `test_X.py` per module (post-review additions are merged in under a `# Post-review additions` divider). Two topical extractions from the big `test_orders.py`: `test_orders_stops.py` (`_effective_stop_pct`) and `test_orders_partial_exits.py` (`submit_partial_exit`). End-to-end coverage in `test_executor_e2e.py`: one full-day quiet path plus one per circuit breaker (A SPY drop / B VIX spike / C single-name / D news shock / E macro flip). Shared `conftest._isolate_persistent_state` autouse fixture redirects every on-disk state path (portfolio.json, daily_log.csv, pending_*.json, watchdog sentinels, quant.applier artifacts, …) to a per-test tmp dir so runs can't pollute the developer's local `.cache/`. `FakeBroker` is strict-by-default — unseeded symbols raise; opt into a uniform price with `FakeBroker(default_price=…)`. |
 
 ## Commands
 
 ```bash
 # Trading (Alpaca; paper by default)
-python3 rebalancer.py --tranche core              # core tranche, daily cadence
-python3 rebalancer.py --tranche aggressive        # aggressive tranche, daily cadence
-python3 rebalancer.py --tranche core --dry-run    # plan without submitting
-python3 rebalancer.py --tranche core --force      # bypass the same-day cadence gate
+python3 -m quant.execution.rebalancer --tranche core              # core tranche, daily cadence
+python3 -m quant.execution.rebalancer --tranche aggressive        # aggressive tranche, daily cadence
+python3 -m quant.execution.rebalancer --tranche core --dry-run    # plan without submitting
+python3 -m quant.execution.rebalancer --tranche core --force      # bypass the same-day cadence gate
 
 # Kill-switch
 touch .cache/HALT                                  # pause all order logic
@@ -90,14 +90,14 @@ rm .cache/HALT                                     # resume
 python3 -c "from orders import tag_position; tag_position('NVDA', 'core', 'manual 2026-04-17')"
 
 # Read-only analysis (three modes)
-python3 run.py                              # balanced (default)
-PORTFOLIO_MODE=growth python3 run.py        # growth: leveraged ETFs + small/mid-caps
-PORTFOLIO_MODE=conservative python3 run.py  # capital preservation
+python3 -m quant.app.daily_report                              # balanced (default)
+PORTFOLIO_MODE=growth python3 -m quant.app.daily_report        # growth: leveraged ETFs + small/mid-caps
+PORTFOLIO_MODE=conservative python3 -m quant.app.daily_report  # capital preservation
 
 # Daily monitoring
-python3 watchdog.py              # full: prices, stops, macro, news
-python3 watchdog.py --quick      # price moves + bracket verification only
-python3 watchdog.py --portfolio  # live positions + P&L from Alpaca
+python3 -m quant.monitor.watchdog              # full: prices, stops, macro, news
+python3 -m quant.monitor.watchdog --quick      # price moves + bracket verification only
+python3 -m quant.monitor.watchdog --portfolio  # live positions + P&L from Alpaca
 
 # Stock discovery
 # Two-stage scan over a broad, stable universe:
@@ -119,12 +119,12 @@ python3 watchdog.py --portfolio  # live positions + P&L from Alpaca
 # so the hand-curated WATCHLIST_SEED comments/grouping are preserved. A missing or
 # corrupt watchlist_auto.json fails open (seed-only). Only valid tickers (alpha,
 # dots/dashes ok, ≤5 chars) are accepted from the file.
-python3 discovery.py                # scan market for new candidates
-python3 discovery.py --trending     # list smart-money tickers (13F + ETF + ARK + Congress)
-python3 discovery.py --include-reddit  # also harvest Reddit-trending tickers
-python3 discovery.py --update       # scan + append top 50 to watchlist_auto.json
-python3 discovery.py --prune        # list watchlist names not seen by CANSLIM in N days
-python3 discovery.py --prune --confirm  # remove stale AUTO names from watchlist_auto.json (seed names + never-seen entries are kept)
+python3 -m quant.data.universe                # scan market for new candidates
+python3 -m quant.data.universe --trending     # list smart-money tickers (13F + ETF + ARK + Congress)
+python3 -m quant.data.universe --include-reddit  # also harvest Reddit-trending tickers
+python3 -m quant.data.universe --update       # scan + append top 50 to watchlist_auto.json
+python3 -m quant.data.universe --prune        # list watchlist names not seen by CANSLIM in N days
+python3 -m quant.data.universe --prune --confirm  # remove stale AUTO names from watchlist_auto.json (seed names + never-seen entries are kept)
 
 # Tests
 python3 -m pytest                              # unit tests only (integration deselected)
@@ -134,21 +134,21 @@ ALPACA_API_KEY=... ALPACA_API_SECRET=... \
 
 ## Safety Rails
 
-The **paper/live guard** is enforced in `broker.py` at construction time: live trading requires **both** `ALPACA_ENV=live` and `ALPACA_LIVE_CONFIRM=yes`. Any single-env typo keeps you on paper.
+The **paper/live guard** is enforced in `quant/execution/broker.py` at construction time: live trading requires **both** `ALPACA_ENV=live` and `ALPACA_LIVE_CONFIRM=yes`. Any single-env typo keeps you on paper.
 
 Every order then goes through five checks in `orders.execute_plan`, in this order:
 
 1. **HALT file** (`.cache/HALT`) — one-line kill-switch. If present, all order logic exits cleanly and logs skipped intents. `touch .cache/HALT` to pause, `rm .cache/HALT` to resume.
 2. **Market-open check** — orders submitted outside RTH are deferred to the next open.
 3. **Cash-aware gate** — unless `ALLOW_MARGIN=True` (default `False`), the sum of all buy intents in a plan must not exceed available cash. If exceeded, **all** buys in that plan are rejected (sells are always allowed). A broker-account fetch failure also rejects buys (fail-closed).
-4. **Daily caps** — `DAILY_MAX_ORDERS` (default 40) and `DAILY_MAX_NOTIONAL` (default **$200K paper / $25K live**) in `config.py`. Excess orders are deferred for the next day.
+4. **Daily caps** — `DAILY_MAX_ORDERS` (default 40) and `DAILY_MAX_NOTIONAL` (default **$200K paper / $25K live**) in `quant/config.py`. Excess orders are deferred for the next day.
 5. **Large-order approval** — orders ≥ `LARGE_ORDER_THRESHOLD` ($50K default) are queued to `pending_orders.json` instead of submitted. A Telegram bot (separate project) approves/rejects via `/pending`, `/approve <id>`, `/reject <id>`. Orders expire after `PENDING_ORDER_TTL_HOURS` (default 6).
 
 All five checks apply uniformly to scheduled rebalances, SEPA exits, stop-loss exits, and signal-driven macro exits. Nothing bypasses them. The executor's per-slice path (`orders.submit_limit_slice`) enforces the same rails.
 
 ### Position adoption & stop enforcement
 
-Three `config.py` flags keep broker-imported positions under management and enforce stops on fractional shares:
+Three `quant/config.py` flags keep broker-imported positions under management and enforce stops on fractional shares:
 
 - **`ADOPT_EXTERNAL_POSITIONS`** (default `True`) — broker positions with no local metadata (manual trades, legacy holdings) are auto-tagged into a sleeve on `orders.sync_state`: leveraged ETFs (`config.ETF_LEVERAGED`) → `aggressive`, everything else → `core`, with `entry_reason = "adopted"`. Without this, untagged positions are excluded from `rebalancer._system_equity`, so the rebalancer sizes itself to near-zero capital and silently stops trading. Set `False` to keep such positions `unknown` (legacy behavior).
 - **`UNKNOWN_MV_HALT_PCT`** (default `0.20`) — if untagged (`unknown`) positions still exceed this fraction of equity, `sync_state` appends a CRITICAL "capital starved" alert. Defense-in-depth for the case where adoption is disabled or a symbol can't be classified.
@@ -158,8 +158,8 @@ Three `config.py` flags keep broker-imported positions under management and enfo
 
 Rebalance orders are **not** submitted in a single burst at plan time. Instead:
 
-1. **Planner** (`rebalancer.py`) builds a priced, ranked plan and writes it to `.cache/pending_plan.json`. Each intent carries a `tier` (HIGH/MED), `max_price` (buys) / `min_price` (sells), and a `slice_count` (2 or 4).
-2. **Executor** (`executor.py`) fires every 10 min during market hours (10:00–15:50 ET). For each intent, it cancels the prior unfilled limit, evaluates five circuit breakers against the plan-time baseline, and submits the next slice as a marketable limit — if the ask (buy) or bid (sell) respects the price ceiling/floor.
+1. **Planner** (`quant/execution/rebalancer.py`) builds a priced, ranked plan and writes it to `.cache/pending_plan.json`. Each intent carries a `tier` (HIGH/MED), `max_price` (buys) / `min_price` (sells), and a `slice_count` (2 or 4).
+2. **Executor** (`quant/execution/executor.py`) fires every 10 min during market hours (10:00–15:50 ET). For each intent, it cancels the prior unfilled limit, evaluates five circuit breakers against the plan-time baseline, and submits the next slice as a marketable limit — if the ask (buy) or bid (sell) respects the price ceiling/floor.
 3. **Circuit breakers** abort unexecuted work when the market stresses during the day:
    - **A: SPY drop** — −1.5% from baseline → abort all buys
    - **B: VIX spike** — >50% above baseline OR ≥25 absolute → abort all buys
@@ -173,7 +173,7 @@ See `docs/superpowers/specs/2026-04-17-intraday-execution-design.md` for the ful
 
 ### Phased rollout
 
-1. **Shadow mode** (`EXECUTOR_SHADOW_MODE = True` in `config.py`). Executor logs what it would submit without placing orders. Run 1–2 weeks on paper.
+1. **Shadow mode** (`EXECUTOR_SHADOW_MODE = True` in `quant/config.py`). Executor logs what it would submit without placing orders. Run 1–2 weeks on paper.
 2. **Live on paper** (`EXECUTOR_SHADOW_MODE = False` — current default). Executor submits to the paper account. Run 2–4 weeks; tune circuit-breaker thresholds from real trips.
 3. **Flip to live.** Follow the existing paper→live protocol (ramp `DAILY_MAX_NOTIONAL`).
 
@@ -200,7 +200,7 @@ Low-risk changes (small stop-loss tweaks, watchlist additions) auto-apply.
 High-risk changes (concentration shifts, screener filter changes) queue in
 `.cache/strategy_proposals.json` for Telegram approval. Forbidden keys
 (safety rails, credentials) are hard-rejected at two independent layers
-(applier + `config.py` override loader).
+(applier + `quant/config.py` override loader).
 
 ### Setup
 
@@ -229,7 +229,7 @@ close + 3h). No `ANTHROPIC_API_KEY` needed — uses your CC subscription.
 
 | File | Purpose |
 |---|---|
-| `.cache/strategy_overrides.json` | Active overrides; read by `config.py` at module-load time |
+| `.cache/strategy_overrides.json` | Active overrides; read by `quant/config.py` at module-load time |
 | `.cache/strategy_proposals.json` | Pending high-risk queue; written by applier, consumed by TG bot |
 | `.cache/telegram_notifications.json` | TG message queue (shared with executor-breaker notifications) |
 | `.cache/proposed_changes.json` | Agent's intermediate output |
@@ -261,7 +261,7 @@ Ranks 19 US ETFs (+ 6 leveraged in growth mode) by a composite momentum score bl
 
 ### CANSLIM Technical Stock Screen (+ VCP base detection)
 
-Runs against `config.WATCHLIST` = the hand-curated `WATCHLIST_SEED` (≈50 tickers) unioned with auto-discovered names from `watchlist_auto.json` (appended by `discovery.py --update`); low-risk additions from the quant subagent still apply on top. Every survivor of the three technical hard gates (RS / ADR / EMA) is stamped into `.cache/discovery_lastpass.json` via `discovery.record_screener_pass`, which closes the loop with `discovery.py --prune` (lists watchlist names that haven't passed in ≥ `DISCOVERY_STALE_DAYS` = 90 days; `--confirm` removes them from `watchlist_auto.json` ONLY — hand-curated seed names and "never seen" entries are never pruned, and `config.py` is never rewritten). Two-stage filter, then composite ranking:
+Runs against `config.WATCHLIST` = the hand-curated `WATCHLIST_SEED` (≈50 tickers) unioned with auto-discovered names from `watchlist_auto.json` (appended by `discovery.py --update`); low-risk additions from the quant subagent still apply on top. Every survivor of the three technical hard gates (RS / ADR / EMA) is stamped into `.cache/discovery_lastpass.json` via `discovery.record_screener_pass`, which closes the loop with `discovery.py --prune` (lists watchlist names that haven't passed in ≥ `DISCOVERY_STALE_DAYS` = 90 days; `--confirm` removes them from `watchlist_auto.json` ONLY — hand-curated seed names and "never seen" entries are never pruned, and `quant/config.py` is never rewritten). Two-stage filter, then composite ranking:
 
 **Stage 1 — CANSLIM C+A fundamental hard gate** (fail-open when data missing):
 - Quarterly EPS YoY ≥ `SCREEN_EPS_Q_GROWTH_MIN` (default 25%)
@@ -298,7 +298,7 @@ The composite score adjusts equity allocation between 40%–100% of target. When
 Runs multiple independent stock-screening strategies in isolation, aggregates their results, and uses an LLM-based investor agent to rank final buy candidates. Core components:
 
 **Isolated strategies** → `.cache/strategies/*.json`:
-- `value_screen.py` — two-track (profitable **Track A** / unprofitable-growth **Track B**) screen over the **Russell 3000** (iShares IWV CSV via `discovery.get_russell3000_tickers`, weekly-cached, fail-open). Staged: price/volume pre-filter (`value_prefilter`) → parallel fundamentals (`value_fundamentals.Fundamentals`) → per-track gates + scoring (`value_tracks`, thresholds in `config.VS_TRACK_A`/`VS_TRACK_B`) → rank/interleave. Liquidity gate `VS_MIN_DOLLAR_VOLUME=$5M`. (The CANSLIM screen still uses the Wikipedia watchlist.)
+- `quant/strategies/value/screen.py` — two-track (profitable **Track A** / unprofitable-growth **Track B**) screen over the **Russell 3000** (iShares IWV CSV via `discovery.get_russell3000_tickers`, weekly-cached, fail-open). Staged: price/volume pre-filter (`value_prefilter`) → parallel fundamentals (`value_fundamentals.Fundamentals`) → per-track gates + scoring (`value_tracks`, thresholds in `config.VS_TRACK_A`/`VS_TRACK_B`) → rank/interleave. Liquidity gate `VS_MIN_DOLLAR_VOLUME=$5M`. (The CANSLIM screen still uses the Wikipedia watchlist.)
 - CANSLIM adapter — wrapped from `screener.screen_stocks()` as `_canslim_rows()`
 
 Each strategy writes its result to `.cache/strategies/{name}.json` with schema: `{strategy, generated_at, rows: [{ticker, score, rank, factors}]}`. A strategy failure is logged and skipped; others continue (isolation).
@@ -327,10 +327,10 @@ fallback) in place and never breaks the watchdog.
 
 Run it manually for a dry preview:
 ```bash
-python3 run_ensemble.py   # runs strategies, prints picks, writes buy_candidates.json
+python3 -m quant.app.ensemble   # runs strategies, prints picks, writes buy_candidates.json
 ```
 
-**Configuration** (`config.py`):
+**Configuration** (`quant/config.py`):
 - `ENSEMBLE_STRATEGIES` — list of strategies to run (e.g., `['value', 'canslim']`)
 - `ENSEMBLE_TOP_N` — max buy candidates to keep (default 4)
 - `VS_*` — value screen tuning (threshold, percentile gates)
@@ -345,7 +345,7 @@ Two layers: broker-side brackets (always-on hard stops) and watchdog-driven SEPA
 - **Core**: initial stop = `clamp(ATR_STOP_MULTIPLIER × ATR(ATR_PERIOD) / last_close, ATR_STOP_FLOOR_PCT, STOP_LOSS_PCT)` — a 2×ATR(14) volatility stop, floored at 2% and capped at the fixed % stop. The floor stops near-zero-vol holdings from getting an absurdly tight ATR stop that fires on bid-ask noise. Defensive / safe-haven symbols (`DEFENSIVE_SYMBOLS`: BIL/SHY/IEF/TLT) skip ATR scaling entirely and use the base stop — you don't get stopped out of a cash-parking hedge. Trailing stop = `TRAILING_STOP_PCT` (balanced 12%). `ensure_trailing_stops` re-checks every watchdog run and re-attaches if missing.
 - **Aggressive**: fixed `AGGRESSIVE_PARAMS["stop_loss_pct"]` 10% / trailing 15%. Tight because leveraged ETF decay is costly.
 
-### Watchdog SEPA exits (`sepa_exits.py` + `watchdog.check_sepa_exits`)
+### Watchdog SEPA exits (`quant/risk/sepa_exits.py` + `watchdog.check_sepa_exits`)
 
 Runs once per watchdog tick over each `core` position, in **strict priority order** — first rule that fires wins, the rest are skipped for that position this tick:
 
@@ -392,28 +392,28 @@ export PORTFOLIO_MODE=growth
 ```bash
 crontab -e
 # Watchdog — 8:30 AM ET
-30 8 * * 1-5 cd /Users/zl/works/stock && python3 watchdog.py                        >> .cache/watchdog.log 2>&1
+30 8 * * 1-5 cd /Users/zl/works/stock && python3 -m quant.monitor.watchdog                        >> .cache/watchdog.log 2>&1
 
 # Rebalancer — 9:35 AM ET daily for both tranches (post-open so baseline SPY/VIX reflect live levels).
 # Cadence is daily; REBALANCE_BAND_PCT (5%) suppresses no-op churn.
-35 9 * * 1-5 cd /Users/zl/works/stock && python3 rebalancer.py --tranche core       >> .cache/rebalance.log 2>&1
-35 9 * * 1-5 cd /Users/zl/works/stock && python3 rebalancer.py --tranche aggressive >> .cache/rebalance.log 2>&1
+35 9 * * 1-5 cd /Users/zl/works/stock && python3 -m quant.execution.rebalancer --tranche core       >> .cache/rebalance.log 2>&1
+35 9 * * 1-5 cd /Users/zl/works/stock && python3 -m quant.execution.rebalancer --tranche aggressive >> .cache/rebalance.log 2>&1
 
 # Executor — every 10 min, 10:00–15:50 ET
-*/10 10-15 * * 1-5 cd /Users/zl/works/stock && python3 executor.py                  >> .cache/executor.log 2>&1
+*/10 10-15 * * 1-5 cd /Users/zl/works/stock && python3 -m quant.execution.executor                  >> .cache/executor.log 2>&1
 
 # Discovery — weekly watchlist refresh, Sundays 8 AM ET (before Mon rebalance)
-0 8 * * 0 cd /Users/zl/works/stock && python3 discovery.py --update                 >> .cache/discovery.log 2>&1
+0 8 * * 0 cd /Users/zl/works/stock && python3 -m quant.data.universe --update                 >> .cache/discovery.log 2>&1
 ```
 
-`rebalancer.py` writes `.cache/pending_plan.json` for orders ≥ `PLANNER_DIRECT_SUBMIT_THRESHOLD` (default $500) and direct-submits orders below that threshold. `executor.py` picks up the pending plan on the next 10-min tick, evaluates five circuit breakers, and slices orders across the day. Both scripts are safe to run daily: rebalancer no-ops unless the cadence threshold is reached, and executor no-ops if the pending plan is empty. The morning `watchdog.py` run is what drives daily SEPA take-profit / stop-loss exits — see [Exit Logic](#exit-logic-take-profit--stop-loss). The weekly `discovery.py --update` scans the multi-index universe (S&P 500 + Nasdaq-100 + S&P 400) and appends top names to `watchlist_auto.json`; the next rebalancer/screener tick consumes the expanded watchlist (`config.py`'s hand-curated `WATCHLIST_SEED` is never rewritten).
+`quant/execution/rebalancer.py` writes `.cache/pending_plan.json` for orders ≥ `PLANNER_DIRECT_SUBMIT_THRESHOLD` (default $500) and direct-submits orders below that threshold. `quant/execution/executor.py` picks up the pending plan on the next 10-min tick, evaluates five circuit breakers, and slices orders across the day. Both scripts are safe to run daily: rebalancer no-ops unless the cadence threshold is reached, and executor no-ops if the pending plan is empty. The morning `quant/monitor/watchdog.py` run is what drives daily SEPA take-profit / stop-loss exits — see [Exit Logic](#exit-logic-take-profit--stop-loss). The weekly `discovery.py --update` scans the multi-index universe (S&P 500 + Nasdaq-100 + S&P 400) and appends top names to `watchlist_auto.json`; the next rebalancer/screener tick consumes the expanded watchlist (`quant/config.py`'s hand-curated `WATCHLIST_SEED` is never rewritten).
 
 ## Switching to live
 
 Paper is the default. Before flipping:
 
 1. Run on paper for several weeks. Review `daily_log.csv` and Alpaca's dashboard. Confirm brackets attach on every entry. Review any Telegram approval prompts that were wrong.
-2. Set `DAILY_MAX_NOTIONAL` to a small number (e.g. $500) in `config.py`.
+2. Set `DAILY_MAX_NOTIONAL` to a small number (e.g. $500) in `quant/config.py`.
 3. Export `ALPACA_ENV=live` and `ALPACA_LIVE_CONFIRM=yes`.
 4. Ramp `DAILY_MAX_NOTIONAL` over subsequent weeks as confidence grows.
 

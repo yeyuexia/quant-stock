@@ -145,22 +145,22 @@ const PCOLW=252, ROWH_T=96, RTOP=160;
 
 /* ============ OVERVIEW graph ============ */
 const OVERVIEW = { legend:LAYER, nodes:[
-  {id:'discovery',label:'Discovery',file:'discovery.py',layer:'signal',col:0,row:0,detail:'Weekly job that builds the tradable universe (S&P 500 + Nasdaq-100 + S&P 400) into the auto-watchlist used by the screens.'},
-  {id:'momentum',label:'Momentum / ETF rotation',file:'momentum.py',layer:'signal',col:0,row:1,detail:'Dual-momentum relative-strength ranking driving the core ETF sleeve and the aggressive leveraged-ETF sleeve.'},
-  {id:'macro',label:'Macro regime',file:'macro.py',layer:'signal',col:0,row:2,detail:'FRED-based macro overlay. Shrinks risk in hostile regimes and can trigger defensive (macro-flip) exits.'},
-  {id:'screener',label:'CANSLIM screener',file:'screener.py',layer:'signal',col:0,row:3,detail:'Growth screen: EPS/revenue growth filter, relative-strength percentile, VCP base detection with a buy pivot. One of the two ensemble strategies.'},
-  {id:'value',label:'Value + Quality screen',file:'value_screen.py',layer:'signal',col:0,row:4,detail:'Two-track value screen over the Russell 3000 (iShares IWV): price/volume pre-filter → parallel fundamentals → Track A (profitable bargains) / Track B (unprofitable growth) gates → rank. The other ensemble strategy.'},
-  {id:'strategies',label:'Strategy runner',file:'strategies.py',layer:'select',col:1,row:1,detail:'Isolated-strategy contract + parallel runner. Each strategy writes its own file; a hung/erroring one is skipped (timeout-bounded) so it can never stall the others or the watchdog.'},
-  {id:'agent',label:'AI agent · top 4',file:'investor_agent.py',layer:'select',col:1,row:2.4,detail:'The single Claude agent. Merges the lists, dedupes with consensus weighting, excludes owned names, asks the claude CLI for the top-4 picks + rationale, and rule-ranks on any LLM failure. Runs ONCE per day.'},
+  {id:'discovery',label:'Discovery',file:'quant/data/universe.py',layer:'signal',col:0,row:0,detail:'Weekly job that builds the tradable universe (S&P 500 + Nasdaq-100 + S&P 400) into the auto-watchlist used by the screens.'},
+  {id:'momentum',label:'Momentum / ETF rotation',file:'quant/signals/momentum.py',layer:'signal',col:0,row:1,detail:'Dual-momentum relative-strength ranking driving the core ETF sleeve and the aggressive leveraged-ETF sleeve.'},
+  {id:'macro',label:'Macro regime',file:'quant/signals/macro.py',layer:'signal',col:0,row:2,detail:'FRED-based macro overlay. Shrinks risk in hostile regimes and can trigger defensive (macro-flip) exits.'},
+  {id:'screener',label:'CANSLIM screener',file:'quant/signals/screener.py',layer:'signal',col:0,row:3,detail:'Growth screen: EPS/revenue growth filter, relative-strength percentile, VCP base detection with a buy pivot. One of the two ensemble strategies.'},
+  {id:'value',label:'Value + Quality screen',file:'quant/strategies/value/screen.py',layer:'signal',col:0,row:4,detail:'Two-track value screen over the Russell 3000 (iShares IWV): price/volume pre-filter → parallel fundamentals → Track A (profitable bargains) / Track B (unprofitable growth) gates → rank. The other ensemble strategy.'},
+  {id:'strategies',label:'Strategy runner',file:'quant/strategies/contract.py',layer:'select',col:1,row:1,detail:'Isolated-strategy contract + parallel runner. Each strategy writes its own file; a hung/erroring one is skipped (timeout-bounded) so it can never stall the others or the watchdog.'},
+  {id:'agent',label:'AI agent · top 4',file:'quant/agent/investor.py',layer:'select',col:1,row:2.4,detail:'The single Claude agent. Merges the lists, dedupes with consensus weighting, excludes owned names, asks the claude CLI for the top-4 picks + rationale, and rule-ranks on any LLM failure. Runs ONCE per day.'},
   {id:'candidates',label:'buy_candidates.json',file:'.cache/',layer:'data',col:1,row:3.7,detail:'The agent’s daily shortlist — the only names the watchdog will consider buying. A staleness guard ignores it (falls back to the screener) if the daily job hasn’t refreshed it.'},
-  {id:'watchdog',label:'Watchdog',file:'watchdog.py',layer:'timing',col:2,row:1.6,detail:'Daily + intraday monitor. Daily: sync, stops, macro, and the once-a-day ensemble trigger. Intraday (5 min): coded volume-breakout buys, stop-loss enforcement, SEPA exits. No LLM on this loop.'},
-  {id:'sepa',label:'SEPA exits',file:'sepa_exits.py',layer:'timing',col:2,row:3,detail:'Pure Minervini exit rules: R-multiple scale-outs, failed-breakout, climax-top, and a 21-EMA trailing backstop. The watchdog calls into it.'},
-  {id:'rebalancer',label:'Rebalancer',file:'rebalancer.py',layer:'exec',col:3,row:0.3,detail:'Builds two-tranche target weights, sends the tiny actionable slice through orders.py, writes the rest to the pending plan.'},
-  {id:'planner',label:'Planner',file:'planner.py',layer:'exec',col:3,row:1.4,detail:'Pure functions enriching order intents with tier, price limits and slice counts. No I/O.'},
+  {id:'watchdog',label:'Watchdog',file:'quant/monitor/watchdog.py',layer:'timing',col:2,row:1.6,detail:'Daily + intraday monitor. Daily: sync, stops, macro, and the once-a-day ensemble trigger. Intraday (5 min): coded volume-breakout buys, stop-loss enforcement, SEPA exits. No LLM on this loop.'},
+  {id:'sepa',label:'SEPA exits',file:'quant/risk/sepa_exits.py',layer:'timing',col:2,row:3,detail:'Pure Minervini exit rules: R-multiple scale-outs, failed-breakout, climax-top, and a 21-EMA trailing backstop. The watchdog calls into it.'},
+  {id:'rebalancer',label:'Rebalancer',file:'quant/execution/rebalancer.py',layer:'exec',col:3,row:0.3,detail:'Builds two-tranche target weights, sends the tiny actionable slice through orders.py, writes the rest to the pending plan.'},
+  {id:'planner',label:'Planner',file:'quant/execution/planner.py',layer:'exec',col:3,row:1.4,detail:'Pure functions enriching order intents with tier, price limits and slice counts. No I/O.'},
   {id:'plan',label:'pending_plan.json',file:'.cache/',layer:'data',col:3,row:2.5,detail:'The on-disk daily plan — written by the rebalancer, worked tick-by-tick by the executor.'},
-  {id:'executor',label:'Executor',file:'executor.py',layer:'exec',col:3,row:3.6,detail:'Intraday driver (10 min). Consumes the plan, evaluates 5 circuit breakers, submits sliced marketable-limit orders.'},
-  {id:'orders',label:'Orders · policy + safety',file:'orders.py',layer:'safety',col:4,row:1.4,detail:'The policy chokepoint EVERY order passes through: HALT, paper/live guard, cash gate, daily caps, large-order approval. Also reconciles state and adopts broker-imported positions.'},
-  {id:'broker',label:'Broker (Alpaca SDK)',file:'broker.py',layer:'safety',col:4,row:2.6,detail:'Thin Alpaca wrapper — pure I/O, raises BrokerError, leaks no SDK objects. Live trading needs two explicit env flags; otherwise paper.'},
+  {id:'executor',label:'Executor',file:'quant/execution/executor.py',layer:'exec',col:3,row:3.6,detail:'Intraday driver (10 min). Consumes the plan, evaluates 5 circuit breakers, submits sliced marketable-limit orders.'},
+  {id:'orders',label:'Orders · policy + safety',file:'quant/execution/orders.py',layer:'safety',col:4,row:1.4,detail:'The policy chokepoint EVERY order passes through: HALT, paper/live guard, cash gate, daily caps, large-order approval. Also reconciles state and adopts broker-imported positions.'},
+  {id:'broker',label:'Broker (Alpaca SDK)',file:'quant/execution/broker.py',layer:'safety',col:4,row:2.6,detail:'Thin Alpaca wrapper — pure I/O, raises BrokerError, leaks no SDK objects. Live trading needs two explicit env flags; otherwise paper.'},
   {id:'portfolio',label:'portfolio.json',file:'state',layer:'data',col:4,row:3.7,detail:'Cached source-of-truth snapshot (positions, cash, tranche tags, stop ids). Written by sync_state, read across the system.'},
   {id:'alpaca',label:'Alpaca (paper)',file:'broker',layer:'safety',col:4,row:0.3,detail:'The brokerage. Paper account by default — real prices, simulated money.'},
 ], edges:[
@@ -174,7 +174,7 @@ const OVERVIEW = { legend:LAYER, nodes:[
 
 /* ============ DETAIL sub-graphs (internal flow per module) ============ */
 const SUB = {
-  value:{ title:'Value screen — two-track Russell 3000', file:'value_screen.py', legend:KIND, nodes:[
+  value:{ title:'Value screen — two-track Russell 3000', file:'quant/strategies/value/screen.py', legend:KIND, nodes:[
     {id:'v1',label:'Universe',file:'Russell 3000 (IWV CSV)',kind:'input',col:0,row:1,detail:'discovery.get_russell3000_tickers — iShares IWV holdings CSV, weekly-cached, fail-open.'},
     {id:'v2',label:'Stage-0 pre-filter',file:'price ≥ $5 · $-vol ≥ $5M',kind:'decision',col:1,row:1,detail:'Cheap + illiquid dropped on price/volume only (no .info): ~3000 → a few hundred. value_prefilter.'},
     {id:'v3',label:'Fundamentals',file:'parallel .info → Fundamentals',kind:'process',col:2,row:1,detail:'fetch_info per survivor in a thread pool; value_fundamentals.from_info normalizes the yfinance keys.'},
@@ -184,7 +184,7 @@ const SUB = {
     {id:'v7',label:'write value.json',file:'.cache/strategies/',kind:'output',col:6,row:1},
   ], edges:[['v1','v2'],['v2','v3'],['v3','v4'],['v4','v5'],['v5','v6'],['v6','v7','hot']]},
 
-  screener:{ title:'CANSLIM screener', file:'screener.py', legend:KIND, nodes:[
+  screener:{ title:'CANSLIM screener', file:'quant/signals/screener.py', legend:KIND, nodes:[
     {id:'c1',label:'Universe',file:'watchlist',kind:'input',col:0,row:1},
     {id:'c2',label:'C + A filter',file:'EPS & revenue growth',kind:'decision',col:1,row:1},
     {id:'c3',label:'RS percentile',file:'3/6/12-mo blend',kind:'process',col:2,row:1},
@@ -194,7 +194,7 @@ const SUB = {
     {id:'c7',label:'write canslim.json',file:'.cache/strategies/',kind:'output',col:6,row:1},
   ], edges:[['c1','c2'],['c2','c3'],['c3','c4'],['c4','c5'],['c5','c6'],['c6','c7','hot']]},
 
-  strategies:{ title:'Strategy runner (parallel + isolated)', file:'strategies.py', legend:KIND, nodes:[
+  strategies:{ title:'Strategy runner (parallel + isolated)', file:'quant/strategies/contract.py', legend:KIND, nodes:[
     {id:'t1',label:'Registry',file:'ENSEMBLE_STRATEGIES',kind:'input',col:0,row:1.5},
     {id:'t2',label:'run value',file:'thread (yfinance)',kind:'process',col:1,row:0.6},
     {id:'t3',label:'run canslim',file:'thread (yfinance)',kind:'process',col:1,row:2.4},
@@ -202,7 +202,7 @@ const SUB = {
     {id:'t5',label:'write <name>.json',file:'one file each',kind:'output',col:3,row:1.5},
   ], edges:[['t1','t2'],['t1','t3'],['t2','t4'],['t3','t4'],['t4','t5','hot']]},
 
-  agent:{ title:'AI agent — pick top 4', file:'investor_agent.py', legend:KIND, nodes:[
+  agent:{ title:'AI agent — pick top 4', file:'quant/agent/investor.py', legend:KIND, nodes:[
     {id:'a1',label:'Load strategy results',file:'load_strategy_results()',kind:'input',col:0,row:1.5},
     {id:'a2',label:'Merge + dedupe',file:'consensus weighting',kind:'process',col:1,row:1.5},
     {id:'a3',label:'Exclude owned',file:'vs portfolio',kind:'process',col:2,row:1.5},
@@ -214,7 +214,7 @@ const SUB = {
     {id:'a9',label:'write buy_candidates.json',file:'.cache/',kind:'output',col:7,row:1.5},
   ], edges:[['a1','a2'],['a2','a3'],['a3','a4'],['a4','a5'],['a5','a6'],['a6','a7'],['a6','a8','alt'],['a7','a9','hot'],['a8','a9','alt']]},
 
-  watchdog:{ title:'Watchdog — daily & intraday', file:'watchdog.py', legend:KIND, nodes:[
+  watchdog:{ title:'Watchdog — daily & intraday', file:'quant/monitor/watchdog.py', legend:KIND, nodes:[
     {id:'w0',label:'Run',file:'cron',kind:'input',col:0,row:1.6},
     {id:'wd1',label:'Snapshot + adopt',file:'sync_state',kind:'process',col:1,row:0.4},
     {id:'wd2',label:'Attach stops',file:'ensure_trailing_stops',kind:'process',col:2,row:0.4},
@@ -223,11 +223,11 @@ const SUB = {
     {id:'wi1',label:'Read candidates',file:'buy_candidates.json',kind:'input',col:1,row:2.8},
     {id:'wi2',label:'Volume-breakout buy?',file:'coded rule',kind:'decision',col:2,row:2.8,detail:'INTRADAY: deterministic — estimated full-day volume breaking the max down-day volume. No LLM.'},
     {id:'wi3',label:'Enforce stop-loss',file:'market-sell on breach',kind:'safety',col:3,row:2.8},
-    {id:'wi4',label:'SEPA exits',file:'sepa_exits.py',kind:'process',col:4,row:2.8},
+    {id:'wi4',label:'SEPA exits',file:'quant/risk/sepa_exits.py',kind:'process',col:4,row:2.8},
   ], edges:[['w0','wd1','daily'],['wd1','wd2'],['wd2','wd3'],['wd3','wd4','daily'],
             ['w0','wi1'],['wi1','wi2'],['wi2','wi3'],['wi3','wi4']]},
 
-  rebalancer:{ title:'Rebalancer', file:'rebalancer.py', legend:KIND, nodes:[
+  rebalancer:{ title:'Rebalancer', file:'quant/execution/rebalancer.py', legend:KIND, nodes:[
     {id:'r1',label:'Signals',file:'momentum·screen·macro',kind:'input',col:0,row:1.5},
     {id:'r2',label:'Core targets',file:'ETFs + stocks',kind:'process',col:1,row:0.6},
     {id:'r3',label:'Aggressive targets',file:'leveraged-ETF momentum',kind:'process',col:1,row:2.4},
@@ -236,7 +236,7 @@ const SUB = {
     {id:'r6',label:'Large → pending_plan',file:'+ Telegram note',kind:'output',col:3,row:2.3},
   ], edges:[['r1','r2'],['r1','r3'],['r2','r4'],['r3','r4'],['r4','r5'],['r4','r6']]},
 
-  executor:{ title:'Executor (intraday)', file:'executor.py', legend:KIND, nodes:[
+  executor:{ title:'Executor (intraday)', file:'quant/execution/executor.py', legend:KIND, nodes:[
     {id:'x1',label:'Load pending_plan',file:'.cache/',kind:'input',col:0,row:1.5},
     {id:'x2',label:'5 circuit breakers',file:'SPY·VIX·name·news·macro',kind:'decision',col:1,row:1.5},
     {id:'x3',label:'Tripped → abort',file:'sticky',kind:'safety',col:2,row:0.5},
@@ -245,7 +245,7 @@ const SUB = {
     {id:'x6',label:'Update plan state',file:'write back',kind:'process',col:4,row:2.3},
   ], edges:[['x1','x2'],['x2','x3','alt'],['x2','x4'],['x4','x5'],['x5','x6']]},
 
-  orders:{ title:'Orders — policy & safety rails', file:'orders.py', legend:KIND, nodes:[
+  orders:{ title:'Orders — policy & safety rails', file:'quant/execution/orders.py', legend:KIND, nodes:[
     {id:'o1',label:'Order intent',file:'from any trigger',kind:'input',col:0,row:1.2},
     {id:'o2',label:'HALT?',file:'.cache/HALT',kind:'safety',col:1,row:1.2},
     {id:'o3',label:'Market open?',file:'',kind:'decision',col:2,row:1.2},
@@ -256,7 +256,7 @@ const SUB = {
     {id:'o8',label:'Queue pending',file:'Telegram approval',kind:'output',col:6,row:2.0},
   ], edges:[['o1','o2'],['o2','o3'],['o3','o4'],['o4','o5'],['o5','o6'],['o6','o7'],['o6','o8','alt']]},
 
-  sepa:{ title:'SEPA exits (rule checks)', file:'sepa_exits.py', legend:KIND, nodes:[
+  sepa:{ title:'SEPA exits (rule checks)', file:'quant/risk/sepa_exits.py', legend:KIND, nodes:[
     {id:'p1',label:'Position + price',file:'',kind:'input',col:0,row:1},
     {id:'p2',label:'R-tier hit?',file:'2R / 3R scale-out',kind:'decision',col:1,row:1},
     {id:'p3',label:'Failed breakout?',file:'window expiry',kind:'decision',col:2,row:1},
