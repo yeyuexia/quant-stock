@@ -2,6 +2,8 @@
 
 A Python quant trading system for a $100K US-equity portfolio. Generates target allocations from dual-momentum ETF rotation, a CANSLIM technical stock screen with VCP base detection, and a FRED-based macro regime overlay, then submits orders to **Alpaca** (paper by default) through a safety-gated order layer. Two tranches: a $90K balanced core and a $10K leveraged-ETF aggressive sleeve. Core stock exits are driven by Minervini SEPA rules (R-multiple scale-out, failed-breakout, climax detection, 21EMA backstop).
 
+> 📊 **New here? Read the visual overview first:** [`docs/system_overview.html`](docs/system_overview.html) — a rich, self-contained page explaining how the whole system works at both overview and detail levels (open it in a browser). Keep it updated whenever the system changes.
+
 ## Quick Start
 
 ```bash

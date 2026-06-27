@@ -1,0 +1,359 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Quant Trading System — How It Works</title>
+<style>
+  :root{
+    --bg:#0d1117; --panel:#161b22; --panel2:#1c232d; --line:#2a3340;
+    --ink:#e6edf3; --muted:#9aa7b4; --faint:#6b7785;
+    --signal:#3b82f6; --select:#a855f7; --timing:#f59e0b; --exec:#22c55e;
+    --safety:#ef4444; --accent:#38bdf8;
+    --radius:14px; --maxw:1100px;
+    font-synthesis:none;
+  }
+  *{box-sizing:border-box}
+  html{scroll-behavior:smooth}
+  body{
+    margin:0;background:var(--bg);color:var(--ink);
+    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+    line-height:1.6;-webkit-font-smoothing:antialiased;
+  }
+  a{color:var(--accent);text-decoration:none}
+  a:hover{text-decoration:underline}
+  code{font-family:"SF Mono",ui-monospace,Menlo,Consolas,monospace;font-size:.86em;
+    background:#0b0f14;border:1px solid var(--line);border-radius:6px;padding:.08em .4em;color:#c8d3df}
+  .wrap{max-width:var(--maxw);margin:0 auto;padding:0 22px}
+  h1,h2,h3{line-height:1.25;margin:0 0 .4em}
+  h2{font-size:1.55rem;margin-top:.2em}
+  h3{font-size:1.08rem}
+  p{margin:.5em 0}
+  .muted{color:var(--muted)}
+  .faint{color:var(--faint);font-size:.86rem}
+
+  /* Header */
+  header.hero{
+    background:radial-gradient(1200px 400px at 70% -10%,rgba(56,189,248,.18),transparent),
+               linear-gradient(180deg,#0f1722,#0d1117);
+    border-bottom:1px solid var(--line);padding:54px 0 30px;
+  }
+  .badge{display:inline-block;font-size:.72rem;letter-spacing:.12em;text-transform:uppercase;
+    color:var(--accent);border:1px solid rgba(56,189,248,.4);border-radius:999px;padding:4px 12px;margin-bottom:16px}
+  header.hero h1{font-size:2.4rem;margin:0 0 .2em;letter-spacing:-.02em}
+  header.hero p.lead{font-size:1.12rem;color:var(--muted);max-width:680px;margin:.4em 0 0}
+  .factgrid{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px;margin-top:26px}
+  .fact{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:14px 16px}
+  .fact .n{font-size:1.35rem;font-weight:700}
+  .fact .l{font-size:.78rem;color:var(--faint);text-transform:uppercase;letter-spacing:.06em}
+
+  /* Nav */
+  nav.top{position:sticky;top:0;z-index:50;background:rgba(13,17,23,.82);backdrop-filter:blur(10px);
+    border-bottom:1px solid var(--line)}
+  nav.top .wrap{display:flex;gap:6px;overflow-x:auto;padding:10px 22px}
+  nav.top a{color:var(--muted);font-size:.86rem;white-space:nowrap;padding:6px 12px;border-radius:8px}
+  nav.top a:hover{color:var(--ink);background:var(--panel);text-decoration:none}
+
+  section{padding:42px 0;border-bottom:1px solid var(--line)}
+  section .eyebrow{font-size:.74rem;letter-spacing:.14em;text-transform:uppercase;color:var(--faint);margin-bottom:6px}
+
+  /* Pipeline diagram */
+  .pipe{display:grid;grid-template-columns:repeat(5,1fr);gap:10px;margin:24px 0 6px}
+  .stage{background:var(--panel);border:1px solid var(--line);border-top:3px solid var(--c,#888);
+    border-radius:12px;padding:14px;position:relative}
+  .stage h4{margin:0 0 6px;font-size:.95rem;display:flex;align-items:center;gap:7px}
+  .stage .dot{width:9px;height:9px;border-radius:50%;background:var(--c,#888)}
+  .stage p{font-size:.82rem;color:var(--muted);margin:.2em 0}
+  .stage .files{font-size:.74rem;color:var(--faint);margin-top:8px}
+  .s-signal{--c:var(--signal)} .s-select{--c:var(--select)} .s-timing{--c:var(--timing)}
+  .s-exec{--c:var(--exec)} .s-safety{--c:var(--safety)}
+  .flowrow{display:flex;align-items:center;justify-content:center;color:var(--faint);font-size:.8rem;margin:8px 0}
+  .arrows{display:grid;grid-template-columns:repeat(5,1fr);gap:10px;color:var(--faint);text-align:center;font-size:1.1rem}
+
+  /* Ensemble highlight */
+  .ens{display:grid;grid-template-columns:1fr auto 1fr auto 1fr;gap:12px;align-items:stretch;margin:22px 0}
+  .ens .box{background:var(--panel2);border:1px solid var(--line);border-radius:12px;padding:14px}
+  .ens .box h4{margin:0 0 6px;font-size:.92rem}
+  .ens .box small{color:var(--faint)}
+  .ens .ar{display:flex;align-items:center;color:var(--select);font-size:1.4rem}
+  .two{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+  .chip{background:#0b0f14;border:1px solid var(--line);border-radius:8px;padding:8px 10px;font-size:.8rem}
+
+  /* Timeline */
+  .timeline{position:relative;margin:24px 0 0;padding-left:26px}
+  .timeline::before{content:"";position:absolute;left:8px;top:4px;bottom:4px;width:2px;background:var(--line)}
+  .tl{position:relative;margin:0 0 16px;padding:12px 16px;background:var(--panel);border:1px solid var(--line);border-radius:10px}
+  .tl::before{content:"";position:absolute;left:-22px;top:18px;width:11px;height:11px;border-radius:50%;
+    background:var(--accent);border:2px solid var(--bg)}
+  .tl .t{font-weight:700;font-size:.92rem}
+  .tl .t span{color:var(--faint);font-weight:400;font-size:.8rem;margin-left:8px}
+  .tl p{font-size:.85rem;color:var(--muted);margin:.25em 0 0}
+  .tl.crit::before{background:var(--safety)} .tl.sel::before{background:var(--select)}
+
+  /* Component cards */
+  .cards{display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:14px;margin-top:20px}
+  details.card{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:0;overflow:hidden}
+  details.card>summary{list-style:none;cursor:pointer;padding:14px 16px;display:flex;align-items:center;gap:10px;font-weight:600}
+  details.card>summary::-webkit-details-marker{display:none}
+  details.card>summary .tag{margin-left:auto;font-size:.68rem;text-transform:uppercase;letter-spacing:.06em;
+    color:var(--faint);border:1px solid var(--line);border-radius:999px;padding:2px 9px}
+  details.card .body{padding:0 16px 15px;font-size:.86rem;color:var(--muted)}
+  details.card .lay{width:9px;height:9px;border-radius:50%}
+  details[open].card>summary{border-bottom:1px solid var(--line)}
+  .legend{display:flex;flex-wrap:wrap;gap:14px;margin:6px 0 0;font-size:.82rem;color:var(--muted)}
+  .legend span{display:inline-flex;align-items:center;gap:7px}
+  .key{width:10px;height:10px;border-radius:3px;display:inline-block}
+
+  /* Generic list cards */
+  .rails{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:14px;margin-top:18px}
+  .rail{background:var(--panel);border:1px solid var(--line);border-left:3px solid var(--safety);border-radius:10px;padding:14px 16px}
+  .rail h4{margin:0 0 4px;font-size:.95rem}
+  .rail p{font-size:.84rem;color:var(--muted);margin:0}
+  .exits{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:14px;margin-top:18px}
+  .exit{background:var(--panel);border:1px solid var(--line);border-left:3px solid var(--timing);border-radius:10px;padding:14px 16px}
+  .exit h4{margin:0 0 4px;font-size:.95rem} .exit p{font-size:.84rem;color:var(--muted);margin:0}
+
+  .callout{background:linear-gradient(180deg,rgba(56,189,248,.08),transparent);
+    border:1px solid var(--line);border-left:3px solid var(--accent);border-radius:10px;padding:14px 18px;margin:18px 0}
+  .glossary dl{display:grid;grid-template-columns:170px 1fr;gap:8px 18px;margin:14px 0 0}
+  .glossary dt{font-weight:600;color:var(--ink)}
+  .glossary dd{margin:0;color:var(--muted);font-size:.9rem}
+  footer{padding:30px 0 60px;color:var(--faint);font-size:.85rem}
+  .note{background:#1a1410;border:1px solid #4a3a1a;border-radius:10px;padding:12px 16px;color:#e9d8b0;font-size:.86rem;margin-top:16px}
+  @media(max-width:820px){
+    .pipe,.arrows{grid-template-columns:1fr 1fr} .ens{grid-template-columns:1fr}
+    .ens .ar{justify-content:center;transform:rotate(90deg)}
+    .glossary dl{grid-template-columns:1fr}
+  }
+</style>
+</head>
+<body>
+
+<header class="hero">
+  <div class="wrap">
+    <span class="badge">System Overview · living document</span>
+    <h1>Automated Quant Trading System</h1>
+    <p class="lead">A self-running pipeline that screens US stocks, has an AI agent pick the best buy candidates, times entries with coded rules, and executes on a <strong>paper</strong> Alpaca account — all behind a layered safety net. This page explains the whole thing, from the 10,000-ft view down to each moving part.</p>
+    <div class="factgrid">
+      <div class="fact"><div class="n">$100K</div><div class="l">Paper portfolio</div></div>
+      <div class="fact"><div class="n">2</div><div class="l">Tranches (core + aggressive)</div></div>
+      <div class="fact"><div class="n">2&nbsp;→&nbsp;1</div><div class="l">Strategies → AI agent</div></div>
+      <div class="fact"><div class="n">Top&nbsp;4</div><div class="l">Daily buy candidates</div></div>
+      <div class="fact"><div class="n">Auto</div><div class="l">Buys & stop exits</div></div>
+    </div>
+  </div>
+</header>
+
+<nav class="top"><div class="wrap">
+  <a href="#overview">Overview</a>
+  <a href="#pipeline">Pipeline</a>
+  <a href="#ensemble">AI Ensemble</a>
+  <a href="#timeline">Daily Timeline</a>
+  <a href="#components">Components</a>
+  <a href="#safety">Risk &amp; Safety</a>
+  <a href="#exits">Exits</a>
+  <a href="#glossary">Glossary</a>
+</div></nav>
+
+<!-- OVERVIEW -->
+<section id="overview"><div class="wrap">
+  <div class="eyebrow">The big picture</div>
+  <h2>What the system does, in one breath</h2>
+  <p class="muted">Every trading day the system asks three questions and answers each with the right tool:</p>
+  <div class="cards" style="grid-template-columns:repeat(auto-fit,minmax(260px,1fr))">
+    <details class="card" open><summary><span class="lay" style="background:var(--select)"></span>What should I buy?</summary>
+      <div class="body">Two independent <strong>strategies</strong> each rank stocks (one on cheapness+quality, one on growth+momentum). A single <strong>AI agent</strong> reads both lists and picks the <strong>top 4</strong>. Slow, judgment-heavy → runs <strong>once a day</strong>.</div></details>
+    <details class="card" open><summary><span class="lay" style="background:var(--timing)"></span>When do I buy it?</summary>
+      <div class="body">The <strong>watchdog</strong> watches those 4 names intraday and fires a buy only when a <strong>coded volume-breakout</strong> rule confirms the move. Fast, deterministic → runs <strong>every 5 minutes</strong>.</div></details>
+    <details class="card" open><summary><span class="lay" style="background:var(--safety)"></span>How do I not blow up?</summary>
+      <div class="body">Every order passes a <strong>safety layer</strong> (kill-switch, cash check, daily caps, large-order gate). Positions get <strong>stop-losses</strong> and rule-based <strong>exits</strong>. Nothing trades on real money — it's a paper account.</div></details>
+  </div>
+  <div class="callout">
+    <strong>Design principle that runs through everything:</strong> separate the <em>slow, smart, daily</em> decision (which stocks — done by the LLM) from the <em>fast, deterministic, high-frequency</em> decision (when to buy / when to exit — done by code). The LLM never sits on the intraday hot loop.
+  </div>
+</div></section>
+
+<!-- PIPELINE -->
+<section id="pipeline"><div class="wrap">
+  <div class="eyebrow">End-to-end flow</div>
+  <h2>The five stages</h2>
+  <p class="muted">Data flows left to right. Each stage has one job and hands off to the next through a file or a function call.</p>
+  <div class="pipe">
+    <div class="stage s-signal"><h4><span class="dot"></span>1 · Signals</h4>
+      <p>Momentum, CANSLIM screen + VCP bases, value/quality, macro regime.</p>
+      <div class="files"><code>momentum.py</code> <code>screener.py</code> <code>value_screen.py</code> <code>macro.py</code></div></div>
+    <div class="stage s-select"><h4><span class="dot"></span>2 · Selection</h4>
+      <p>Strategies write ranked lists; the AI agent picks the top&nbsp;4 buy candidates.</p>
+      <div class="files"><code>strategies.py</code> <code>investor_agent.py</code></div></div>
+    <div class="stage s-timing"><h4><span class="dot"></span>3 · Timing</h4>
+      <p>Watchdog monitors candidates &amp; holdings; coded rules decide buy / exit moments.</p>
+      <div class="files"><code>watchdog.py</code> <code>sepa_exits.py</code></div></div>
+    <div class="stage s-exec"><h4><span class="dot"></span>4 · Execution</h4>
+      <p>Targets become sliced orders; circuit breakers gate intraday submission.</p>
+      <div class="files"><code>rebalancer.py</code> <code>planner.py</code> <code>executor.py</code></div></div>
+    <div class="stage s-safety"><h4><span class="dot"></span>5 · Safety &amp; Broker</h4>
+      <p>Every order funnels through the policy layer, then to Alpaca.</p>
+      <div class="files"><code>orders.py</code> <code>broker.py</code> → Alpaca</div></div>
+  </div>
+  <div class="arrows"><span></span><span>→</span><span>→</span><span>→</span><span>→</span></div>
+  <p class="faint">Invariant: <strong>every</strong> order — from a rebalance, a buy signal, a stop, or a SEPA exit — passes through <code>orders.py</code>, which enforces HALT / paper-live guard / daily caps / large-order approval. <code>broker.py</code> is pure I/O with no policy.</p>
+</div></section>
+
+<!-- ENSEMBLE -->
+<section id="ensemble"><div class="wrap">
+  <div class="eyebrow">The AI ensemble (newest layer)</div>
+  <h2>Two strategies → one agent → four picks</h2>
+  <p class="muted">This is how "what to buy" is decided. The strategies are <strong>isolated</strong> — each runs independently and writes its own file, so one breaking never affects the other. They run <strong>in parallel</strong>.</p>
+  <div class="ens">
+    <div class="box">
+      <h4 style="color:var(--signal)">Isolated strategies</h4>
+      <div class="two">
+        <div class="chip"><strong>value</strong><br><small>cheap + quality + improving</small></div>
+        <div class="chip"><strong>canslim</strong><br><small>growth + RS + VCP base</small></div>
+      </div>
+      <small>→ <code>.cache/strategies/&lt;name&gt;.json</code></small>
+    </div>
+    <div class="ar">→</div>
+    <div class="box">
+      <h4 style="color:var(--select)">One Claude agent</h4>
+      <small>Merges both lists, dedupes (consensus boosts a name), drops owned/illiquid, then asks the <code>claude</code> CLI for the <strong>top 4 + rationale</strong>. If the LLM fails, it falls back to a deterministic rule ranking.</small>
+    </div>
+    <div class="ar">→</div>
+    <div class="box">
+      <h4 style="color:var(--timing)">Buy candidates</h4>
+      <small><code>.cache/buy_candidates.json</code> — the only names the watchdog will consider buying that day. Read-only to the watchdog; a staleness guard ignores it if the daily job hasn't refreshed it.</small>
+    </div>
+  </div>
+  <div class="callout">
+    <strong>Why it runs once a day, not every 5 minutes:</strong> the agent's only inputs are the daily screens — re-running the LLM intraday can't produce a better answer (no new information), just more cost and churn. So selection happens once, in the pre-market <code>watchdog</code> run; the intraday loop only does coded timing.
+  </div>
+</div></section>
+
+<!-- TIMELINE -->
+<section id="timeline"><div class="wrap">
+  <div class="eyebrow">A day in the life (local time; US-Eastern market hours)</div>
+  <h2>What runs, and when</h2>
+  <p class="muted">Scheduled by cron. Times below are the machine's local time, mapped to US market hours.</p>
+  <div class="timeline">
+    <div class="tl sel"><div class="t">20:30 · Daily watchdog<span>= 8:30 AM ET, pre-market</span></div>
+      <p>Syncs the live portfolio, attaches missing stops, checks macro — <strong>and runs the AI ensemble once</strong> (strategies in parallel → agent → <code>buy_candidates.json</code>). Fail-open: a generation hiccup never breaks the watchdog.</p></div>
+    <div class="tl"><div class="t">21:35 · Rebalancer<span>= 9:35 AM ET</span></div>
+      <p>Builds two-tranche target weights (core ETFs + stocks, aggressive leveraged ETFs), writes the plan to <code>pending_plan.json</code>. Large orders queue for approval; tiny ones submit directly.</p></div>
+    <div class="tl crit"><div class="t">22:00–04:00 · Intraday loop<span>every 5–10 min, RTH only</span></div>
+      <p><strong>Executor</strong> works the pending plan through 5 circuit breakers. <strong>Watchdog --intraday</strong> reads the buy candidates and fires coded buy signals, enforces stop-losses (market-sell on breach, works on fractional shares), and runs SEPA exits. <em>No LLM here.</em></p></div>
+    <div class="tl"><div class="t">07:00 · Quant review<span>= post-close, Tue–Sat</span></div>
+      <p>A separate Claude review writes strategy overrides + a Telegram note for the next day's rebalance.</p></div>
+    <div class="tl"><div class="t">Sun 20:00 · Discovery<span>weekly</span></div>
+      <p>Refreshes the auto-discovered watchlist (S&amp;P 500 + Nasdaq-100 + S&amp;P 400) before Monday's rebalance.</p></div>
+  </div>
+</div></section>
+
+<!-- COMPONENTS -->
+<section id="components"><div class="wrap">
+  <div class="eyebrow">Under the hood</div>
+  <h2>Components — click any to expand</h2>
+  <div class="legend">
+    <span><i class="key" style="background:var(--signal)"></i>Signals</span>
+    <span><i class="key" style="background:var(--select)"></i>Selection</span>
+    <span><i class="key" style="background:var(--timing)"></i>Timing</span>
+    <span><i class="key" style="background:var(--exec)"></i>Execution</span>
+    <span><i class="key" style="background:var(--safety)"></i>Safety / data</span>
+  </div>
+  <div class="cards">
+    <details class="card"><summary><span class="lay" style="background:var(--signal)"></span>screener.py<span class="tag">signals</span></summary>
+      <div class="body">CANSLIM technical screen: quarterly EPS/revenue growth pre-filter, relative-strength percentile, and VCP (Volatility Contraction Pattern) base detection with a buy pivot. One of the two ensemble strategies.</div></details>
+    <details class="card"><summary><span class="lay" style="background:var(--signal)"></span>value_screen.py<span class="tag">signals</span></summary>
+      <div class="body">Value + quality screen. Hard liquidity/price/market-cap/anti-trap gates, then a winsorized cross-sectional z-score blending value (FCF yield, earnings yield, EV/EBITDA, book/market), quality (ROE, low debt), and improving fundamentals. The "low value, high potential" source.</div></details>
+    <details class="card"><summary><span class="lay" style="background:var(--signal)"></span>momentum.py / macro.py<span class="tag">signals</span></summary>
+      <div class="body">Dual-momentum ETF rotation for the core sleeve, and a FRED-based macro regime overlay that shrinks risk in hostile regimes and can trigger macro-driven exits.</div></details>
+    <details class="card"><summary><span class="lay" style="background:var(--select)"></span>strategies.py<span class="tag">selection</span></summary>
+      <div class="body">The isolated-strategy contract + parallel runner. Each strategy writes <code>{ticker, score, rank, factors}</code> rows to its own JSON file; a strategy that errors or <em>hangs</em> is skipped (bounded by a timeout) so one can never stall the others or the watchdog.</div></details>
+    <details class="card"><summary><span class="lay" style="background:var(--select)"></span>investor_agent.py<span class="tag">selection</span></summary>
+      <div class="body">The single Claude agent. <code>select_candidates()</code> merges the strategy lists, dedupes with consensus weighting, excludes owned names, calls the <code>claude</code> CLI for the top-N picks with rationale, validates the JSON, and falls back to rule-ranking on any LLM failure.</div></details>
+    <details class="card"><summary><span class="lay" style="background:var(--timing)"></span>watchdog.py<span class="tag">timing</span></summary>
+      <div class="body">The daily + intraday monitor. Daily run: sync, stop attach, macro, and the once-a-day ensemble trigger. Intraday run (every 5 min, RTH): coded buy signals from the candidate list, stop-loss enforcement (auto market-sell on breach), and SEPA exits. The candidate source prefers <code>buy_candidates.json</code> and falls back to the raw screener.</div></details>
+    <details class="card"><summary><span class="lay" style="background:var(--timing)"></span>sepa_exits.py<span class="tag">timing</span></summary>
+      <div class="body">Pure Minervini SEPA exit rules: R-multiple scale-outs, failed-breakout detection, climax-top detection, and a 21-EMA trailing backstop. The watchdog calls into it.</div></details>
+    <details class="card"><summary><span class="lay" style="background:var(--exec)"></span>rebalancer.py<span class="tag">execution</span></summary>
+      <div class="body">Builds target weights per tranche from the signals, sends the tiny actionable slice through <code>orders.py</code>, and writes the rest to <code>pending_plan.json</code> for the intraday executor.</div></details>
+    <details class="card"><summary><span class="lay" style="background:var(--exec)"></span>executor.py<span class="tag">execution</span></summary>
+      <div class="body">Intraday driver (every 10 min, RTH). Consumes the pending plan, evaluates 5 circuit breakers (SPY drop, VIX spike, single-name shock, news shock, macro flip), and submits sliced marketable-limit orders.</div></details>
+    <details class="card"><summary><span class="lay" style="background:var(--exec)"></span>planner.py / planning.py<span class="tag">execution</span></summary>
+      <div class="body">Pure functions that enrich raw order intents with execution tier, price limits, and slice counts. No I/O.</div></details>
+    <details class="card"><summary><span class="lay" style="background:var(--safety)"></span>orders.py<span class="tag">policy</span></summary>
+      <div class="body">The policy chokepoint. <code>sync_state</code> reconciles live positions and <strong>adopts</strong> broker-imported holdings into a sleeve; <code>execute_plan</code> applies all safety rails; pending-queue + stop helpers live here. Every order goes through it.</div></details>
+    <details class="card"><summary><span class="lay" style="background:var(--safety)"></span>broker.py<span class="tag">data</span></summary>
+      <div class="body">Thin Alpaca SDK wrapper — pure I/O, raises <code>BrokerError</code>, leaks no SDK objects. The paper/live guard requires two explicit env flags to ever touch a live account.</div></details>
+  </div>
+</div></section>
+
+<!-- SAFETY -->
+<section id="safety"><div class="wrap">
+  <div class="eyebrow">Why it doesn't blow up</div>
+  <h2>Risk &amp; safety rails</h2>
+  <p class="muted">Every order — no matter the trigger — passes these in <code>orders.py</code>:</p>
+  <div class="rails">
+    <div class="rail"><h4>HALT kill-switch</h4><p>Drop a <code>.cache/HALT</code> file and all order logic exits cleanly. <code>touch</code> to pause, <code>rm</code> to resume.</p></div>
+    <div class="rail"><h4>Paper / live guard</h4><p>Live trading needs <em>both</em> <code>ALPACA_ENV=live</code> and an explicit confirm flag. Any single-flag typo stays on paper.</p></div>
+    <div class="rail"><h4>Cash-aware gate</h4><p>Buys can't exceed available cash (unless margin is explicitly allowed); a broker-fetch failure fails closed.</p></div>
+    <div class="rail"><h4>Daily caps</h4><p>Hard limits on order count and total notional per day; excess defers to tomorrow.</p></div>
+    <div class="rail"><h4>Large-order approval</h4><p>Orders above a threshold queue to <code>pending_orders.json</code> for Telegram approval instead of firing.</p></div>
+    <div class="rail"><h4>Position adoption + starvation alert</h4><p>Broker-imported "unknown" positions are auto-tagged into a sleeve so the rebalancer manages them; a loud alert fires if untagged value would starve it.</p></div>
+    <div class="rail"><h4>Fractional-safe stops</h4><p>Native stops can't attach to fractional shares, so the watchdog enforces stops by market-selling on breach — anchored to each position's adoption date so a freshly-adopted name isn't liquidated against an old high.</p></div>
+    <div class="rail"><h4>Candidate staleness guard</h4><p>If the daily ensemble job hasn't refreshed <code>buy_candidates.json</code> within a max age, the watchdog ignores it and falls back — so auto-buys never run on stale picks.</p></div>
+  </div>
+</div></section>
+
+<!-- EXITS -->
+<section id="exits"><div class="wrap">
+  <div class="eyebrow">Getting out</div>
+  <h2>Exit logic</h2>
+  <p class="muted">Selling is rule-driven, never discretionary. The core stock sleeve uses Minervini SEPA; everything has a stop.</p>
+  <div class="exits">
+    <div class="exit"><h4>Stop-loss</h4><p>Per-sleeve stop (ATR-scaled for core, fixed for aggressive). Breach → market sell, enforced intraday.</p></div>
+    <div class="exit"><h4>Trailing stop</h4><p>Peak-to-current trail, measured from when the position was first managed (not its full history).</p></div>
+    <div class="exit"><h4>SEPA R-multiple scale-out</h4><p>Sell a fraction at 2R and 3R profit tiers, banking gains as the move extends.</p></div>
+    <div class="exit"><h4>Failed breakout</h4><p>If a fresh breakout reverses below its pivot within a few days, exit — the thesis failed.</p></div>
+    <div class="exit"><h4>Climax top</h4><p>Parabolic blow-off detection (extended run + range/volume expansion) tightens the trail.</p></div>
+    <div class="exit"><h4>21-EMA backstop</h4><p>After the final scale-out tier, exit the remainder on a daily close below the 21-EMA.</p></div>
+    <div class="exit"><h4>Macro flip</h4><p>A hostile macro-regime change can drive defensive exits the next day.</p></div>
+    <div class="exit"><h4>Circuit breakers</h4><p>Intraday SPY drop / VIX spike / single-name / news / macro shocks halt or abort in-flight execution.</p></div>
+  </div>
+</div></section>
+
+<!-- GLOSSARY -->
+<section id="glossary"><div class="wrap glossary">
+  <div class="eyebrow">Plain-English terms</div>
+  <h2>Glossary</h2>
+  <dl>
+    <dt>Tranche</dt><dd>A sub-portfolio with its own rules. Core (~90%) = diversified ETFs + screened stocks; Aggressive (~10%) = leveraged ETF momentum.</dd>
+    <dt>CANSLIM / VCP</dt><dd>A growth-stock methodology (O'Neil) and the tight "base" pattern that precedes a breakout — the buy pivot.</dd>
+    <dt>SEPA</dt><dd>Minervini's Specific Entry Point Analysis — the rule set for scaling out of winners and cutting failures.</dd>
+    <dt>R-multiple</dt><dd>Profit measured in units of initial risk. "2R" = twice the per-share risk taken at entry.</dd>
+    <dt>Ensemble</dt><dd>Running multiple independent strategies and combining their outputs — here, via the AI agent's top-N pick.</dd>
+    <dt>Buy candidates</dt><dd>The agent's daily shortlist (top 4). The only names the watchdog will consider buying that day.</dd>
+    <dt>Circuit breaker</dt><dd>An automatic trading halt/abort triggered by a market or single-name shock during execution.</dd>
+    <dt>Paper account</dt><dd>A simulated brokerage account — real prices, fake money. This system trades paper by default.</dd>
+  </dl>
+</div></section>
+
+<footer><div class="wrap">
+  <div class="note">📌 <strong>Living document.</strong> This page must be kept in sync with the system. Whenever a component, data flow, schedule, or safety rule changes, update <code>docs/system_overview.html</code> alongside the code and the README.</div>
+  <p style="margin-top:18px">Automated Quant Trading System · paper trading on Alpaca · generated as the canonical system overview.</p>
+</div></footer>
+
+<script>
+  // Active nav highlight on scroll
+  const links=[...document.querySelectorAll('nav.top a')];
+  const map=Object.fromEntries(links.map(a=>[a.getAttribute('href').slice(1),a]));
+  const obs=new IntersectionObserver((es)=>{
+    es.forEach(e=>{ if(e.isIntersecting){
+      links.forEach(l=>l.style.color='');
+      const a=map[e.target.id]; if(a){a.style.color='var(--ink)';a.style.background='var(--panel)';}
+      links.filter(l=>l!==map[e.target.id]).forEach(l=>l.style.background='');
+    }});
+  },{rootMargin:'-45% 0px -50% 0px'});
+  document.querySelectorAll('section[id]').forEach(s=>obs.observe(s));
+</script>
+</body>
+</html>
