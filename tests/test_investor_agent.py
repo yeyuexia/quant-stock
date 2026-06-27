@@ -210,3 +210,54 @@ def test_build_dossiers_uses_injected_fetchers():
         news_fn=lambda t: None, spy_ohlcv=None)
     assert dossiers["AAA"]["valuation"]["pe"] == 12.0
     assert "peer_relative" in dossiers["AAA"]
+
+
+# ---------------------------------------------------------------------------
+# Task 7: three LLM stages — analyst, critic, PM
+# ---------------------------------------------------------------------------
+
+def _fake_llm(analyst_json=None, critic_json=None, pm_json=None):
+    def f(prompt):
+        if "STAGE=ANALYST" in prompt:
+            return analyst_json
+        if "STAGE=CRITIC" in prompt:
+            return critic_json
+        if "STAGE=PM" in prompt:
+            return pm_json
+        return None
+    return f
+
+
+def _dos(t, conf_price=10.0):
+    return {"ticker": t, "sector": "Tech",
+            "valuation": {"pe": 12.0, "ps": 2.0, "ev_ebitda": None},
+            "growth": {"rev_growth": 0.2}, "quality": {"gross_margin": 0.5},
+            "price_action": {"price": conf_price, "atr14": 1.0, "swing_low_20": conf_price*0.9,
+                             "rsi14": 55.0, "pct_vs_200dma": 0.1},
+            "peer_relative": {"pe_z": 0.5}, "analyst": {}, "estimates": {}, "news": None}
+
+
+def test_analyst_parses_verdicts():
+    dossiers = {"AAA": _dos("AAA")}
+    j = '{"verdicts":[{"ticker":"AAA","signal":"bullish","confidence":80,"thesis":"cheap+growing","risks":"x","catalysts":"y","bull":"b","bear":"be"}]}'
+    out = ia._analyst(dossiers, ["AAA"], _fake_llm(analyst_json=j))
+    assert out["AAA"]["signal"] == "bullish" and out["AAA"]["confidence"] == 80
+
+
+def test_analyst_fallback_on_llm_none():
+    dossiers = {"AAA": _dos("AAA")}
+    out = ia._analyst(dossiers, ["AAA"], _fake_llm(analyst_json=None))
+    assert out["AAA"]["signal"] == "neutral"     # deterministic fallback
+
+
+def test_pm_abstains_when_all_below_floor():
+    verdicts = {"AAA": {"ticker": "AAA", "confidence": 20, "signal": "neutral"}}
+    picks = ia._pm(verdicts, _fake_llm(pm_json=None))   # fallback path
+    assert picks == []                                  # below AGENT_CONVICTION_FLOOR=50
+
+
+def test_pm_caps_and_filters_by_floor_fallback():
+    verdicts = {f"T{i}": {"ticker": f"T{i}", "confidence": 90 - i, "signal": "bullish"}
+                for i in range(8)}
+    picks = ia._pm(verdicts, _fake_llm(pm_json=None))
+    assert len(picks) <= 5 and all(isinstance(t, str) for t in picks)

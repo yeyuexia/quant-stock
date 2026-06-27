@@ -102,6 +102,83 @@ def run_investor_review(df: pd.DataFrame) -> Optional[str]:
 BUY_CANDIDATES_PATH = os.path.join(paths.REPO_ROOT, ".cache",
                                    "buy_candidates.json")
 
+_GROUNDING = ("Use ONLY the numbers in each dossier; never invent a figure; "
+              "null → 'unknown'. Reply with STRICT JSON only.")
+
+
+def _extract_json(text):
+    if not text:
+        return None
+    try:
+        return json.loads(text[text.index("{"):text.rindex("}") + 1])
+    except (ValueError, json.JSONDecodeError):
+        return None
+
+
+def _analyst(dossiers, shortlist, llm_fn):
+    rows = json.dumps([dossiers[t] for t in shortlist if t in dossiers], default=str)
+    prompt = ("STAGE=ANALYST\nYou are a seasoned equity analyst. For EACH candidate, argue the "
+              "bull case AND the bear case from the dossier, then give a verdict. " + _GROUNDING +
+              ' Schema: {"verdicts":[{"ticker","signal":"bullish|neutral|bearish",'
+              '"confidence":0-100,"thesis":"<=25w","risks","catalysts","bull","bear"}]}\n'
+              "Reference: PE<20 cheap, rev_growth>15% strong, RSI>70 overbought, "
+              "peer_relative z>+1 strong-vs-industry, target_upside>20% rich.\nDossiers:\n" + rows)
+    data = _extract_json(llm_fn(prompt))
+    out = {}
+    if data and isinstance(data.get("verdicts"), list):
+        for v in data["verdicts"]:
+            t = v.get("ticker")
+            if t in dossiers:
+                out[t] = {"ticker": t, "signal": v.get("signal", "neutral"),
+                          "confidence": int(v.get("confidence", 0) or 0),
+                          "thesis": str(v.get("thesis", ""))[:200], "risks": str(v.get("risks", ""))[:200],
+                          "catalysts": str(v.get("catalysts", ""))[:200],
+                          "bull": str(v.get("bull", ""))[:200], "bear": str(v.get("bear", ""))[:200]}
+    # deterministic fallback for any shortlisted name the LLM didn't return
+    for t in shortlist:
+        if t in dossiers and t not in out:
+            out[t] = {"ticker": t, "signal": "neutral", "confidence": 0, "thesis": "no analyst verdict",
+                      "risks": "", "catalysts": "", "bull": "", "bear": ""}
+    return out
+
+
+def _critic(verdicts, dossiers, llm_fn):
+    payload = json.dumps({"verdicts": list(verdicts.values()),
+                          "dossiers": {t: dossiers[t] for t in verdicts if t in dossiers}}, default=str)
+    prompt = ("STAGE=CRITIC\nYou are a skeptical risk reviewer. For each verdict, strike any claim "
+              "not supported by the dossier numbers and CAP confidence that the data does not justify. "
+              + _GROUNDING + ' Return the SAME schema plus "critic_notes". Input:\n' + payload)
+    data = _extract_json(llm_fn(prompt))
+    if not data or not isinstance(data.get("verdicts"), list):
+        return verdicts                      # fallback: pass analyst verdicts through
+    out = dict(verdicts)
+    for v in data["verdicts"]:
+        t = v.get("ticker")
+        if t in out:
+            out[t] = {**out[t], "confidence": int(v.get("confidence", out[t]["confidence"]) or 0),
+                      "signal": v.get("signal", out[t]["signal"]),
+                      "critic_notes": str(v.get("critic_notes", ""))[:200]}
+    return out
+
+
+def _pm(verdicts, llm_fn):
+    import quant.config as config
+    floor, cap = config.AGENT_CONVICTION_FLOOR, config.AGENT_MAX_PICKS
+    eligible = {t: v for t, v in verdicts.items() if v.get("confidence", 0) >= floor}
+    prompt = ("STAGE=PM\nYou are the portfolio manager. From these analyst verdicts, choose the best "
+              f"risk-adjusted set: buy ONLY names with confidence >= {floor}; return BETWEEN 0 and {cap} "
+              "tickers; prefer cash to a weak buy. " + _GROUNDING +
+              ' Schema: {"picks":[{"ticker","rationale":"<=15w"}]}\nVerdicts:\n'
+              + json.dumps(list(verdicts.values()), default=str))
+    data = _extract_json(llm_fn(prompt))
+    picks = None
+    if data and isinstance(data.get("picks"), list):
+        chosen = [p.get("ticker") for p in data["picks"] if p.get("ticker") in eligible]
+        picks = chosen[:cap]
+    if picks is None:                        # fallback: floor-eligible by confidence
+        picks = [t for t, _ in sorted(eligible.items(), key=lambda kv: -kv[1].get("confidence", 0))][:cap]
+    return picks
+
 
 def _merge_pool(results: dict) -> list:
     """Merge rows across strategies → deduped pool, best rank kept, strategies
