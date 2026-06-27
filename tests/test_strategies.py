@@ -34,3 +34,24 @@ def test_run_strategies_isolates_failures(tmp_path, monkeypatch):
     assert any(p.endswith("value.json") for p in paths)
     loaded = strategies.load_strategy_results()
     assert "value" in loaded and "canslim" not in loaded
+
+
+def test_canslim_adapter_maps_dataframe_rows(monkeypatch):
+    import pandas as pd
+    import strategies as S
+    df = pd.DataFrame([
+        {"ticker": "AAA", "composite": 9.0, "rs": 95},
+        {"ticker": "BBB", "composite": 7.0, "rs": 80},
+    ])
+    monkeypatch.setattr("screener.screen_stocks", lambda: df)
+    rows = S._canslim_rows()
+    assert rows[0] == {"ticker": "AAA", "score": 9.0, "rank": 1,
+                       "factors": {"composite": 9.0, "rs": 95}}
+    assert rows[1]["rank"] == 2
+
+
+def test_default_registry_has_configured_strategies():
+    import strategies as S
+    reg = S.default_registry()
+    assert set(reg) == {"value", "canslim"}
+    assert all(callable(fn) for fn in reg.values())

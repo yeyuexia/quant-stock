@@ -57,3 +57,33 @@ def run_strategies(registry: dict) -> list:
             continue
         paths.append(write_strategy_result(name, rows or []))
     return paths
+
+
+def _canslim_rows() -> list:
+    """Adapt screener.screen_stocks() DataFrame to strategy rows."""
+    from screener import screen_stocks
+    df = screen_stocks()
+    if df is None or df.empty:
+        return []
+    rows = []
+    for i, (_, r) in enumerate(df.iterrows(), 1):
+        d = r.to_dict()
+        ticker = str(d.pop("ticker"))
+        score = float(d.get("composite", 0.0) or 0.0)
+        factors = {k: (float(v) if isinstance(v, (int, float)) else v)
+                   for k, v in d.items()}
+        rows.append({"ticker": ticker, "score": score, "rank": i,
+                     "factors": factors})
+    return rows
+
+
+def default_registry() -> dict:
+    """Map each config.ENSEMBLE_STRATEGIES name to a zero-arg rows-producer."""
+    import config
+    import value_screen
+    available = {
+        "value": value_screen.run,
+        "canslim": _canslim_rows,
+    }
+    return {name: available[name] for name in config.ENSEMBLE_STRATEGIES
+            if name in available}
