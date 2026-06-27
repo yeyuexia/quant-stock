@@ -414,6 +414,15 @@ WATCHLIST_AUTO = _load_auto_watchlist()
 # reads. The quant-subagent override allowlist still targets this name.
 WATCHLIST = _union_watchlist(WATCHLIST_SEED, WATCHLIST_AUTO)
 
+# ── Value+Quality screen + ensemble ─────────────────────────────
+VS_MIN_DOLLAR_VOLUME = 2_000_000     # ADV * price liquidity gate
+VS_MIN_PRICE = 5.0                   # no penny stocks
+VS_MIN_MARKET_CAP = 300_000_000      # no micro-caps
+VS_TOP_N = 20                        # value_screen emits this many
+VS_WEIGHTS = {"value": 0.5, "quality": 0.35, "improving": 0.15}
+ENSEMBLE_TOP_N = 4                   # agent's final buy candidates
+ENSEMBLE_STRATEGIES = ["value", "canslim"]   # registered strategy names
+
 # ── Alpaca broker ───────────────────────────────────────────────
 # ALPACA_LIVE_CONFIRM is intentionally not surfaced here — broker.py reads it
 # directly from os.environ to keep the safety check next to the construction
