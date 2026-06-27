@@ -1917,3 +1917,79 @@ def test_tag_position_raises_when_missing(tmp_path, monkeypatch):
         json.dump({"positions": [], "tranches": {}}, f)
     with pytest.raises(ValueError, match="not in portfolio cache"):
         tag_position("MISSING", "core")
+
+
+# ── self-healing adoption: already-cached 'unknown' gets reclassified ──
+
+def _cache_with_unknown(tmp_path, monkeypatch, symbol, tranche="unknown",
+                        entry_reason="external"):
+    old = {
+        "synced_at": "2026-06-01T00:00:00+00:00", "alpaca_env": "paper",
+        "cash": 0.0, "equity": 0.0,
+        "positions": [
+            {"symbol": symbol, "shares": 5.0, "avg_entry": 100.0,
+             "market_value": 500.0, "unrealized_pl": 0.0,
+             "tranche": tranche, "entry_reason": entry_reason,
+             "stop_order_id": None, "trail_order_id": None},
+        ],
+        "tranches": {"core": {"last_rebalance": None},
+                     "aggressive": {"last_rebalance": None}},
+    }
+    _portfolio_cache(tmp_path, monkeypatch, old)
+
+
+def test_sync_state_adopts_already_cached_unknown_when_flag_on(tmp_path, monkeypatch):
+    from orders import sync_state
+    monkeypatch.setattr("config.ADOPT_EXTERNAL_POSITIONS", True)
+    _cache_with_unknown(tmp_path, monkeypatch, "AAPL")  # cached as unknown/external
+
+    fb = FakeBroker()
+    fb.seed_position("AAPL", qty=5, avg_entry=100, mv=520)
+
+    alerts: list = []
+    snap = sync_state(fb, alerts=alerts)
+
+    assert snap.positions[0]["tranche"] == "core"
+    assert snap.positions[0]["entry_reason"] == "adopted"
+    assert any("adopted" in a.lower() and "AAPL" in a for a in alerts)
+
+
+def test_sync_state_adopts_cached_unknown_leveraged_into_aggressive(tmp_path, monkeypatch):
+    from orders import sync_state
+    monkeypatch.setattr("config.ADOPT_EXTERNAL_POSITIONS", True)
+    _cache_with_unknown(tmp_path, monkeypatch, "SOXL")  # in config.ETF_LEVERAGED
+
+    fb = FakeBroker()
+    fb.seed_position("SOXL", qty=5, avg_entry=100, mv=520)
+
+    snap = sync_state(fb, alerts=[])
+    assert snap.positions[0]["tranche"] == "aggressive"
+    assert snap.positions[0]["entry_reason"] == "adopted"
+
+
+def test_sync_state_keeps_cached_unknown_when_flag_off(tmp_path, monkeypatch):
+    from orders import sync_state
+    monkeypatch.setattr("config.ADOPT_EXTERNAL_POSITIONS", False)
+    _cache_with_unknown(tmp_path, monkeypatch, "AAPL")
+
+    fb = FakeBroker()
+    fb.seed_position("AAPL", qty=5, avg_entry=100, mv=520)
+
+    snap = sync_state(fb, alerts=[])
+    assert snap.positions[0]["tranche"] == "unknown"
+    assert snap.positions[0]["entry_reason"] == "external"
+
+
+def test_sync_state_preserves_real_tranche_when_flag_on(tmp_path, monkeypatch):
+    """Adoption must NOT clobber a position already tagged to a real sleeve."""
+    from orders import sync_state
+    monkeypatch.setattr("config.ADOPT_EXTERNAL_POSITIONS", True)
+    _cache_with_unknown(tmp_path, monkeypatch, "MSFT",
+                        tranche="core", entry_reason="core rebalance 2026-05-01")
+
+    fb = FakeBroker()
+    fb.seed_position("MSFT", qty=5, avg_entry=100, mv=520)
+
+    snap = sync_state(fb, alerts=[])
+    assert snap.positions[0]["tranche"] == "core"
+    assert snap.positions[0]["entry_reason"] == "core rebalance 2026-05-01"

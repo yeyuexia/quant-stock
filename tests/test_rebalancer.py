@@ -619,6 +619,11 @@ def test_run_subtracts_unknown_tranche_from_system_equity(tmp_path, monkeypatch)
     monkeypatch.setattr(orders, "DAILY_TRADE_LOG", str(tmp_path / "trade_log.json"))
     monkeypatch.setattr(orders, "PENDING_ORDERS_PATH", str(tmp_path / "pending.json"))
     monkeypatch.setattr(cfg, "AGGRESSIVE_TRANCHE_PCT", 0.10)
+    # Adoption is self-healing and on by default, which would reclassify the
+    # 'unknown' seed into a sleeve. This test targets the _system_equity
+    # subtraction safety net, which is what guards the flag-OFF case — so keep
+    # adoption off here to preserve a genuine 'unknown' position.
+    monkeypatch.setattr(cfg, "ADOPT_EXTERNAL_POSITIONS", False)
     # Pre-seed unknown position worth $20K.
     (tmp_path / "port.json").write_text(json.dumps({
         "synced_at": "x", "alpaca_env": "paper",
