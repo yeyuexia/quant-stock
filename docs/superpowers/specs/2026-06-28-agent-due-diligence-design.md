@@ -1,147 +1,156 @@
-# Design: enrich the investor agent with per-candidate due-diligence
+# Design: investor agent — dossier-grounded, 3-stage due-diligence
 
 **Date:** 2026-06-28
 **Status:** Approved (design)
-**Scope:** Before the daily agent picks the top-N buy candidates, give it a
-**comprehensive, precomputed dossier** for each candidate and have it produce a
-**structured professional verdict** per name, then select. One daily LLM call.
-The watchdog/downstream are unchanged (picks stay backward-compatible).
+**Scope:** Replace the single near-blind agent pick with a **dossier-grounded,
+three-stage pipeline** (triage → deep analyst → portfolio-manager decision), so
+the agent does professional due-diligence before selecting the daily buy
+candidates. ~3 LLM calls/day. The watchdog/downstream are unchanged
+(picks stay backward-compatible).
 
 ## Background
 
-`quant/agent/investor.py::select_candidates` currently merges the strategy
-lists into a pool and asks the `claude` CLI for the top-N picks knowing only
-each ticker + which strategies surfaced it + its rank/score. The pick is made
-nearly blind. Open-source financial-agent prior art (ai-hedge-fund, FinGPT,
-TradingAgents — see the research summary in this session) converges on a clear
-pattern: **precompute every number in code, inject a per-candidate JSON dossier
-with fixed thresholds, prompt an analyst persona, and force a constrained
-output schema** — because LLMs hallucinate financial facts badly, but reason
-well over supplied data.
-
-## Goals
-
-- A per-candidate dossier (valuation, quality/solvency, growth, price-action /
-  technicals, analyst, insider, news/sentiment) built **in code** from data the
-  repo already has (no new provider).
-- A single daily LLM call that returns a **structured professional verdict per
-  candidate** (signal, confidence, thesis, risks, catalysts) and the final picks.
-- Grounded against hallucination; fail-open + bounded so it can't stall the
-  daily watchdog; rule-rank fallback preserved; output schema additive.
+`quant/agent/investor.py::select_candidates` currently merges the strategy lists
+into a pool and asks the `claude` CLI for the top-N knowing only ticker +
+strategies + rank/score — a near-blind pick. Open-source prior art
+(ai-hedge-fund, FinGPT-Forecaster, TradingAgents — research summary in this
+session) converges on two lessons: (1) **precompute every number in code and
+inject a per-candidate dossier** (LLMs hallucinate financial facts but reason
+well over supplied data); (2) **multi-stage beats a single pass** — a separate
+analyst step + a portfolio-manager synthesis (and bull/bear contrast) measurably
+improves decisions. A single call over all 20–40 candidates also **dilutes
+attention** per name. Hence the staged design below.
 
 ## Decisions (confirmed)
 
-- **Include news/sentiment** in each dossier (via existing `sentiment` module).
-- **Dossier every pool candidate** (not a capped subset).
-- One LLM call per day (unchanged cadence).
+- **3-stage pipeline:** triage all candidates → deep-dive a shortlist → PM picks
+  the final N. ~3 LLM calls/day (the cost knob).
+- **Dossier every pool candidate** (in code), **including news/sentiment**.
+- Grounding: the LLM reasons only over supplied dossier numbers (no tool-calls /
+  no live browsing by the model).
+- One daily run, inside the fail-open pre-market watchdog.
 
 ## Module structure
 
 ```
 quant/agent/dossier.py    (NEW)  pure dossier assembly (no I/O)
-quant/agent/investor.py   (EXTEND)  fetch data → dossiers → richer prompt → structured verdicts → picks
+quant/agent/investor.py   (EXTEND)  fetch data → dossiers → triage → analyst → PM → picks
 ```
 
 ### `quant/agent/dossier.py` (pure — no network)
 ```python
 def build_dossier(ticker, *, info: dict, ohlcv=None, spy_ohlcv=None, news=None) -> dict
+def compact_line(dossier: dict) -> str    # one-line summary for the triage prompt
 ```
-Assembles, from *already-fetched* inputs (so it's fully unit-testable):
+`build_dossier` assembles, from *already-fetched* inputs (fully unit-testable):
 ```
-{
- "ticker": str,
- "valuation":  {pe, peg, ev_ebitda, ps, fcf_yield},
- "quality":    {gross_margin, op_margin, roe, debt_equity, current_ratio, profitable},
- "growth":     {rev_growth, eps_growth},
- "price_action": {price, pct_from_52w_high, pct_from_52w_low,
+{ "ticker": str,
+  "valuation":   {pe, peg, ev_ebitda, ps, fcf_yield},
+  "quality":     {gross_margin, op_margin, roe, debt_equity, current_ratio, profitable},
+  "growth":      {rev_growth, eps_growth},
+  "price_action":{price, pct_from_52w_high, pct_from_52w_low,
                   pct_vs_50dma, pct_vs_200dma, rsi14, rel_strength_vs_spy_3m},
- "analyst":    {recommendation, target_upside_pct, num_analysts},
- "insider":    {pct_held_insiders},
- "news":       {count, sentiment_score, sentiment_label, headlines: [<=3]},
-}
+  "analyst":     {recommendation, target_upside_pct, num_analysts},
+  "insider":     {pct_held_insiders},
+  "news":        {count, sentiment_score, sentiment_label, headlines: [<=3]} }
 ```
-Every field is **fail-open** (`None` when the input is missing). Helpers
-`_rsi(series, 14)`, `_pct_from(price, ref)`, `_rel_strength(tkr_series, spy_series)`
-are pure and individually tested. Reuses `value_fundamentals.from_info` for the
-fundamental fields rather than re-reading `.info` keys.
+Every field **fail-open** (`None` when input missing). Pure helpers `_rsi(series,14)`,
+`_pct_from(price, ref)`, `_rel_strength(tkr, spy)` are individually tested. Reuses
+`value_fundamentals.from_info` (now `quant/data/fundamentals.py`) for the
+fundamental fields. `compact_line` renders a dossier to a short triage row.
 
-### `quant/agent/investor.py` (extend `select_candidates`)
-New flow inside the existing function:
+### `quant/agent/investor.py` — `select_candidates` (3-stage)
 1. `pool = merge + dedupe + exclude owned` (unchanged).
 2. **Fetch dossier inputs for the whole pool** concurrently
    (`ThreadPoolExecutor(AGENT_DOSSIER_WORKERS)`): `data.fetch_info`,
-   `data.fetch_ohlcv` (per ticker), `sentiment.fetch_yf_news` (news);
-   `data.fetch_ohlcv("SPY")` once for relative strength. All cached + fail-open.
-3. `dossiers = [dossier.build_dossier(t, info=…, ohlcv=…, spy_ohlcv=…, news=…) for t in pool]`.
-4. **Prompt** (`_build_dossier_prompt`): an equity-analyst persona + the dossiers
-   as JSON + explicit decision rules; instruction to use **only** supplied
-   numbers and emit STRICT JSON.
-5. **LLM call** (the existing one daily `claude -p`).
-6. **Parse + validate** (`_parse_verdicts`): per-candidate
-   `{ticker, signal: bullish|neutral|bearish, confidence: 0-100, thesis,
-   risks, catalysts}` + `picks` (exactly top-N tickers from the pool). Invalid /
-   missing → **rule-rank fallback** (consensus + score), as today.
-7. **Persist** `buy_candidates.json` picks, each enriched additively:
-   `{ticker, rationale (=thesis), signal, confidence, thesis, risks, catalysts,
-   strategies}`. The watchdog reads only `ticker`, so this is backward-compatible.
+   `data.fetch_ohlcv` per ticker, `sentiment.fetch_yf_news` (when
+   `AGENT_INCLUDE_NEWS`); `data.fetch_ohlcv("SPY")` once. Cached + fail-open.
+   `dossiers = {t: build_dossier(t, …) for t in pool}`.
+3. **Stage A — Triage (1 call).** Prompt = compact one-line dossier rows for the
+   whole pool; ask for the `AGENT_SHORTLIST_N` (~8) most worth deep analysis as a
+   JSON list of tickers. Parse/validate (subset of pool). **Fallback:** rule-rank
+   (consensus + score) shortlist.
+4. **Stage B — Deep analyst (1 call).** Prompt = the *full* dossiers for just the
+   shortlist + an analyst persona that argues **bull case and bear case** per
+   name from the supplied numbers; returns per-candidate
+   `{ticker, signal: bullish|neutral|bearish, confidence 0-100, thesis, risks,
+   catalysts, bull, bear}`. Parse/validate (tickers ⊆ shortlist). **Fallback:**
+   synthesize neutral verdicts from the dossiers (deterministic).
+5. **Stage C — PM decision (1 call).** Prompt = the analyst verdicts + a
+   portfolio-manager persona; returns the final `picks` = top-`ENSEMBLE_TOP_N`
+   tickers (⊆ shortlist) with a one-line portfolio rationale each.
+   Parse/validate (exactly N, ⊆ shortlist). **Fallback:** top-N of the shortlist
+   by analyst confidence, else rule-rank.
+6. **Persist** `buy_candidates.json` picks, enriched additively:
+   `{ticker, rationale, signal, confidence, thesis, risks, catalysts, strategies}`.
+   The watchdog reads only `ticker` → backward-compatible.
 
-## Prompt / anti-hallucination
+All three stages share one injectable `llm_fn(prompt)->str|None` (the existing
+`claude -p`); each prompt carries a distinct stage marker so a test fake can
+branch. If *any* stage's LLM call/parse fails, that stage's deterministic
+fallback runs and the pipeline continues — it never raises into the watchdog.
 
-The persona enumerates positives and concerns per candidate from the dossier,
-then gives a verdict. The prompt embeds fixed reference thresholds (e.g. "PE<20
-cheap, rev_growth>15% strong, RSI>70 overbought") and states: **"Use ONLY the
-numbers in each dossier; never invent a figure; if a field is null, say
-'unknown'."** Output is schema-only JSON; anything else → fallback.
+## Anti-hallucination (all stages)
+
+Dossiers carry every number; prompts embed fixed reference thresholds (e.g.
+"PE<20 cheap, rev_growth>15% strong, RSI>70 overbought, target_upside>20% rich")
+and state: **"Use ONLY the numbers in each dossier; never invent a figure; null →
+'unknown'."** Output is schema-only JSON; anything else → that stage's fallback.
 
 ## Performance / safety
 
 Runs in the daily pre-market watchdog ensemble step (`_run_daily_ensemble`,
-fail-open). Dossier inputs are fetched concurrently and cached (`fetch_info`
-TTL, yfinance price cache, sentiment 30-min cache). The LLM call keeps its
-existing 120s subprocess timeout. Any failure (fetch, LLM, parse) degrades to
-the rule-rank fallback; nothing raises into the watchdog.
+fail-open). Dossier inputs fetched concurrently + cached (`fetch_info` TTL,
+yfinance price cache, sentiment 30-min cache). Each LLM call keeps the existing
+120s subprocess timeout; ~3 calls/day total. Every failure degrades to a
+deterministic fallback; nothing raises.
 
 ## Config additions (`config.py`)
 
 ```python
-AGENT_DOSSIER_WORKERS = 12          # concurrent per-candidate data fetches
-AGENT_INCLUDE_NEWS = True           # include news/sentiment in the dossier
+AGENT_DOSSIER_WORKERS = 12               # concurrent per-candidate data fetches
+AGENT_INCLUDE_NEWS = True                # include news/sentiment in the dossier
+AGENT_SHORTLIST_N = 8                    # triage output → deep-dive set
 AGENT_RSI_PERIOD = 14
-AGENT_REL_STRENGTH_LOOKBACK_DAYS = 63   # ~3 months vs SPY
+AGENT_REL_STRENGTH_LOOKBACK_DAYS = 63    # ~3 months vs SPY
+# ENSEMBLE_TOP_N (=4) is the final PM pick count (existing).
 ```
 
 ## Error handling
 
-Fail-open throughout: a per-ticker fetch failure → that dossier's affected
-fields are `None`; an empty pool → empty picks; an LLM failure / unparseable
-output / wrong ticker / wrong count → rule-rank fallback. No path raises.
+Fail-open throughout: per-ticker fetch failure → that dossier's affected fields
+`None`; empty pool → empty picks; triage/analyst/PM LLM failure / unparseable /
+wrong tickers / wrong count → that stage's deterministic fallback. No path raises.
 
 ## Testing (TDD)
 
 - **dossier (pure, the core):** `build_dossier` with injected info/ohlcv/spy/news
-  → correct nested fields; missing inputs → `None` fields, no crash; `_rsi`,
-  `_pct_from`, `_rel_strength` math on synthetic series; news section formats
-  count/score/headlines and is omitted/empty when `AGENT_INCLUDE_NEWS` off.
-- **investor orchestration:** with injected fetchers, dossiers built for the
-  whole pool; the prompt contains the dossiers; valid LLM verdict JSON →
-  enriched picks with `{signal,confidence,thesis,risks,catalysts}`; hallucinated
-  ticker / missing picks / LLM None → rule-rank fallback; owned excluded;
-  `buy_candidates.json` picks include `ticker` (back-compat) + the new fields.
-- **regression:** existing `tests/test_investor_agent.py` select tests still pass
-  (fallback path unchanged in shape).
+  → correct nested fields; missing inputs → `None`, no crash; `_rsi`, `_pct_from`,
+  `_rel_strength` math on synthetic series; `compact_line` format; news section
+  omitted when news=None.
+- **triage:** valid LLM list → that shortlist (⊆ pool, ≤ N); bad/empty → rule-rank
+  shortlist.
+- **analyst:** valid verdict JSON over the shortlist → per-candidate fields incl.
+  bull/bear; hallucinated ticker dropped; LLM None → deterministic neutral verdicts.
+- **PM:** valid picks ⊆ shortlist, exactly ENSEMBLE_TOP_N → enriched picks;
+  bad/None → top-N by confidence fallback.
+- **end-to-end / orchestration:** injected fetchers + a stage-aware fake `llm_fn`
+  → enriched `buy_candidates.json` with `ticker` (back-compat) + analysis fields;
+  owned excluded; all-LLM-fail → rule-rank top-N (matches today's fallback shape).
+- **regression:** existing `tests/test_investor_agent.py` select tests still pass.
 
 ## Rollout / verification
 
 1. Unit tests pass; full suite green.
-2. Offline dry-run: injected pool + fake info/ohlcv/news + a fake `llm_fn`
-   returning verdict JSON → enriched `buy_candidates.json`.
+2. Offline dry-run: injected pool + fake info/ohlcv/news + a stage-aware fake
+   `llm_fn` → enriched `buy_candidates.json` (triage→analyst→PM path exercised).
 3. Docs: README agent section + `docs/system_overview.html` (investor card) +
-   `docs/architecture.html` (agent `SUB.agent` detail flow) updated to show the
-   dossier → analyst-verdict → pick pipeline.
+   `docs/architecture.html` (`SUB.agent` detail flow) updated to the
+   dossier → triage → analyst → PM pipeline.
 
 ## Build phases (for the implementation plan)
 
-1. config knobs + `quant/agent/dossier.py` (pure) + tests.
-2. `investor.py` dossier orchestration (fetch pool data concurrently) + tests.
-3. richer prompt + structured verdict parse + enriched picks + fallback + tests.
+1. config knobs + `quant/agent/dossier.py` (pure: build_dossier + helpers + compact_line) + tests.
+2. dossier-fetch orchestration in `investor.py` (concurrent pool fetch → dossiers) + tests.
+3. Stage A/B/C prompts + parsers + per-stage fallbacks + enriched picks + tests.
 4. docs + dry-run.
