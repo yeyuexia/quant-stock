@@ -1,0 +1,324 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Quant System — Interactive Architecture</title>
+<style>
+  :root{
+    --bg:#0b0f14; --panel:#141b24; --line:#26303d; --ink:#e6edf3; --muted:#9aa7b4; --faint:#6b7785;
+    --signal:#3b82f6; --select:#a855f7; --timing:#f59e0b; --exec:#22c55e; --safety:#ef4444;
+    --data:#14b8a6; --accent:#38bdf8;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;height:100%;overflow:hidden;background:var(--bg);color:var(--ink);
+    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif}
+  #stage{position:fixed;inset:0}
+  svg{width:100%;height:100%;display:block;cursor:grab;touch-action:none}
+  svg.panning{cursor:grabbing}
+  .edge{fill:none;stroke:#3a4655;stroke-width:1.6;opacity:.7;transition:stroke .15s,opacity .15s,stroke-width .15s}
+  .edge.daily{stroke-dasharray:6 5;stroke:#a855f7;opacity:.55}
+  .edge.hot{stroke:var(--accent);opacity:1;stroke-width:2.6}
+  .edge.dim{opacity:.12}
+  .node{cursor:grab}
+  .node.dragging{cursor:grabbing}
+  .node rect{stroke-width:1.5;rx:12;ry:12;transition:filter .15s, opacity .15s}
+  .node:hover rect, .node.sel rect{filter:drop-shadow(0 0 10px var(--glow))}
+  .node.dim{opacity:.28}
+  .node .lbl{fill:var(--ink);font-size:14px;font-weight:600;pointer-events:none}
+  .node .sub{fill:var(--faint);font-size:10.5px;pointer-events:none}
+  .node .file{fill:var(--muted);font-size:10px;font-family:ui-monospace,Menlo,monospace;pointer-events:none}
+
+  /* HUD */
+  .hud{position:fixed;left:18px;top:16px;z-index:5;max-width:330px}
+  .hud h1{font-size:1.12rem;margin:0 0 4px}
+  .hud p{margin:0;color:var(--muted);font-size:.82rem}
+  .legend{position:fixed;left:18px;bottom:16px;z-index:5;background:rgba(20,27,36,.85);backdrop-filter:blur(8px);
+    border:1px solid var(--line);border-radius:12px;padding:11px 14px;font-size:.78rem;color:var(--muted)}
+  .legend b{display:block;color:var(--faint);text-transform:uppercase;letter-spacing:.08em;font-size:.66rem;margin-bottom:7px;font-weight:600}
+  .legend .row{display:flex;align-items:center;gap:8px;margin:4px 0}
+  .legend .k{width:11px;height:11px;border-radius:3px;display:inline-block}
+  .legend .ek{width:18px;height:0;border-top:2px dashed #a855f7;display:inline-block}
+
+  .controls{position:fixed;right:18px;top:16px;z-index:5;display:flex;flex-direction:column;gap:8px}
+  .controls button{width:42px;height:42px;border-radius:11px;border:1px solid var(--line);background:rgba(20,27,36,.9);
+    color:var(--ink);font-size:1.15rem;cursor:pointer;display:flex;align-items:center;justify-content:center;backdrop-filter:blur(6px)}
+  .controls button:hover{border-color:var(--accent);color:var(--accent)}
+  .controls button.sm{font-size:.66rem;letter-spacing:.04em}
+
+  /* Detail drawer */
+  .drawer{position:fixed;top:0;right:0;height:100%;width:360px;max-width:88vw;z-index:9;
+    background:linear-gradient(180deg,#121922,#0e141b);border-left:1px solid var(--line);
+    transform:translateX(102%);transition:transform .26s cubic-bezier(.4,0,.2,1);
+    box-shadow:-20px 0 60px rgba(0,0,0,.4);display:flex;flex-direction:column}
+  .drawer.open{transform:translateX(0)}
+  .drawer .top{padding:20px 22px 14px;border-bottom:1px solid var(--line)}
+  .drawer .chip{display:inline-block;font-size:.66rem;text-transform:uppercase;letter-spacing:.1em;
+    padding:3px 10px;border-radius:999px;color:#0b0f14;font-weight:700;margin-bottom:10px}
+  .drawer h2{margin:0;font-size:1.25rem}
+  .drawer .file{font-family:ui-monospace,Menlo,monospace;font-size:.82rem;color:var(--accent);margin-top:3px}
+  .drawer .bd{padding:18px 22px;overflow:auto;color:var(--muted);font-size:.9rem;line-height:1.62}
+  .drawer .bd h3{color:var(--ink);font-size:.78rem;text-transform:uppercase;letter-spacing:.08em;margin:16px 0 6px;color:var(--faint)}
+  .drawer .conns a{display:block;color:var(--accent);font-size:.86rem;padding:3px 0;cursor:pointer}
+  .drawer .x{position:absolute;top:16px;right:16px;width:32px;height:32px;border-radius:9px;border:1px solid var(--line);
+    background:transparent;color:var(--muted);cursor:pointer;font-size:1.1rem}
+  .drawer .x:hover{color:var(--ink);border-color:var(--accent)}
+  .hint{position:fixed;bottom:16px;right:18px;z-index:5;color:var(--faint);font-size:.76rem;background:rgba(20,27,36,.7);
+    border:1px solid var(--line);border-radius:8px;padding:6px 11px}
+  a.back{color:var(--accent);font-size:.8rem;text-decoration:none}
+</style>
+</head>
+<body>
+<div class="hud">
+  <h1>System Architecture</h1>
+  <p>Drag the canvas to pan · scroll / +&minus; to zoom · drag a node to move it · <strong>click a node</strong> for details. <a class="back" href="system_overview.html">← narrative overview</a></p>
+</div>
+
+<div class="controls">
+  <button id="zin" title="Zoom in">+</button>
+  <button id="zout" title="Zoom out">−</button>
+  <button id="fit" class="sm" title="Fit to screen">FIT</button>
+  <button id="reset" class="sm" title="Reset layout">RST</button>
+</div>
+
+<div class="legend">
+  <b>Layers</b>
+  <div class="row"><i class="k" style="background:var(--signal)"></i>Signals</div>
+  <div class="row"><i class="k" style="background:var(--select)"></i>Selection (AI)</div>
+  <div class="row"><i class="k" style="background:var(--timing)"></i>Timing</div>
+  <div class="row"><i class="k" style="background:var(--exec)"></i>Execution</div>
+  <div class="row"><i class="k" style="background:var(--safety)"></i>Policy / Broker</div>
+  <div class="row"><i class="k" style="background:var(--data)"></i>State / Data</div>
+  <div class="row" style="margin-top:7px"><i class="ek"></i>daily LLM trigger</div>
+</div>
+
+<div id="stage">
+  <svg id="svg">
+    <defs>
+      <pattern id="grid" width="40" height="40" patternUnits="userSpaceOnUse">
+        <path d="M40 0H0V40" fill="none" stroke="#161d26" stroke-width="1"/>
+      </pattern>
+      <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+        <path d="M0 0 L10 5 L0 10 z" fill="#4a5969"/>
+      </marker>
+      <marker id="arrowHot" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+        <path d="M0 0 L10 5 L0 10 z" fill="var(--accent)"/>
+      </marker>
+    </defs>
+    <rect id="bg" x="-4000" y="-4000" width="8000" height="8000" fill="url(#grid)"/>
+    <g id="viewport">
+      <g id="edges"></g>
+      <g id="nodes"></g>
+    </g>
+  </svg>
+</div>
+
+<div class="drawer" id="drawer">
+  <button class="x" id="drawerX">✕</button>
+  <div class="top"><span class="chip" id="dChip"></span><h2 id="dTitle"></h2><div class="file" id="dFile"></div></div>
+  <div class="bd"><div id="dBody"></div><h3>Connections</h3><div class="conns" id="dConns"></div></div>
+</div>
+
+<div class="hint" id="hint">scroll to zoom · drag to pan</div>
+
+<script>
+const LAYER = {
+  signal:{c:'#3b82f6',label:'Signals'}, select:{c:'#a855f7',label:'Selection (AI)'},
+  timing:{c:'#f59e0b',label:'Timing'}, exec:{c:'#22c55e',label:'Execution'},
+  safety:{c:'#ef4444',label:'Policy / Broker'}, data:{c:'#14b8a6',label:'State / Data'}
+};
+// id, label, file, layer, column(0..4), row, detail
+const NODES = [
+  {id:'discovery', label:'Discovery', file:'discovery.py', layer:'signal', col:0, row:0,
+    detail:'Weekly job that builds the tradable universe (S&P 500 + Nasdaq-100 + S&P 400) into the auto-watchlist used by the screens.'},
+  {id:'momentum', label:'Momentum / ETF rotation', file:'momentum.py', layer:'signal', col:0, row:1,
+    detail:'Dual-momentum relative-strength ranking that drives the core ETF sleeve and the aggressive leveraged-ETF sleeve.'},
+  {id:'macro', label:'Macro regime', file:'macro.py', layer:'signal', col:0, row:2,
+    detail:'FRED-based macro overlay. Shrinks risk in hostile regimes and can trigger defensive (macro-flip) exits.'},
+  {id:'screener', label:'CANSLIM screener', file:'screener.py', layer:'signal', col:0, row:3,
+    detail:'Growth screen: quarterly EPS/revenue growth pre-filter, relative-strength percentile, and VCP base detection with a buy pivot. One of the two ensemble strategies.'},
+  {id:'value', label:'Value + Quality screen', file:'value_screen.py', layer:'signal', col:0, row:4,
+    detail:'Cheap-but-improving screen. Hard liquidity/price/cap/anti-trap gates, then a winsorized cross-sectional z-score blending value (FCF yield, earnings yield, EV/EBITDA, book/market), quality (ROE, low debt) and improving fundamentals. The "low value, high potential" source.'},
+
+  {id:'strategies', label:'Strategy runner', file:'strategies.py', layer:'select', col:1, row:1,
+    detail:'The isolated-strategy contract + parallel runner. Each strategy writes its own result file; a strategy that errors or hangs is skipped (bounded by a timeout) so one can never stall the others or the watchdog.'},
+  {id:'agent', label:'AI agent · top 4', file:'investor_agent.py', layer:'select', col:1, row:2.4,
+    detail:'The single Claude agent. Merges both strategy lists, dedupes with consensus weighting, excludes owned names, calls the claude CLI for the top-4 picks with rationale, validates the JSON, and falls back to a deterministic rule ranking on any LLM failure. Runs ONCE per day.'},
+  {id:'candidates', label:'buy_candidates.json', file:'.cache/', layer:'data', col:1, row:3.7,
+    detail:'The agent’s daily shortlist — the only names the watchdog will consider buying that day. A staleness guard makes the watchdog ignore it (and fall back to the screener) if the daily job hasn’t refreshed it.'},
+
+  {id:'watchdog', label:'Watchdog', file:'watchdog.py', layer:'timing', col:2, row:1.6,
+    detail:'Daily + intraday monitor. Daily (pre-market): sync, attach stops, macro, and the once-a-day ensemble trigger. Intraday (every 5 min, RTH): coded volume-breakout buy signals from the candidate list, stop-loss enforcement (auto market-sell on breach — works on fractional shares), and SEPA exits. No LLM on this loop.'},
+  {id:'sepa', label:'SEPA exits', file:'sepa_exits.py', layer:'timing', col:2, row:3,
+    detail:'Pure Minervini exit rules: R-multiple scale-outs (2R/3R), failed-breakout, climax-top detection, and a 21-EMA trailing backstop. The watchdog calls into it.'},
+
+  {id:'rebalancer', label:'Rebalancer', file:'rebalancer.py', layer:'exec', col:3, row:0.3,
+    detail:'Builds two-tranche target weights from the signals, sends the tiny actionable slice through orders.py, and writes the rest to the pending plan for the intraday executor.'},
+  {id:'planner', label:'Planner', file:'planner.py', layer:'exec', col:3, row:1.4,
+    detail:'Pure functions enriching raw order intents with execution tier, price limits and slice counts. No I/O.'},
+  {id:'plan', label:'pending_plan.json', file:'.cache/', layer:'data', col:3, row:2.5,
+    detail:'The on-disk daily plan. Written by the rebalancer, worked tick-by-tick by the executor.'},
+  {id:'executor', label:'Executor', file:'executor.py', layer:'exec', col:3, row:3.6,
+    detail:'Intraday driver (every 10 min, RTH). Consumes the pending plan, evaluates 5 circuit breakers (SPY drop, VIX spike, single-name, news, macro flip), and submits sliced marketable-limit orders.'},
+
+  {id:'orders', label:'Orders · policy + safety', file:'orders.py', layer:'safety', col:4, row:1.4,
+    detail:'The policy chokepoint EVERY order passes through: HALT kill-switch, paper/live guard, cash-aware gate, daily caps, large-order approval. Also reconciles state (sync_state) and adopts broker-imported positions into a sleeve.'},
+  {id:'broker', label:'Broker (Alpaca SDK)', file:'broker.py', layer:'safety', col:4, row:2.6,
+    detail:'Thin Alpaca wrapper — pure I/O, raises BrokerError, leaks no SDK objects. Live trading requires two explicit env flags; otherwise everything is paper.'},
+  {id:'portfolio', label:'portfolio.json', file:'state', layer:'data', col:4, row:3.7,
+    detail:'The cached source-of-truth snapshot (positions, cash, tranche tags, stop ids). Written by sync_state, read across the system.'},
+  {id:'alpaca', label:'Alpaca (paper)', file:'broker', layer:'safety', col:4, row:0.3,
+    detail:'The brokerage. Paper account by default — real prices, simulated money.'},
+];
+const EDGES = [
+  ['discovery','screener'],['discovery','value'],
+  ['screener','strategies'],['value','strategies'],
+  ['strategies','agent'],['agent','candidates'],['candidates','watchdog','hot'],
+  ['watchdog','sepa'],['watchdog','orders','hot'],
+  ['watchdog','strategies','daily'],
+  ['momentum','rebalancer'],['macro','rebalancer'],['macro','watchdog'],
+  ['rebalancer','planner'],['planner','plan'],['plan','executor'],
+  ['rebalancer','orders'],['executor','orders'],
+  ['orders','broker'],['broker','alpaca'],['orders','portfolio'],
+];
+
+const NW=186, NH=58, COLW=270, ROWH=104, OX=70, OY=70;
+const byId = Object.fromEntries(NODES.map(n=>[n.id,n]));
+function layout(){ NODES.forEach(n=>{ n.x = OX + n.col*COLW; n.y = OY + n.row*ROWH; }); }
+layout();
+
+const SVGNS='http://www.w3.org/2000/svg';
+const gEdges=document.getElementById('edges'), gNodes=document.getElementById('nodes');
+const vp=document.getElementById('viewport'), svg=document.getElementById('svg');
+const edgeEls=[], nodeEls={};
+
+EDGES.forEach(e=>{
+  const p=document.createElementNS(SVGNS,'path');
+  p.setAttribute('class','edge'+(e[2]==='daily'?' daily':'')+(e[2]==='hot'?' hot':''));
+  p.setAttribute('marker-end', e[2]==='hot'?'url(#arrowHot)':'url(#arrow)');
+  p.dataset.from=e[0]; p.dataset.to=e[1];
+  gEdges.appendChild(p); edgeEls.push(p);
+});
+NODES.forEach(n=>{
+  const g=document.createElementNS(SVGNS,'g'); g.setAttribute('class','node'); g.dataset.id=n.id;
+  const r=document.createElementNS(SVGNS,'rect');
+  r.setAttribute('width',NW); r.setAttribute('height',NH);
+  r.setAttribute('fill','#141b24'); r.setAttribute('stroke',LAYER[n.layer].c);
+  g.style.setProperty('--glow', LAYER[n.layer].c);
+  const bar=document.createElementNS(SVGNS,'rect');
+  bar.setAttribute('width',5); bar.setAttribute('height',NH); bar.setAttribute('rx',2);
+  bar.setAttribute('fill',LAYER[n.layer].c);
+  const lbl=document.createElementNS(SVGNS,'text'); lbl.setAttribute('class','lbl');
+  lbl.setAttribute('x',16); lbl.setAttribute('y',24); lbl.textContent=n.label;
+  const file=document.createElementNS(SVGNS,'text'); file.setAttribute('class','file');
+  file.setAttribute('x',16); file.setAttribute('y',42); file.textContent=n.file;
+  g.appendChild(r); g.appendChild(bar); g.appendChild(lbl); g.appendChild(file);
+  gNodes.appendChild(g); nodeEls[n.id]=g;
+});
+
+function cx(n){return n.x+NW/2} function cy(n){return n.y+NH/2}
+function renderEdges(){
+  edgeEls.forEach(p=>{
+    const a=byId[p.dataset.from], b=byId[p.dataset.to];
+    let x1,y1,x2,y2;
+    if(b.x>=a.x){ x1=a.x+NW; y1=cy(a); x2=b.x; y2=cy(b); }
+    else { x1=a.x; y1=cy(a); x2=b.x+NW; y2=cy(b); }      // backward edge: exit left
+    const dx=Math.max(40,Math.abs(x2-x1)*0.5);
+    const c1x = x1 + (x2>=x1?dx:-dx), c2x = x2 - (x2>=x1?dx:-dx);
+    p.setAttribute('d',`M${x1},${y1} C${c1x},${y1} ${c2x},${y2} ${x2},${y2}`);
+  });
+}
+function renderNodes(){ NODES.forEach(n=>{ nodeEls[n.id].setAttribute('transform',`translate(${n.x},${n.y})`); }); }
+renderNodes(); renderEdges();
+
+/* ---------- pan / zoom ---------- */
+let tx=0, ty=0, k=1;
+function apply(){ vp.setAttribute('transform',`translate(${tx} ${ty}) scale(${k})`);
+  document.getElementById('bg').setAttribute('transform',`translate(${tx} ${ty}) scale(${k})`); }
+function clampK(v){return Math.max(0.35,Math.min(2.6,v));}
+function zoomAt(px,py,factor){
+  const nk=clampK(k*factor); const wx=(px-tx)/k, wy=(py-ty)/k;
+  tx=px-wx*nk; ty=py-wy*nk; k=nk; apply();
+}
+svg.addEventListener('wheel',e=>{ e.preventDefault();
+  const r=svg.getBoundingClientRect();
+  zoomAt(e.clientX-r.left, e.clientY-r.top, Math.exp(-e.deltaY*0.0016));
+  document.getElementById('hint').style.opacity=0;
+},{passive:false});
+document.getElementById('zin').onclick=()=>zoomAt(svg.clientWidth/2,svg.clientHeight/2,1.25);
+document.getElementById('zout').onclick=()=>zoomAt(svg.clientWidth/2,svg.clientHeight/2,0.8);
+document.getElementById('reset').onclick=()=>{layout();renderNodes();renderEdges();fit();};
+function fit(){
+  const xs=NODES.map(n=>n.x), ys=NODES.map(n=>n.y);
+  const minX=Math.min(...xs)-40, minY=Math.min(...ys)-40;
+  const maxX=Math.max(...xs)+NW+40, maxY=Math.max(...ys)+NH+40;
+  const w=svg.clientWidth, h=svg.clientHeight;
+  k=clampK(Math.min(w/(maxX-minX), h/(maxY-minY)));
+  tx=(w-(maxX-minX)*k)/2 - minX*k; ty=(h-(maxY-minY)*k)/2 - minY*k; apply();
+}
+document.getElementById('fit').onclick=fit;
+
+/* ---------- pointer: pan vs node-drag vs click ---------- */
+let mode=null, start=null, dragNode=null, moved=0;
+svg.addEventListener('pointerdown',e=>{
+  const ng=e.target.closest('.node');
+  start={x:e.clientX,y:e.clientY,tx,ty}; moved=0;
+  if(ng){ mode='node'; dragNode=byId[ng.dataset.id]; start.nx=dragNode.x; start.ny=dragNode.y;
+    ng.classList.add('dragging'); }
+  else { mode='pan'; svg.classList.add('panning'); }
+  svg.setPointerCapture(e.pointerId);
+});
+svg.addEventListener('pointermove',e=>{
+  if(!mode) return;
+  const dx=e.clientX-start.x, dy=e.clientY-start.y; moved=Math.max(moved,Math.abs(dx)+Math.abs(dy));
+  if(mode==='pan'){ tx=start.tx+dx; ty=start.ty+dy; apply(); }
+  else if(mode==='node'){ dragNode.x=start.nx+dx/k; dragNode.y=start.ny+dy/k;
+    nodeEls[dragNode.id].setAttribute('transform',`translate(${dragNode.x},${dragNode.y})`); renderEdges(); }
+});
+svg.addEventListener('pointerup',e=>{
+  if(mode==='node'){ nodeEls[dragNode.id].classList.remove('dragging');
+    if(moved<5) openDrawer(dragNode.id); }
+  else if(mode==='pan' && moved<5){ closeDrawer(); }
+  mode=null; dragNode=null; svg.classList.remove('panning');
+});
+
+/* ---------- hover highlight ---------- */
+gNodes.addEventListener('pointerover',e=>{ const ng=e.target.closest('.node'); if(ng) highlight(ng.dataset.id); });
+gNodes.addEventListener('pointerout',e=>{ if(!document.getElementById('drawer').classList.contains('open')) clearHi(); });
+function neighbors(id){ const s=new Set([id]);
+  EDGES.forEach(e=>{ if(e[0]===id)s.add(e[1]); if(e[1]===id)s.add(e[0]); }); return s; }
+function highlight(id){
+  const keep=neighbors(id);
+  NODES.forEach(n=>nodeEls[n.id].classList.toggle('dim',!keep.has(n.id)));
+  edgeEls.forEach(p=>{ const on=p.dataset.from===id||p.dataset.to===id;
+    p.classList.toggle('dim',!on); p.classList.toggle('hot',on); });
+}
+function clearHi(){ NODES.forEach(n=>nodeEls[n.id].classList.remove('dim','sel'));
+  edgeEls.forEach((p,i)=>{ p.classList.remove('dim'); p.classList.toggle('hot', EDGES[i][2]==='hot'); }); }
+
+/* ---------- detail drawer ---------- */
+const drawer=document.getElementById('drawer');
+function openDrawer(id){
+  const n=byId[id]; const L=LAYER[n.layer];
+  document.getElementById('dChip').textContent=L.label; document.getElementById('dChip').style.background=L.c;
+  document.getElementById('dTitle').textContent=n.label;
+  document.getElementById('dFile').textContent=n.file;
+  document.getElementById('dBody').innerHTML='<p>'+n.detail+'</p>';
+  const ins=EDGES.filter(e=>e[1]===id).map(e=>byId[e[0]]);
+  const outs=EDGES.filter(e=>e[0]===id).map(e=>byId[e[1]]);
+  const conns=document.getElementById('dConns'); conns.innerHTML='';
+  outs.forEach(t=>conns.insertAdjacentHTML('beforeend',`<a data-go="${t.id}">→ ${t.label}</a>`));
+  ins.forEach(t=>conns.insertAdjacentHTML('beforeend',`<a data-go="${t.id}">← ${t.label}</a>`));
+  conns.querySelectorAll('a').forEach(a=>a.onclick=()=>openDrawer(a.dataset.go));
+  drawer.classList.add('open');
+  NODES.forEach(x=>nodeEls[x.id].classList.remove('sel')); nodeEls[id].classList.add('sel'); highlight(id);
+}
+function closeDrawer(){ drawer.classList.remove('open'); clearHi(); }
+document.getElementById('drawerX').onclick=closeDrawer;
+
+window.addEventListener('resize',fit);
+fit();
+setTimeout(()=>{document.getElementById('hint').style.transition='opacity .6s';},2500);
+</script>
+</body>
+</html>
