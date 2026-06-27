@@ -135,6 +135,57 @@ def build_dossier(ticker, *, info, ohlcv=None, spy_ohlcv=None, news=None, estima
     }
 
 
+# (z_key, dossier section, metric field, lower-is-better?)
+_PEER_METRICS = [("pe_z", "valuation", "pe", True), ("ps_z", "valuation", "ps", True),
+                 ("ev_ebitda_z", "valuation", "ev_ebitda", True),
+                 ("rev_growth_z", "growth", "rev_growth", False),
+                 ("gross_margin_z", "quality", "gross_margin", False)]
+
+
+def _assign_z(group, zkey, section, metric, lower_better):
+    vals = [g[section].get(metric) for g in group]
+    zs = _zscore(vals)
+    for g, z in zip(group, zs):
+        g["peer_relative"][zkey] = (-z if (z is not None and lower_better) else z)
+
+
+def add_peer_relative(dossiers, *, min_group: int) -> None:
+    if not dossiers:
+        return
+    by_sector = {}
+    for dos in dossiers:
+        by_sector.setdefault(dos.get("sector"), []).append(dos)
+    for zkey, section, metric, lower_better in _PEER_METRICS:
+        for sector, group in by_sector.items():
+            target = group if (sector is not None and len(group) >= min_group) else None
+            if target is None:
+                continue
+            _assign_z(target, zkey, section, metric, lower_better)
+        # pool-wide fallback for dossiers still unscored on this metric
+        unscored = [dos for dos in dossiers if dos["peer_relative"][zkey] is None]
+        if len(unscored) >= 2:
+            _assign_z(unscored, zkey, section, metric, lower_better)
+
+
+def _round2(x):
+    return round(float(x), 2) if x is not None else None
+
+
+def suggested_levels(dossier, *, buy_band_atr, stop_atr_mult, target_r) -> dict:
+    pa = dossier.get("price_action", {})
+    price, atr14 = pa.get("price"), pa.get("atr14")
+    if price is None or atr14 is None:
+        return {"buy_low": None, "buy_high": None, "stop_loss": None, "take_profit": None}
+    buy_low = price - buy_band_atr * atr14
+    buy_high = price + buy_band_atr * atr14
+    vol_stop = buy_low - stop_atr_mult * atr14
+    swing = pa.get("swing_low_20")
+    stop = min(vol_stop, swing) if swing is not None else vol_stop
+    take_profit = buy_high + target_r * (buy_high - stop)
+    return {"buy_low": _round2(buy_low), "buy_high": _round2(buy_high),
+            "stop_loss": _round2(stop), "take_profit": _round2(take_profit)}
+
+
 def _fmt(x, pct=False):
     if x is None:
         return "?"

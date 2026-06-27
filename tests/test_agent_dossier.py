@@ -71,3 +71,45 @@ def test_compact_line_contains_ticker_and_key_metrics():
     dos = d.build_dossier("X", info={"trailingPE": 18.0, "currentPrice": 120.0}, ohlcv=None)
     line = d.compact_line(dos)
     assert "X" in line and "PE" in line
+
+
+def _mk(ticker, sector, pe, ps, rev, gm):
+    return {"ticker": ticker, "sector": sector,
+            "valuation": {"pe": pe, "ps": ps, "ev_ebitda": None},
+            "growth": {"rev_growth": rev}, "quality": {"gross_margin": gm},
+            "peer_relative": {"pe_z": None, "ps_z": None, "ev_ebitda_z": None,
+                              "rev_growth_z": None, "gross_margin_z": None}}
+
+
+def test_add_peer_relative_sector_group():
+    ds = [_mk("A", "Tech", 10, 2, 0.3, 0.5), _mk("B", "Tech", 20, 4, 0.2, 0.4),
+          _mk("C", "Tech", 30, 6, 0.1, 0.3)]
+    d.add_peer_relative(ds, min_group=3)
+    # lower-is-better PE negated: cheapest A gets the HIGHEST pe_z
+    assert ds[0]["peer_relative"]["pe_z"] > ds[2]["peer_relative"]["pe_z"]
+    # higher-is-better rev_growth: A highest gets highest z
+    assert ds[0]["peer_relative"]["rev_growth_z"] > ds[2]["peer_relative"]["rev_growth_z"]
+
+
+def test_add_peer_relative_small_sector_falls_back_to_pool():
+    ds = [_mk("A", "Tech", 10, 2, 0.3, 0.5), _mk("B", "Energy", 20, 4, 0.2, 0.4),
+          _mk("C", "Energy", 30, 6, 0.1, 0.3)]
+    d.add_peer_relative(ds, min_group=3)   # no sector has 3 → pool-wide
+    assert ds[0]["peer_relative"]["pe_z"] is not None
+
+
+def test_suggested_levels():
+    dos = {"price_action": {"price": 100.0, "atr14": 4.0, "swing_low_20": 95.0}}
+    lv = d.suggested_levels(dos, buy_band_atr=0.5, stop_atr_mult=1.5, target_r=2.5)
+    assert lv["buy_low"] == pytest.approx(98.0)     # 100 - 0.5*4
+    assert lv["buy_high"] == pytest.approx(102.0)   # 100 + 0.5*4
+    # stop = min(swing_low_20=95, buy_low - 1.5*4 = 92) = 92
+    assert lv["stop_loss"] == pytest.approx(92.0)
+    # tp = buy_high + 2.5*(buy_high - stop) = 102 + 2.5*10 = 127
+    assert lv["take_profit"] == pytest.approx(127.0)
+
+
+def test_suggested_levels_failopen():
+    lv = d.suggested_levels({"price_action": {"price": None, "atr14": None}},
+                            buy_band_atr=0.5, stop_atr_mult=1.5, target_r=2.5)
+    assert lv == {"buy_low": None, "buy_high": None, "stop_loss": None, "take_profit": None}
