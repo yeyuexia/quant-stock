@@ -28,9 +28,12 @@ def _gt(v, th):
 def passes(f: Fundamentals, track: str) -> bool:
     if track == "A":
         c = config.VS_TRACK_A
+        # Require a real signal of each class actually present — otherwise a name
+        # with only margin + leverage data slips through with its growth and
+        # liquidity gates never verified (yfinance often returns partial .info).
         cheap = any(x is not None for x in (f.peg, f.pe))
-        growth = any(x is not None for x in (f.rev_growth, f.eps_growth, f.gross_margin))
-        solv = any(x is not None for x in (f.debt_equity, f.current_ratio, f.fcf))
+        growth = any(x is not None for x in (f.rev_growth, f.eps_growth))   # margin ≠ growth
+        solv = any(x is not None for x in (f.current_ratio, f.fcf))         # D/E alone insufficient
         ok = (_lt(f.peg, c["peg_max"]) and _lt(f.pe, c["pe_max"])
               and _gt(f.rev_growth, c["rev_growth_min"]) and _gt(f.eps_growth, c["eps_growth_min"])
               and _gt(f.gross_margin, c["gross_margin_min"])
@@ -39,7 +42,7 @@ def passes(f: Fundamentals, track: str) -> bool:
         return ok and cheap and growth and solv
     c = config.VS_TRACK_B
     cheap = f.ps is not None
-    growth = any(x is not None for x in (f.rev_growth, f.gross_margin))
+    growth = f.rev_growth is not None          # revenue growth IS the growth signal here
     runway = _runway_q(f)
     solv = (f.debt_equity is not None) or (runway is not None)
     ok = (_lt(f.ps, c["ps_max"]) and _gt(f.rev_growth, c["rev_growth_min"])

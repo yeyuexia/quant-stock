@@ -66,3 +66,15 @@ def test_score_rewards_cashflow_positive_over_barely_burning():
     positive = Fundamentals(**base, fcf=1e8, total_cash=5e9)   # inf runway
     barely = Fundamentals(**base, fcf=-1.0, total_cash=5e9)    # huge finite runway → 1.0
     assert vt.score(positive, "B") >= vt.score(barely, "B")
+
+
+def test_partial_data_without_growth_or_liquidity_signal_rejected():
+    # cheap (peg) + margin + leverage present, but NO real growth metric and NO
+    # current_ratio/fcf → the growth & liquidity gates were never verified, so a
+    # partial-.info name must NOT slip through Track A.
+    f = Fundamentals(ticker="X", market_cap=5e9, is_profitable=True, pe=None, peg=0.5,
+                     ev_ebitda=None, ps=None, rev_growth=None, eps_growth=None,
+                     gross_margin=0.5, op_margin=None, debt_equity=0.2,
+                     current_ratio=None, fcf=None, total_cash=None)
+    assert vt.classify(f) == "A"
+    assert vt.passes(f, "A") is False
