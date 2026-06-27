@@ -291,6 +291,41 @@ Six indicators scored from −1 (bearish) to +1 (bullish):
 
 The composite score adjusts equity allocation between 40%–100% of target. When the regime flips to contraction, the watchdog also exits the aggressive-tranche leveraged ETFs via `orders.submit_exit`.
 
+### Ensemble strategy pipeline
+
+Runs multiple independent stock-screening strategies in isolation, aggregates their results, and uses an LLM-based investor agent to rank final buy candidates. Core components:
+
+**Isolated strategies** → `.cache/strategies/*.json`:
+- `value_screen.py` (Value score) — run via `value_screen.run()`
+- CANSLIM adapter — wrapped from `screener.screen_stocks()` as `_canslim_rows()`
+
+Each strategy writes its result to `.cache/strategies/{name}.json` with schema: `{strategy, generated_at, rows: [{ticker, score, rank, factors}]}`. A strategy failure is logged and skipped; others continue (isolation).
+
+**Agent consensus** → `.cache/buy_candidates.json`:
+- `investor_agent.select_candidates()` reads all `.cache/strategies/*.json` files
+- Merges rows across strategies: dedupes tickers, records which strategies voted for each, keeps best rank and highest score
+- Ranks by consensus (tickers appearing in more strategies sort first) then by best rank
+- Calls LLM with the merged pool and per-strategy lists; LLM returns top-`ENSEMBLE_TOP_N` picks (default 4) with rationale
+- If LLM fails or returns unusable output, falls back to rule-ranked list (consensus + rank order)
+- Persists picks to `.cache/buy_candidates.json` with schema: `{generated_at, picks: [{ticker, rationale, strategies:[...]}]}`
+
+**Integration with watchdog**:
+- `watchdog._get_screened_stocks()` reads `.cache/buy_candidates.json` and gates intraday buy signals on the picks list — only candidates approved by the ensemble can trigger auto-buy entries
+
+**Daily entrypoint** (`run_ensemble.py`):
+```python
+python3 run_ensemble.py
+# or via cron (managed by the controller):
+# 45 20 * * 1-5 /Users/zl/works/stock/scripts/cron-wrapper.sh run_ensemble.py
+```
+Runs all strategies, prints the picks (led by consensus), writes `.cache/buy_candidates.json`.
+
+**Configuration** (`config.py`):
+- `ENSEMBLE_STRATEGIES` — list of strategies to run (e.g., `['value', 'canslim']`)
+- `ENSEMBLE_TOP_N` — max buy candidates to keep (default 4)
+- `VS_*` — value screen tuning (threshold, percentile gates)
+- `SCREEN_*` — CANSLIM technical gates (EPS growth, RS, ADR, EMA, base depth)
+
 ## Exit Logic (Take-Profit + Stop-Loss)
 
 Two layers: broker-side brackets (always-on hard stops) and watchdog-driven SEPA rules (daily, core stocks only).
