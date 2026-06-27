@@ -56,3 +56,13 @@ def test_score_orders_cheaper_higher_quality_first():
     cheap = _A(pe=8.0, peg=0.5, rev_growth=0.3, gross_margin=0.5)
     rich = _A(pe=19.0, peg=0.95, rev_growth=0.16, gross_margin=0.31)
     assert vt.score(cheap, "A") > vt.score(rich, "A")
+
+
+def test_score_rewards_cashflow_positive_over_barely_burning():
+    # cash-flow positive (inf runway) must not score BELOW a barely-burning peer
+    base = dict(ticker="B", market_cap=2e9, is_profitable=False, pe=None, peg=None,
+                ev_ebitda=None, ps=4.0, rev_growth=0.4, eps_growth=None, gross_margin=0.5,
+                op_margin=None, debt_equity=0.3, current_ratio=None)
+    positive = Fundamentals(**base, fcf=1e8, total_cash=5e9)   # inf runway
+    barely = Fundamentals(**base, fcf=-1.0, total_cash=5e9)    # huge finite runway → 1.0
+    assert vt.score(positive, "B") >= vt.score(barely, "B")

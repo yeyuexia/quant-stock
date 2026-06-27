@@ -298,7 +298,7 @@ The composite score adjusts equity allocation between 40%–100% of target. When
 Runs multiple independent stock-screening strategies in isolation, aggregates their results, and uses an LLM-based investor agent to rank final buy candidates. Core components:
 
 **Isolated strategies** → `.cache/strategies/*.json`:
-- `value_screen.py` (Value score) — run via `value_screen.run()`
+- `value_screen.py` — two-track (profitable **Track A** / unprofitable-growth **Track B**) screen over the **Russell 3000** (iShares IWV CSV via `discovery.get_russell3000_tickers`, weekly-cached, fail-open). Staged: price/volume pre-filter (`value_prefilter`) → parallel fundamentals (`value_fundamentals.Fundamentals`) → per-track gates + scoring (`value_tracks`, thresholds in `config.VS_TRACK_A`/`VS_TRACK_B`) → rank/interleave. Liquidity gate `VS_MIN_DOLLAR_VOLUME=$5M`. (The CANSLIM screen still uses the Wikipedia watchlist.)
 - CANSLIM adapter — wrapped from `screener.screen_stocks()` as `_canslim_rows()`
 
 Each strategy writes its result to `.cache/strategies/{name}.json` with schema: `{strategy, generated_at, rows: [{ticker, score, rank, factors}]}`. A strategy failure is logged and skipped; others continue (isolation).

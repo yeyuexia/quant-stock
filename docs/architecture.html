@@ -149,7 +149,7 @@ const OVERVIEW = { legend:LAYER, nodes:[
   {id:'momentum',label:'Momentum / ETF rotation',file:'momentum.py',layer:'signal',col:0,row:1,detail:'Dual-momentum relative-strength ranking driving the core ETF sleeve and the aggressive leveraged-ETF sleeve.'},
   {id:'macro',label:'Macro regime',file:'macro.py',layer:'signal',col:0,row:2,detail:'FRED-based macro overlay. Shrinks risk in hostile regimes and can trigger defensive (macro-flip) exits.'},
   {id:'screener',label:'CANSLIM screener',file:'screener.py',layer:'signal',col:0,row:3,detail:'Growth screen: EPS/revenue growth filter, relative-strength percentile, VCP base detection with a buy pivot. One of the two ensemble strategies.'},
-  {id:'value',label:'Value + Quality screen',file:'value_screen.py',layer:'signal',col:0,row:4,detail:'Cheap-but-improving screen: hard gates then a winsorized z-score blending value, quality and improving fundamentals. The other ensemble strategy.'},
+  {id:'value',label:'Value + Quality screen',file:'value_screen.py',layer:'signal',col:0,row:4,detail:'Two-track value screen over the Russell 3000 (iShares IWV): price/volume pre-filter → parallel fundamentals → Track A (profitable bargains) / Track B (unprofitable growth) gates → rank. The other ensemble strategy.'},
   {id:'strategies',label:'Strategy runner',file:'strategies.py',layer:'select',col:1,row:1,detail:'Isolated-strategy contract + parallel runner. Each strategy writes its own file; a hung/erroring one is skipped (timeout-bounded) so it can never stall the others or the watchdog.'},
   {id:'agent',label:'AI agent · top 4',file:'investor_agent.py',layer:'select',col:1,row:2.4,detail:'The single Claude agent. Merges the lists, dedupes with consensus weighting, excludes owned names, asks the claude CLI for the top-4 picks + rationale, and rule-ranks on any LLM failure. Runs ONCE per day.'},
   {id:'candidates',label:'buy_candidates.json',file:'.cache/',layer:'data',col:1,row:3.7,detail:'The agent’s daily shortlist — the only names the watchdog will consider buying. A staleness guard ignores it (falls back to the screener) if the daily job hasn’t refreshed it.'},
@@ -174,13 +174,13 @@ const OVERVIEW = { legend:LAYER, nodes:[
 
 /* ============ DETAIL sub-graphs (internal flow per module) ============ */
 const SUB = {
-  value:{ title:'Value + Quality screen', file:'value_screen.py', legend:KIND, nodes:[
-    {id:'v1',label:'Universe',file:'watchlist',kind:'input',col:0,row:1},
-    {id:'v2',label:'Hard gates',file:'liquidity·price·cap·trap',kind:'decision',col:1,row:1,detail:'Drop a name before ranking if it fails ADV·price ≥ $2M, price ≥ $5, mkt-cap ≥ $300M, or the FCF>0/ROE>0 anti-trap.'},
-    {id:'v3',label:'Raw factors',file:'value · quality · improving',kind:'process',col:2,row:1},
-    {id:'v4',label:'Winsorized z-score',file:'cross-sectional, ±3σ',kind:'process',col:3,row:1},
-    {id:'v5',label:'Weighted composite',file:'0.5 / 0.35 / 0.15',kind:'process',col:4,row:1},
-    {id:'v6',label:'Rank → top-N',file:'VS_TOP_N',kind:'process',col:5,row:1},
+  value:{ title:'Value screen — two-track Russell 3000', file:'value_screen.py', legend:KIND, nodes:[
+    {id:'v1',label:'Universe',file:'Russell 3000 (IWV CSV)',kind:'input',col:0,row:1,detail:'discovery.get_russell3000_tickers — iShares IWV holdings CSV, weekly-cached, fail-open.'},
+    {id:'v2',label:'Stage-0 pre-filter',file:'price ≥ $5 · $-vol ≥ $5M',kind:'decision',col:1,row:1,detail:'Cheap + illiquid dropped on price/volume only (no .info): ~3000 → a few hundred. value_prefilter.'},
+    {id:'v3',label:'Fundamentals',file:'parallel .info → Fundamentals',kind:'process',col:2,row:1,detail:'fetch_info per survivor in a thread pool; value_fundamentals.from_info normalizes the yfinance keys.'},
+    {id:'v4',label:'Classify A / B',file:'profitable?',kind:'decision',col:3,row:1,detail:'Market-cap gate, then Track A (profitable) vs Track B (unprofitable growth). value_tracks.classify.'},
+    {id:'v5',label:'Track gates',file:'VS_TRACK_A / VS_TRACK_B',kind:'decision',col:4,row:1,detail:'A: PEG<1, PE<20, growth, solvency. B: P/S<6, rev>25%, gross>40%, cash-runway>6q. Fail-open per field with a ≥1-of-each-signal guard.'},
+    {id:'v6',label:'Rank + interleave',file:'A,B,A,B → top-N',kind:'process',col:5,row:1},
     {id:'v7',label:'write value.json',file:'.cache/strategies/',kind:'output',col:6,row:1},
   ], edges:[['v1','v2'],['v2','v3'],['v3','v4'],['v4','v5'],['v5','v6'],['v6','v7','hot']]},
 

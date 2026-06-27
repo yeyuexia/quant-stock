@@ -60,5 +60,7 @@ def score(f: Fundamentals, track: str) -> float:
         if f.rev_growth is not None: parts.append(min(f.rev_growth, 2.0) / 2.0)
         if f.gross_margin is not None: parts.append(f.gross_margin)
         r = _runway_q(f)
-        if r is not None and r != float("inf"): parts.append(min(r / 12.0, 1.0))
+        if r is not None:
+            # cash-flow positive (inf runway) is best — full marks, not excluded
+            parts.append(1.0 if r == float("inf") else min(r / 12.0, 1.0))
     return round(sum(parts) / len(parts), 4) if parts else 0.0
