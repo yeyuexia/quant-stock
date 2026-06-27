@@ -1,149 +1,163 @@
-# Design: Value+Quality screen with buy-timing monitor
+# Design: Multi-strategy ensemble → agent pick → watchdog auto-buy
 
 **Date:** 2026-06-27
 **Status:** Approved (design)
-**Scope:** A new standalone screen that ranks a universe for cheap-but-improving
-("low value, high potential") stocks, plus a buy-timing monitor that tells you
-*when* each candidate is a confirmed entry. Report/alert only — never places
-orders.
+**Scope:** Run multiple stock-selection strategies in isolation, each emitting
+its own candidate list; have a single Claude agent review all lists and pick the
+top 4 potential buys; feed those 4 to the existing watchdog buy path, which makes
+the final buy/no-buy timing decision and **auto-executes** (no manual approval),
+exactly like the current `check_buy_signals` flow.
 
 ## Background
 
-The existing `screener.py` is a pure growth+momentum screen (CANSLIM C+A on
-EPS/revenue growth, RS percentile, VCP base detection). It has no valuation
-dimension, so it surfaces strong, often-extended names — not cheap ones. This
-adds the missing **value + quality** selection layer and a separate
-**entry-timing** layer (selection vs timing are different problems: buy
-"cheap and turning up," not "cheap and falling").
+Today's buy flow is: `screener.py` (CANSLIM) → cached screened list →
+`watchdog.check_buy_signals` evaluates an intraday volume-breakout timing
+condition per candidate → submits the buy. There is only one strategy
+(growth/momentum) and no valuation lens. This redesign:
+
+1. Adds a **value+quality** strategy (the "low value, high potential" source).
+2. Runs each strategy **isolated**, writing its own result file.
+3. Inserts a **single Claude agent** that reviews all lists and selects the
+   **top 4**.
+4. Points the **existing watchdog buy path** at those 4 — unchanged buy
+   mechanism, new candidate source.
 
 ## Goals
 
-- Rank a universe by a composite of **value**, **quality**, and (optional)
-  **improving** fundamentals, after hard liquidity/quality gates.
-- For each candidate, classify entry readiness as **BUY / WATCH / WAIT** with a
-  suggested risk-defined initial stop.
-- Run standalone (CLI), persist candidates across runs, optionally notify on a
-  flip to BUY — all alert-only.
+- Strategies are independent: each is its own module, reads nothing from the
+  others, writes its own `.cache/strategies/<name>.json`.
+- One agent reviews all strategy lists → top 4 with written rationale.
+- Watchdog monitors only those 4 and auto-buys on a confirmed timing signal,
+  through the existing order pipeline (HALT / daily caps / large-order rails).
 
 ## Non-goals
 
-- No order placement; no changes to `screener.py` / `rebalancer.py` / order layer.
-- No new data provider — uses the existing yfinance `fetch_info` / `fetch_prices`.
-- No analyst-estimate-revision factor (needs a data source yfinance lacks).
+- No new data provider (uses existing yfinance `fetch_info` / `fetch_prices`).
+- No manual buy-approval step (auto-buy by design).
+- No change to the rebalancer or the ETF-rotation/momentum sleeve.
 
-## Data source
+## Architecture (3 components + a runner)
 
-yfinance `.info` via the existing `data.fetch_info(ticker)` (cached, fail-open),
-plus `data.fetch_prices` / `fetch_ohlcv` for price/volume. Fields used (any may
-be absent → that factor is skipped for the ticker, fail-open):
+```
+value_screen.py  ─► .cache/strategies/value.json    ┐ isolated
+screener.py      ─► .cache/strategies/canslim.json   ┘ strategy lists
+                          │
+            investor_agent.select_candidates()  (one Claude agent)
+                          │  reviews both lists, dedupe + sanity filter,
+                          ▼  picks top 4 with rationale
+                 .cache/buy_candidates.json
+                          │
+          watchdog.check_buy_signals  (reads top-4 instead of raw screener)
+                          │  existing timing test → final decision
+                          ▼
+                 auto-buy via orders pipeline (HALT / caps / approval rails)
+```
 
-- Value: `freeCashflow`, `marketCap`, `forwardPE`, `enterpriseToEbitda`, `priceToBook`
-- Quality: `returnOnEquity`, `debtToEquity`, `freeCashflow`
-- Gates: `averageVolume`, `marketCap`, last price
-- Improving (optional, reuses `fetch_fundamentals`): `eps_q_growth`, `revenue_growth`
+### Component 1 — `value_screen.py` (new strategy)
 
-## Architecture
+Pure value+quality screen producing a ranked list. (Same factor design as the
+prior spec, now scoped to *just emit a list* — no standalone timing monitor.)
 
-New module `value_screen.py`, pure functions + a thin CLI. Two stages.
+- Universe: `--tickers` or default `config.WATCHLIST`.
+- Per ticker, from `data.fetch_info` (+ optional `fetch_fundamentals`):
+  - **Gates** (drop first): liquidity `avg_volume*price ≥ VS_MIN_DOLLAR_VOLUME`;
+    `price ≥ VS_MIN_PRICE`; `marketCap ≥ VS_MIN_MARKET_CAP`; trap guard
+    `freeCashflow>0 OR returnOnEquity>0`.
+  - **Value factors:** fcf_yield, earnings_yield (1/forwardPE), ev_ebitda_inv,
+    book/market (1/priceToBook).
+  - **Quality factors:** roe, inv_debt = 1/(1+debtToEquity).
+  - **Improving (optional):** eps_q_growth, revenue_growth.
+- Cross-sectional winsorized z-score per factor, averaged within sub-group, then
+  composite = `0.5*value_z + 0.35*quality_z + 0.15*improving_z`.
+- Emit top `VS_TOP_N` to `.cache/strategies/value.json` via a shared writer.
 
-### Stage 1 — Value+Quality screen (`screen_value_quality`)
+### Component 2 — strategy result contract + runner
 
-Input: list of tickers (universe). For each ticker:
-
-1. **Gates (drop before ranking):**
-   - liquidity: `avg_volume * price >= MIN_DOLLAR_VOLUME`
-   - price floor: `price >= MIN_PRICE` (default $5)
-   - market cap: `marketCap >= MIN_MARKET_CAP`
-   - trap guard: `freeCashflow > 0` OR `returnOnEquity > 0`
-2. **Raw factors:**
-   - value: `fcf_yield = freeCashflow/marketCap`, `earnings_yield = 1/forwardPE`,
-     `ev_ebitda_inv = 1/enterpriseToEbitda`, `bm = 1/priceToBook`
-   - quality: `roe = returnOnEquity`, `inv_debt = 1/(1+debtToEquity)`
-   - improving (optional): `eps_q_growth`, `revenue_growth`
-3. **Cross-sectional z-score** each raw factor across the surviving universe
-   (winsorize at ±3σ), average within each sub-group → `value_z`, `quality_z`,
-   `improving_z`.
-4. **Composite** = `W_VALUE*value_z + W_QUALITY*quality_z + W_IMPROVING*improving_z`
-   (default weights 0.5 / 0.35 / 0.15; improving contributes 0 when absent).
-5. Rank descending; return top-N rows with factor breakdown.
-
-Output: list of dicts `{ticker, composite, value_z, quality_z, improving_z,
-price, fcf_yield, roe, ...}`.
-
-### Stage 2 — Buy-timing monitor (`timing_signal`)
-
-Input: a ticker + its daily OHLCV (from `fetch_ohlcv`). Computes:
-
-- `above_200dma` = price > MA200 (trend up)
-- `above_50dma` = price > MA50
-- `ma50_rising` = MA50 today > MA50 `TREND_LOOKBACK` days ago
-- `pivot` = highest high over last `PIVOT_LOOKBACK` days (ex-today)
-- `breakout` = price > pivot AND today's volume > `VOL_MULT` × avg volume
-- `rs_up` = trailing `RS_LOOKBACK` return > 0 (proxy for RS turning up)
-- `extended` = price > pivot × (1 + `MAX_EXTENSION`)
-
-Classification:
-- **BUY**: `above_200dma` AND `ma50_rising` AND `breakout` AND NOT `extended`
-- **WATCH**: `above_200dma` AND (`above_50dma` OR `rs_up`) but no confirmed breakout
-- **WAIT**: otherwise (downtrend intact)
-
-Also returns `suggested_stop` = `min(pivot_low, MA200)` where `pivot_low` is the
-lowest low over `PIVOT_LOOKBACK` — a risk-defined initial stop. Returns
-`{status, suggested_stop, reasons: [...] }`. Insufficient history → WAIT + reason.
-
-### CLI / persistence
-
-`python3 value_screen.py [--tickers A,B,..] [--top N] [--watch] [--notify]`
-
-- default universe: read existing watchlist file if present
-  (`config.WATCHLIST`), else require `--tickers`.
-- runs Stage 1, then Stage 2 for each surviving candidate, prints a table:
-  `ticker | composite | value_z | quality_z | price | TIMING | stop`.
-- persists candidates to `.cache/value_candidates.json` (ticker + composite +
-  first_seen + last status). `--watch` re-scores timing for the saved list
-  without re-running Stage 1.
-- `--notify`: when a candidate's status transitions to **BUY**, append a
-  Telegram notification via `notifications.append_notification`
-  (`source="value_screen"`), only on the WATCH/WAIT→BUY transition (no spam).
-
-### Config additions (`config.py`)
+A shared module `strategies.py` defines the **isolated-strategy contract**:
 
 ```python
-VS_MIN_DOLLAR_VOLUME = 2_000_000   # ADV * price floor (liquidity gate)
+# A strategy result row:
+{ "ticker": str, "score": float, "rank": int, "factors": dict }
+# write_strategy_result(name, rows) -> .cache/strategies/<name>.json
+#   { "strategy": name, "generated_at": iso, "rows": [...] }
+# load_strategy_results() -> {name: parsed_json, ...}  (fail-open per file)
+```
+
+- `value_screen.py` and a thin `canslim` adapter (wrapping the existing
+  `screener.screen_stocks()` output) both write through `write_strategy_result`.
+- A runner `run_strategies()` invokes each registered strategy in isolation
+  (one failing strategy never blocks the others) and returns the set of result
+  files. Wired into the daily cron before the agent step.
+
+### Component 3 — agent selection (extend `investor_agent.py`)
+
+`investor_agent.select_candidates(top_n=4) -> list[dict]`:
+
+- `load_strategy_results()` → merge rows across strategies, **dedupe by ticker**
+  (keep best rank; record which strategies surfaced it).
+- **Rule pre-filter** (cheap sanity, not selection): drop tickers failing
+  liquidity/price floor or already owned (`sync_state` positions).
+- Build a compact prompt: per-strategy lists + the merged/deduped pool with
+  cross-strategy agreement flags. Shell to the local `claude` CLI (reusing the
+  module's existing non-interactive `-p` pattern) asking for **exactly `top_n`
+  picks with a one-line rationale each**, returned as JSON.
+- Validate the JSON (tickers must be from the pool; exactly `top_n`); on any LLM
+  failure, **fall back** to the rule-ranked top-N (consensus-first, then best
+  composite) so the pipeline never stalls.
+- Write `.cache/buy_candidates.json`:
+  `{ "generated_at": iso, "picks": [{ticker, rationale, strategies:[...]}] }`.
+
+### Component 4 — watchdog buy source (small change)
+
+`watchdog._get_screened_stocks()` (the candidate source for
+`check_buy_signals`) reads `.cache/buy_candidates.json` when present (the agent's
+top-4), else falls back to the current screener cache. Everything downstream —
+the intraday timing test, dedupe-per-day, buy submission, Telegram
+notification, and safety rails — is **unchanged**. The buy is auto-executed; no
+approval prompt.
+
+## Config additions (`config.py`)
+
+```python
+VS_MIN_DOLLAR_VOLUME = 2_000_000
 VS_MIN_PRICE = 5.0
 VS_MIN_MARKET_CAP = 300_000_000
 VS_TOP_N = 20
 VS_WEIGHTS = {"value": 0.5, "quality": 0.35, "improving": 0.15}
-VS_PIVOT_LOOKBACK = 20
-VS_TREND_LOOKBACK = 10
-VS_RS_LOOKBACK = 63
-VS_VOL_MULT = 1.5
-VS_MAX_EXTENSION = 0.05
+ENSEMBLE_TOP_N = 4               # agent's final picks
+ENSEMBLE_STRATEGIES = ["value", "canslim"]   # registered, extensible
 ```
 
 ## Error handling
 
-Fail-open everywhere (mirrors `screener._fundamental_ok`): a ticker with missing
-`.info` fields is dropped from the factor it lacks; a ticker failing a gate is
-excluded; a ticker with insufficient price history → WAIT. A yfinance error for
-one ticker never aborts the run. Empty universe → empty result, no crash.
+Fail-open throughout: a strategy that errors is skipped (others proceed); a
+missing/corrupt strategy file is ignored; the agent falls back to rule-ranking
+on any LLM failure; an empty pool yields an empty `buy_candidates.json` and the
+watchdog simply finds nothing to buy. No path aborts the daily run.
 
 ## Testing (TDD)
 
-- **gates:** below-liquidity / below-price / below-cap / negative-FCF-and-ROE
-  tickers are excluded; a clean ticker survives.
-- **z-score + composite:** with a hand-built 3-ticker universe, the cheaper +
-  higher-quality name ranks first; weights applied correctly; absent
-  `improving` contributes 0 (no NaN propagation).
-- **timing:** synthetic OHLCV → breakout-above-pivot-on-volume-in-uptrend = BUY;
-  uptrend-no-breakout = WATCH; below-200dma = WAIT; extended = not BUY;
-  `suggested_stop` below entry. Insufficient history = WAIT.
-- **persistence/notify:** WATCH→BUY transition appends exactly one notification;
-  BUY→BUY does not re-notify.
-- **fail-open:** empty `.info` and empty universe return cleanly.
+- **value_screen:** gates exclude the right tickers; z-score/composite ordering;
+  absent `improving` contributes 0; fail-open on empty `.info`.
+- **strategies contract:** write/load round-trip; one corrupt file doesn't break
+  `load_strategy_results`; a throwing strategy doesn't abort `run_strategies`.
+- **agent select:** merge+dedupe keeps best rank + records strategies; rule
+  pre-filter drops illiquid/owned; LLM-failure fallback returns rule-ranked
+  top-N; output JSON shape validated; exactly `ENSEMBLE_TOP_N` picks.
+- **watchdog source:** `_get_screened_stocks` prefers `buy_candidates.json`,
+  falls back to screener cache when absent; downstream buy path unchanged
+  (existing tests still pass).
 
 ## Rollout / verification
 
 1. Unit tests pass.
-2. Dry CLI run over a small `--tickers` list prints ranked candidates + timing.
-3. Update `README.md` (new module + CLI + config flags).
+2. Dry run: `run_strategies()` → two result files; `select_candidates()` →
+   `buy_candidates.json` with 4 picks + rationale.
+3. Confirm watchdog reads the 4 (dry, no HALT removal needed for read path).
+4. Update `README.md` (ensemble pipeline, new modules, config, cron wiring).
+
+## Build phases (for the implementation plan)
+
+1. `value_screen.py` + the `strategies.py` contract/runner (+ canslim adapter).
+2. `investor_agent.select_candidates` (+ rule fallback).
+3. Watchdog candidate-source switch + cron wiring + README.
