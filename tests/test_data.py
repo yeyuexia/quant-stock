@@ -344,3 +344,15 @@ def test_cache_key_long_falls_back_to_md5():
     assert key.startswith("prices_")
     # Should be hex hash, not all the ticker names joined
     assert len(key.split("_")[1]) == 32  # md5 hex
+
+
+import quant.data.market as market
+
+
+def test_fetch_estimates_failopen(monkeypatch):
+    # force the yfinance path to raise → fail-open shape
+    monkeypatch.setattr("quant.data.market.yf.Ticker",
+                        lambda *_a, **_k: (_ for _ in ()).throw(RuntimeError("boom")))
+    out = market.fetch_estimates("ZZZZ")
+    assert out == {"revision_trend": None, "up_revisions_90d": None,
+                   "down_revisions_90d": None, "surprises": []}

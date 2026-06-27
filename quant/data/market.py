@@ -308,6 +308,42 @@ def fetch_fundamentals(ticker: str) -> dict:
     return result
 
 
+_ESTIMATES_EMPTY = {"revision_trend": None, "up_revisions_90d": None,
+                    "down_revisions_90d": None, "surprises": []}
+
+
+def fetch_estimates(ticker: str) -> dict:
+    """Analyst EPS-estimate revision trend + recent earnings-surprise history.
+    Fail-open: returns the all-None/empty shape on any error or missing data."""
+    def _do():
+        t = yf.Ticker(ticker)
+        up = dn = None
+        try:
+            rev = t.eps_revisions            # DataFrame indexed by period
+            if rev is not None and not rev.empty:
+                up = int(rev.get("upLast30days", rev.iloc[:, 0]).fillna(0).sum())
+                dn = int(rev.get("downLast30days", rev.iloc[:, -1]).fillna(0).sum())
+        except Exception:
+            up = dn = None
+        trend = None
+        if up is not None and dn is not None:
+            trend = "rising" if up > dn else "falling" if dn > up else "flat"
+        surprises = []
+        try:
+            ed = t.get_earnings_dates(limit=8)
+            if ed is not None and "Surprise(%)" in ed.columns:
+                surprises = [float(x) / 100.0 for x in ed["Surprise(%)"].dropna().head(4)]
+        except Exception:
+            surprises = []
+        return {"revision_trend": trend, "up_revisions_90d": up,
+                "down_revisions_90d": dn, "surprises": surprises}
+    try:
+        return _run_with_timeout(_do, timeout=_TICKER_TIMEOUT)
+    except Exception as e:
+        _log.warning("fetch_estimates: %s failed: %s", ticker, e)
+        return dict(_ESTIMATES_EMPTY)
+
+
 def compute_returns(prices: pd.DataFrame) -> pd.DataFrame:
     """Daily simple returns."""
     return prices.pct_change().dropna()
