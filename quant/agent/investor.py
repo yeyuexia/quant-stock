@@ -9,10 +9,13 @@ import datetime as dt
 import json
 import logging
 import os
+from concurrent.futures import ThreadPoolExecutor
 from quant import paths
 import shutil
 import subprocess
 from typing import Optional
+
+import quant.agent.dossier as dossier
 
 import pandas as pd
 
@@ -119,6 +122,57 @@ def _merge_pool(results: dict) -> list:
     ranked = sorted(pool.values(),
                     key=lambda e: (-len(e["strategies"]), e["best_rank"]))
     return ranked
+
+
+def _balanced_shortlist(results, pool, owned):
+    """Deterministic, source-blind output: take each strategy's top-K (by its own
+    rank), union + dedupe, cap at AGENT_SHORTLIST_N. Returns tickers only."""
+    import quant.config as config
+    seen, short = set(owned), []
+    for name, payload in results.items():
+        rows = sorted(payload.get("rows", []), key=lambda r: r.get("rank", 10**9))
+        taken = 0
+        for r in rows:
+            t = r.get("ticker")
+            if not t or t in seen:
+                continue
+            short.append(t); seen.add(t); taken += 1
+            if taken >= config.AGENT_SHORTLIST_PER_SOURCE:
+                break
+    return short[:config.AGENT_SHORTLIST_N]
+
+
+def _build_dossiers(pool, *, info_fn, ohlcv_fn, est_fn, news_fn, spy_ohlcv):
+    import quant.config as config
+    tickers = [e["ticker"] for e in pool]
+
+    def _one(t):
+        try:
+            return t, dossier.build_dossier(
+                t, info=info_fn(t), ohlcv=ohlcv_fn(t), spy_ohlcv=spy_ohlcv,
+                news=news_fn(t), estimates=est_fn(t))
+        except Exception as e:
+            _log.warning("_build_dossiers: %s failed: %s", t, e)
+            return t, None
+
+    out = {}
+    if tickers:
+        with ThreadPoolExecutor(max_workers=config.AGENT_DOSSIER_WORKERS) as ex:
+            for t, dos in ex.map(_one, tickers):
+                if dos is not None:
+                    out[t] = dos
+    dossier.add_peer_relative(list(out.values()), min_group=config.AGENT_PEER_MIN_GROUP)
+    return out
+
+
+def source_counts(tickers, results):
+    """Count how many of `tickers` came from each strategy (a ticker may count
+    for multiple)."""
+    by_src = {name: {r.get("ticker") for r in payload.get("rows", [])}
+              for name, payload in results.items()}
+    counts = {name: sum(1 for t in tickers if t in s) for name, s in by_src.items()}
+    counts["other"] = sum(1 for t in tickers if not any(t in s for s in by_src.values()))
+    return counts
 
 
 def _build_prompt(per_strategy: dict, pool: list, top_n: int) -> str:

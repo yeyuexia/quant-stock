@@ -183,3 +183,30 @@ def test_select_rejects_hallucinated_ticker_and_falls_back(tmp_path, monkeypatch
         llm_fn=lambda prompt: json.dumps({"picks": [{"ticker": "ZZZ", "rationale": "x"}]}))
     # ZZZ not in the pool → invalid → rule fallback
     assert [p["ticker"] for p in picks][0] == "AAA"
+
+
+import quant.agent.investor as ia
+
+
+def test_balanced_shortlist_not_starved_by_lopsided_sources():
+    # value emits 15, canslim emits 4 → shortlist must still include canslim's top
+    results = {
+        "value": {"rows": [{"ticker": f"V{i}", "rank": i + 1, "score": 1.0} for i in range(15)]},
+        "canslim": {"rows": [{"ticker": f"C{i}", "rank": i + 1, "score": 1.0} for i in range(4)]},
+    }
+    pool = ia._merge_pool(results)
+    short = ia._balanced_shortlist(results, pool, owned=set())
+    assert any(t.startswith("C") for t in short), "canslim source was starved"
+    assert any(t.startswith("V") for t in short)
+    assert len(short) <= 8
+
+
+def test_build_dossiers_uses_injected_fetchers():
+    pool = [{"ticker": "AAA", "strategies": ["value"], "best_rank": 1, "score": 1.0}]
+    dossiers = ia._build_dossiers(
+        pool,
+        info_fn=lambda t: {"sector": "Tech", "currentPrice": 50.0, "trailingPE": 12.0},
+        ohlcv_fn=lambda t: None, est_fn=lambda t: {"surprises": []},
+        news_fn=lambda t: None, spy_ohlcv=None)
+    assert dossiers["AAA"]["valuation"]["pe"] == 12.0
+    assert "peer_relative" in dossiers["AAA"]
