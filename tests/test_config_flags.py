@@ -16,3 +16,4 @@ def test_ensemble_config_defaults():
     assert config.VS_WEIGHTS == {"value": 0.5, "quality": 0.35, "improving": 0.15}
     assert config.ENSEMBLE_TOP_N == 4
     assert config.ENSEMBLE_STRATEGIES == ["value", "canslim"]
+    assert config.ENSEMBLE_CANDIDATES_MAX_AGE_HOURS == 24

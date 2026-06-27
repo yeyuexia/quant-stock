@@ -99,7 +99,7 @@ def _zscores(values: list) -> list:
     return out
 
 
-def screen_value_quality(tickers, *, info_fn=None, fund_fn=None, price_fn=None):
+def screen_value_quality(tickers, *, info_fn=None, fund_fn=None):
     """Return ranked rows [{ticker, score, rank, factors}] (best first)."""
     from data import fetch_info, fetch_fundamentals
     info_fn = info_fn or fetch_info

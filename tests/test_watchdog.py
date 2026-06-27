@@ -1481,3 +1481,47 @@ def test_get_screened_stocks_falls_back_to_screener(tmp_path, monkeypatch):
     monkeypatch.setattr("screener.screen_stocks", lambda: pd.DataFrame([{"ticker": "ZZZ"}]))
     df = watchdog._get_screened_stocks()
     assert list(df["ticker"]) == ["ZZZ"]
+
+
+def test_get_screened_stocks_stale_candidates_falls_back_to_screener(tmp_path, monkeypatch):
+    """buy_candidates.json older than ENSEMBLE_CANDIDATES_MAX_AGE_HOURS is ignored."""
+    import json, os, watchdog, investor_agent, config
+    import pandas as pd
+
+    path = tmp_path / "buy_candidates.json"
+    path.write_text(json.dumps({"generated_at": "old", "picks": [
+        {"ticker": "STALE", "rationale": "r", "strategies": ["value"]},
+    ]}))
+    # Wind the mtime back 48 hours (2 × threshold)
+    old_mtime = dt.datetime.now().timestamp() - 48 * 3600
+    os.utime(str(path), (old_mtime, old_mtime))
+
+    monkeypatch.setattr(investor_agent, "BUY_CANDIDATES_PATH", str(path))
+    sentinel = pd.DataFrame([{"ticker": "FRESH_SCREENER"}])
+    monkeypatch.setattr(watchdog, "_load_screener_cache", lambda: sentinel)
+
+    df = watchdog._get_screened_stocks()
+    # Stale file must be skipped; screener sentinel is returned instead.
+    assert list(df["ticker"]) == ["FRESH_SCREENER"]
+
+
+def test_get_screened_stocks_fresh_candidates_preferred(tmp_path, monkeypatch):
+    """A FRESH buy_candidates.json (within threshold) is still preferred over screener."""
+    import json, os, watchdog, investor_agent, config
+    import pandas as pd
+
+    path = tmp_path / "buy_candidates.json"
+    path.write_text(json.dumps({"generated_at": "now", "picks": [
+        {"ticker": "FRESH_PICK", "rationale": "r", "strategies": ["value"]},
+    ]}))
+    # mtime = now (age ~ 0)
+    now_ts = dt.datetime.now().timestamp()
+    os.utime(str(path), (now_ts, now_ts))
+
+    monkeypatch.setattr(investor_agent, "BUY_CANDIDATES_PATH", str(path))
+    # screener sentinel should NOT be returned
+    monkeypatch.setattr(watchdog, "_load_screener_cache",
+                        lambda: pd.DataFrame([{"ticker": "SCREENER"}]))
+
+    df = watchdog._get_screened_stocks()
+    assert list(df["ticker"]) == ["FRESH_PICK"]

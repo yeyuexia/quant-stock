@@ -422,6 +422,7 @@ VS_TOP_N = 20                        # value_screen emits this many
 VS_WEIGHTS = {"value": 0.5, "quality": 0.35, "improving": 0.15}
 ENSEMBLE_TOP_N = 4                   # agent's final buy candidates
 ENSEMBLE_STRATEGIES = ["value", "canslim"]   # registered strategy names
+ENSEMBLE_CANDIDATES_MAX_AGE_HOURS = 24       # buy_candidates.json staleness limit
 
 # ── Alpaca broker ───────────────────────────────────────────────
 # ALPACA_LIVE_CONFIRM is intentionally not surfaced here — broker.py reads it

@@ -1144,17 +1144,26 @@ def _get_screened_stocks() -> "pd.DataFrame":
     """Candidate source for check_buy_signals.
 
     Prefers the ensemble agent's vetted top-N (.cache/buy_candidates.json); if
-    that's absent/empty, falls back to the raw screener (1-hour cache or fresh).
+    that's absent/empty/stale, falls back to the raw screener (1-hour cache or
+    fresh).
+
+    Note: per-candidate liquidity/price gating is enforced upstream by each
+    strategy (value_screen gates; screener filters), not here in the buy path.
     """
     import investor_agent
     try:
         if os.path.exists(investor_agent.BUY_CANDIDATES_PATH):
-            with open(investor_agent.BUY_CANDIDATES_PATH) as f:
-                data = json.load(f)
-            picks = data.get("picks", [])
-            if picks:
-                return pd.DataFrame(
-                    [{"ticker": p["ticker"]} for p in picks if p.get("ticker")])
+            age_hours = (
+                dt.datetime.now().timestamp()
+                - os.path.getmtime(investor_agent.BUY_CANDIDATES_PATH)
+            ) / 3600
+            if age_hours <= config.ENSEMBLE_CANDIDATES_MAX_AGE_HOURS:
+                with open(investor_agent.BUY_CANDIDATES_PATH) as f:
+                    data = json.load(f)
+                picks = data.get("picks", [])
+                if picks:
+                    return pd.DataFrame(
+                        [{"ticker": p["ticker"]} for p in picks if p.get("ticker")])
     except (OSError, json.JSONDecodeError, KeyError):
         pass  # fall through to screener
 

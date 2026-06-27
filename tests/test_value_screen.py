@@ -28,7 +28,7 @@ def test_gates_exclude_illiquid_cheap_microcap(monkeypatch):
     }
     rows = value_screen.screen_value_quality(
         list(table), info_fn=_make_info_fn(table),
-        fund_fn=lambda t: {}, price_fn=lambda t: None)
+        fund_fn=lambda t: {})
     tickers = [r["ticker"] for r in rows]
     assert tickers == ["GOOD"]   # only the clean one survives the gates
 
@@ -41,7 +41,7 @@ def test_cheaper_higher_quality_ranks_first(monkeypatch):
     }
     rows = value_screen.screen_value_quality(
         ["CHEAP", "RICH"], info_fn=_make_info_fn(table),
-        fund_fn=lambda t: {}, price_fn=lambda t: None)
+        fund_fn=lambda t: {})
     assert [r["ticker"] for r in rows] == ["CHEAP", "RICH"]
     assert rows[0]["rank"] == 1
     assert rows[0]["score"] > rows[1]["score"]
@@ -49,5 +49,5 @@ def test_cheaper_higher_quality_ranks_first(monkeypatch):
 
 def test_fail_open_on_empty_info(monkeypatch):
     rows = value_screen.screen_value_quality(
-        ["X"], info_fn=lambda t: {}, fund_fn=lambda t: {}, price_fn=lambda t: None)
+        ["X"], info_fn=lambda t: {}, fund_fn=lambda t: {})
     assert rows == []   # no data → excluded, no crash
