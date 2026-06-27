@@ -1,53 +1,40 @@
 import value_screen
 
 
-def _info(price, mcap, advol, fcf, roe, d2e, fpe, p2b, ev_ebitda):
-    return {
-        "currentPrice": price, "marketCap": mcap, "averageVolume": advol,
-        "freeCashflow": fcf, "returnOnEquity": roe, "debtToEquity": d2e,
-        "forwardPE": fpe, "priceToBook": p2b, "enterpriseToEbitda": ev_ebitda,
+def _info(profitable=True, **kw):
+    base = {"marketCap": 5e9, "trailingEps": 3.0 if profitable else -1.0,
+            "trailingPE": 14.0, "pegRatio": 0.8, "priceToSalesTrailing12Months": 2.0,
+            "revenueGrowth": 0.2, "earningsGrowth": 0.15, "grossMargins": 0.4,
+            "debtToEquity": 50.0, "currentRatio": 2.0, "freeCashflow": 4e8, "totalCash": 1e9}
+    base.update(kw); return base
+
+
+def test_screen_emits_twotrack_rows():
+    prices = {t: (50.0, 9_000_000) for t in ("AAA", "BBB", "JUNK")}
+    infos = {
+        "AAA": _info(profitable=True),
+        "BBB": _info(profitable=False, priceToSalesTrailing12Months=4.0,
+                     revenueGrowth=0.4, grossMargins=0.5, freeCashflow=-2e8, totalCash=5e9),
+        "JUNK": _info(profitable=True, pegRatio=3.0, trailingPE=40.0),  # fails track A gates
     }
-
-
-def _make_info_fn(table):
-    return lambda t: table.get(t, {})
-
-
-def test_gates_exclude_illiquid_cheap_microcap(monkeypatch):
-    table = {
-        # below price floor ($5)
-        "PENNY": _info(3.0, 1e9, 1e6, 1e8, 0.2, 50, 12, 3, 10),
-        # below dollar-volume gate (price*advol = 10*100 = 1000)
-        "ILLQ": _info(10.0, 1e9, 100, 1e8, 0.2, 50, 12, 3, 10),
-        # below market cap floor
-        "MICRO": _info(10.0, 1e8, 1e6, 1e8, 0.2, 50, 12, 3, 10),
-        # negative FCF AND negative ROE (trap)
-        "JUNK": _info(10.0, 1e9, 1e6, -1e8, -0.2, 50, 12, 3, 10),
-        # clean
-        "GOOD": _info(50.0, 5e9, 1e6, 5e8, 0.25, 30, 10, 2, 8),
-    }
-    rows = value_screen.screen_value_quality(
-        list(table), info_fn=_make_info_fn(table),
-        fund_fn=lambda t: {})
+    rows = value_screen.screen(["AAA", "BBB", "JUNK"],
+                               price_fn=lambda ts: prices, info_fn=lambda t: infos[t])
     tickers = [r["ticker"] for r in rows]
-    assert tickers == ["GOOD"]   # only the clean one survives the gates
+    assert "AAA" in tickers and "BBB" in tickers and "JUNK" not in tickers
+    assert {r["factors"]["track"] for r in rows} <= {"A", "B"}
+    assert rows[0]["rank"] == 1 and all("score" in r for r in rows)
 
 
-def test_cheaper_higher_quality_ranks_first(monkeypatch):
-    # Two survivors; CHEAP has higher FCF yield + ROE → higher composite.
-    table = {
-        "CHEAP": _info(20.0, 1e9, 1e6, 2e8, 0.30, 10, 8, 1.0, 6),
-        "RICH":  _info(20.0, 1e9, 1e6, 2e7, 0.05, 200, 40, 6.0, 30),
-    }
-    rows = value_screen.screen_value_quality(
-        ["CHEAP", "RICH"], info_fn=_make_info_fn(table),
-        fund_fn=lambda t: {})
-    assert [r["ticker"] for r in rows] == ["CHEAP", "RICH"]
-    assert rows[0]["rank"] == 1
-    assert rows[0]["score"] > rows[1]["score"]
+def test_screen_empty_universe_returns_empty():
+    assert value_screen.screen([], price_fn=lambda ts: {}, info_fn=lambda t: {}) == []
 
 
-def test_fail_open_on_empty_info(monkeypatch):
-    rows = value_screen.screen_value_quality(
-        ["X"], info_fn=lambda t: {}, fund_fn=lambda t: {})
-    assert rows == []   # no data → excluded, no crash
+def test_run_writes_strategy_result(tmp_path, monkeypatch):
+    import strategies
+    monkeypatch.setattr(strategies, "STRATEGIES_DIR", str(tmp_path / "strat"))
+    monkeypatch.setattr(value_screen.discovery, "get_russell3000_tickers", lambda: ["AAA"])
+    monkeypatch.setattr(value_screen, "screen", lambda u, **k: [
+        {"ticker": "AAA", "score": 1.0, "rank": 1, "factors": {"track": "A"}}])
+    rows = value_screen.run()
+    assert rows[0]["ticker"] == "AAA"
+    assert strategies.load_strategy_results()["value"]["rows"][0]["ticker"] == "AAA"
