@@ -437,6 +437,20 @@ ENSEMBLE_STRATEGIES = ["value", "canslim"]
 ENSEMBLE_CANDIDATES_MAX_AGE_HOURS = 24
 ENSEMBLE_STRATEGY_TIMEOUT_SEC = 240     # cold-cache Russell-3000 value run needs room
 
+# ── Investor-agent due-diligence ─────────────────────────────────────
+AGENT_DOSSIER_WORKERS = 12               # concurrent per-candidate data fetches
+AGENT_INCLUDE_NEWS = True                # include news/sentiment in the dossier
+AGENT_SHORTLIST_PER_SOURCE = 4           # each source's top-K into the shortlist
+AGENT_SHORTLIST_N = 8                    # shortlist cap (union of per-source tops)
+AGENT_MAX_PICKS = 5                      # PM picks 0..5 (abstention)
+AGENT_CONVICTION_FLOOR = 50              # min confidence (0-100) to buy a name
+AGENT_PEER_MIN_GROUP = 3                 # min sector members to use sector z-score
+AGENT_RSI_PERIOD = 14
+AGENT_REL_STRENGTH_LOOKBACK_DAYS = 63    # ~3 months vs SPY
+AGENT_BUY_BAND_ATR = 0.5                 # entry band = price ± this·ATR14
+AGENT_STOP_ATR_MULT = 1.5                # stop = buy_low − this·ATR14 (or swing low)
+AGENT_TARGET_R = 2.5                     # take-profit = this R-multiple of risk
+
 # ── Alpaca broker ───────────────────────────────────────────────
 # ALPACA_LIVE_CONFIRM is intentionally not surfaced here — broker.py reads it
 # directly from os.environ to keep the safety check next to the construction
