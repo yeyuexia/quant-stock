@@ -55,3 +55,27 @@ def test_default_registry_has_configured_strategies():
     reg = S.default_registry()
     assert set(reg) == {"value", "canslim"}
     assert all(callable(fn) for fn in reg.values())
+
+
+def test_run_strategies_bounds_a_hanging_strategy(tmp_path, monkeypatch):
+    import time, strategies as S, config
+    monkeypatch.setattr(S, "STRATEGIES_DIR", str(tmp_path / "strat"))
+    monkeypatch.setattr(config, "ENSEMBLE_STRATEGY_TIMEOUT_SEC", 0.3)
+
+    def fast():
+        return [{"ticker": "F", "score": 1.0, "rank": 1, "factors": {}}]
+
+    def hang():
+        time.sleep(2)   # > timeout; abandoned & skipped, must not block the caller
+        return [{"ticker": "H", "score": 1.0, "rank": 1, "factors": {}}]
+
+    paths = S.run_strategies({"value": fast, "canslim": hang})
+    assert any(p.endswith("value.json") for p in paths)   # fast one returned
+    loaded = S.load_strategy_results()
+    assert "value" in loaded and "canslim" not in loaded   # hung one skipped
+
+
+def test_run_strategies_empty_registry_returns_empty(tmp_path, monkeypatch):
+    import strategies as S
+    monkeypatch.setattr(S, "STRATEGIES_DIR", str(tmp_path / "strat"))
+    assert S.run_strategies({}) == []

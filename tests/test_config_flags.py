@@ -17,3 +17,8 @@ def test_ensemble_config_defaults():
     assert config.ENSEMBLE_TOP_N == 4
     assert config.ENSEMBLE_STRATEGIES == ["value", "canslim"]
     assert config.ENSEMBLE_CANDIDATES_MAX_AGE_HOURS == 24
+
+
+def test_ensemble_strategy_timeout_default():
+    import config
+    assert config.ENSEMBLE_STRATEGY_TIMEOUT_SEC == 90

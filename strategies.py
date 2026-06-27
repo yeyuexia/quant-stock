@@ -60,14 +60,35 @@ def _run_one_strategy(item) -> "str | None":
 def run_strategies(registry: dict) -> list:
     """Run each registered name->callable() concurrently (they are I/O-bound on
     yfinance) and write each result. A callable that raises is logged and
-    skipped; each strategy writes its own file, so there is no shared state."""
-    from concurrent.futures import ThreadPoolExecutor
+    skipped; each strategy writes its own file, so there is no shared state.
+
+    Each strategy is bounded by config.ENSEMBLE_STRATEGY_TIMEOUT_SEC: a strategy
+    that *hangs* (e.g. a stuck yfinance call — a hang, not an exception) is
+    abandoned and skipped rather than blocking the caller. This matters because
+    run_strategies runs inside the daily watchdog; an unbounded hang would stall
+    it. We shut the pool down with wait=False so a stuck worker can't join-block."""
+    import config
+    from concurrent.futures import ThreadPoolExecutor, TimeoutError as _FTimeout
     items = list(registry.items())
     if not items:
         return []
-    with ThreadPoolExecutor(max_workers=len(items)) as ex:
-        results = list(ex.map(_run_one_strategy, items))
-    return [p for p in results if p]
+    ex = ThreadPoolExecutor(max_workers=len(items))
+    futures = {ex.submit(_run_one_strategy, item): name for name, item in
+               ((n, (n, fn)) for n, fn in items)}
+    paths = []
+    try:
+        for fut, name in futures.items():
+            try:
+                p = fut.result(timeout=config.ENSEMBLE_STRATEGY_TIMEOUT_SEC)
+                if p:
+                    paths.append(p)
+            except _FTimeout:
+                _log.warning("run_strategies: strategy %s timed out — skipped", name)
+            except Exception as e:
+                _log.warning("run_strategies: strategy %s failed: %s", name, e)
+    finally:
+        ex.shutdown(wait=False)   # never join-block on a hung worker
+    return paths
 
 
 def _canslim_rows() -> list:

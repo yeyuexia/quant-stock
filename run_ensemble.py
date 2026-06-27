@@ -7,8 +7,6 @@ import logging
 import strategies
 import investor_agent
 
-logging.basicConfig(level=logging.INFO)
-
 
 def run():
     """Run every registered strategy (isolated, in parallel) then the agent
@@ -20,6 +18,7 @@ def run():
 
 
 def main():
+    logging.basicConfig(level=logging.INFO)
     picks = run()
     for p in picks:
         print(f"  {p['ticker']:<6} [{','.join(p['strategies'])}] {p['rationale']}")

@@ -423,6 +423,7 @@ VS_WEIGHTS = {"value": 0.5, "quality": 0.35, "improving": 0.15}
 ENSEMBLE_TOP_N = 4                   # agent's final buy candidates
 ENSEMBLE_STRATEGIES = ["value", "canslim"]   # registered strategy names
 ENSEMBLE_CANDIDATES_MAX_AGE_HOURS = 24       # buy_candidates.json staleness limit
+ENSEMBLE_STRATEGY_TIMEOUT_SEC = 90           # per-strategy hang bound (off the watchdog critical path)
 
 # ── Alpaca broker ───────────────────────────────────────────────
 # ALPACA_LIVE_CONFIRM is intentionally not surfaced here — broker.py reads it
