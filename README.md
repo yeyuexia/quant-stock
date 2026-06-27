@@ -303,23 +303,31 @@ Runs multiple independent stock-screening strategies in isolation, aggregates th
 
 Each strategy writes its result to `.cache/strategies/{name}.json` with schema: `{strategy, generated_at, rows: [{ticker, score, rank, factors}]}`. A strategy failure is logged and skipped; others continue (isolation).
 
-**Agent consensus** → `.cache/buy_candidates.json`:
-- `investor_agent.select_candidates()` reads all `.cache/strategies/*.json` files
-- Merges rows across strategies: dedupes tickers, records which strategies voted for each, keeps best rank and highest score
-- Ranks by consensus (tickers appearing in more strategies sort first) then by best rank
-- Calls LLM with the merged pool and per-strategy lists; LLM returns top-`ENSEMBLE_TOP_N` picks (default 4) with rationale
-- If LLM fails or returns unusable output, falls back to rule-ranked list (consensus + rank order)
-- Persists picks to `.cache/buy_candidates.json` with schema: `{generated_at, picks: [{ticker, rationale, strategies:[...]}]}`
+**Agent due-diligence pipeline** → `.cache/buy_candidates.json`:
+
+`investor_agent.select_candidates()` runs a five-stage LLM pipeline:
+
+1. **Pool** — merges all strategy `.json` rows, dedupes tickers, records which strategies voted for each, keeps best rank and highest score, excludes already-owned names.
+2. **Dossiers (peer-relative)** — builds a compact fundamental snapshot per candidate in parallel: price/PE/target, EPS surprise history, recent news, and peer-relative metrics (PE and price-to-target z-scores within the same sector cohort). Grounding information used by all downstream stages.
+3. **Balanced blind shortlist** — re-balances the pool so no single strategy contributes more than `AGENT_SOURCE_BALANCE_CAP` (default 50 %) of the shortlist seats. Sends dossiers without strategy labels (blind) to remove positivity bias from over-represented screens. Appends source-mix statistics to `.cache/agent_source_mix.csv`.
+4. **Analyst → Critic** — Analyst stage (`STAGE=ANALYST`) produces a structured bull/bear verdict per shortlisted name (`{ticker, signal, confidence, thesis, risks, catalysts, bull, bear}`). Critic stage (`STAGE=CRITIC`) challenges each verdict; weak verdicts are pruned. Either stage falls back to rule-ranking if the LLM returns unusable output.
+5. **PM (0–`AGENT_MAX_PICKS`, floor)** — PM stage (`STAGE=PM`) selects 0–`AGENT_MAX_PICKS` (default 5) final picks from surviving verdicts; it may abstain entirely (return an empty list) if conviction is insufficient. Picks that fall below `AGENT_CONVICTION_FLOOR` are removed. Each pick is enriched with **advisory levels** from technical/fundamental heuristics: `buy_low`, `buy_high`, `stop_loss`, `take_profit` (may be `None` if data is unavailable). Picks and their rationale are appended to `.cache/agent_reasons.log` and persisted to `.cache/buy_candidates.json` with schema: `{generated_at, picks: [{ticker, rationale, strategies, confidence, buy_low, buy_high, stop_loss, take_profit}]}`.
+
+If the LLM fails at any stage, `select_candidates()` falls back to rule-ranked picks (consensus + rank order) — the pipeline never stalls.
+
+**Side-channel logs**:
+- `.cache/agent_source_mix.csv` — per-run row recording strategy seat counts after balancing, for monitoring over-representation drift.
+- `.cache/agent_reasons.log` — append-only log of PM picks with rationale, confidence, and advisory levels; useful for post-hoc review.
 
 **Integration with watchdog**:
-- `watchdog._get_screened_stocks()` reads `.cache/buy_candidates.json` and gates intraday buy signals on the picks list — only candidates approved by the ensemble can trigger auto-buy entries
+- `watchdog._get_screened_stocks()` reads `.cache/buy_candidates.json` and gates intraday buy signals on the picks list — only candidates approved by the agent can trigger auto-buy entries.
 
-**Trigger** — the candidate generation (strategies + the one Claude agent pick)
+**Trigger** — the candidate generation (strategies + the full agent pipeline)
 runs **once per day, inside the daily pre-market watchdog** (`run_watchdog` →
 `_run_daily_ensemble`), not on a separate cron and not in the every-5-min
-intraday tick. Rationale: the agent makes one slow/costly LLM call, and its
-inputs (the screens) are daily — so running it more often adds cost and churn
-without new information. The intraday watchdog stays a pure reader of
+intraday tick. Rationale: the agent makes several LLM calls (analyst, critic,
+PM), and its inputs (the screens) are daily — so running it more often adds cost
+and churn without new information. The intraday watchdog stays a pure reader of
 `.cache/buy_candidates.json`, deciding *when* to buy via the existing coded
 volume-breakout rule. The two strategies run in parallel. `_run_daily_ensemble`
 is fail-open: a generation error leaves the prior candidates (or the screener
@@ -332,7 +340,9 @@ python3 -m quant.app.ensemble   # runs strategies, prints picks, writes buy_cand
 
 **Configuration** (`quant/config.py`):
 - `ENSEMBLE_STRATEGIES` — list of strategies to run (e.g., `['value', 'canslim']`)
-- `ENSEMBLE_TOP_N` — max buy candidates to keep (default 4)
+- `AGENT_MAX_PICKS` — max buy candidates the PM may select (default 5; PM may abstain with 0)
+- `AGENT_CONVICTION_FLOOR` — minimum confidence score to survive PM selection
+- `AGENT_SOURCE_BALANCE_CAP` — max fraction of shortlist seats one strategy may hold (default 0.5)
 - `VS_*` — value screen tuning (threshold, percentile gates)
 - `SCREEN_*` — CANSLIM technical gates (EPS growth, RS, ADR, EMA, base depth)
 

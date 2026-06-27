@@ -151,7 +151,7 @@ const OVERVIEW = { legend:LAYER, nodes:[
   {id:'screener',label:'CANSLIM screener',file:'quant/signals/screener.py',layer:'signal',col:0,row:3,detail:'Growth screen: EPS/revenue growth filter, relative-strength percentile, VCP base detection with a buy pivot. One of the two ensemble strategies.'},
   {id:'value',label:'Value + Quality screen',file:'quant/strategies/value/screen.py',layer:'signal',col:0,row:4,detail:'Two-track value screen over the Russell 3000 (iShares IWV): price/volume pre-filter → parallel fundamentals → Track A (profitable bargains) / Track B (unprofitable growth) gates → rank. The other ensemble strategy.'},
   {id:'strategies',label:'Strategy runner',file:'quant/strategies/contract.py',layer:'select',col:1,row:1,detail:'Isolated-strategy contract + parallel runner. Each strategy writes its own file; a hung/erroring one is skipped (timeout-bounded) so it can never stall the others or the watchdog.'},
-  {id:'agent',label:'AI agent · top 4',file:'quant/agent/investor.py',layer:'select',col:1,row:2.4,detail:'The single Claude agent. Merges the lists, dedupes with consensus weighting, excludes owned names, asks the claude CLI for the top-4 picks + rationale, and rule-ranks on any LLM failure. Runs ONCE per day.'},
+  {id:'agent',label:'AI agent · due diligence',file:'quant/agent/investor.py',layer:'select',col:1,row:2.4,detail:'Five-stage LLM pipeline: Pool → Dossiers (peer-relative) → Balanced blind shortlist → Analyst (bull/bear) → Critic → PM (0–5, floor) → Picks + advisory levels → buy_candidates.json. Abstention allowed. Rule-rank fallback on any stage failure. Runs ONCE per day.'},
   {id:'candidates',label:'buy_candidates.json',file:'.cache/',layer:'data',col:1,row:3.7,detail:'The agent’s daily shortlist — the only names the watchdog will consider buying. A staleness guard ignores it (falls back to the screener) if the daily job hasn’t refreshed it.'},
   {id:'watchdog',label:'Watchdog',file:'quant/monitor/watchdog.py',layer:'timing',col:2,row:1.6,detail:'Daily + intraday monitor. Daily: sync, stops, macro, and the once-a-day ensemble trigger. Intraday (5 min): coded volume-breakout buys, stop-loss enforcement, SEPA exits. No LLM on this loop.'},
   {id:'sepa',label:'SEPA exits',file:'quant/risk/sepa_exits.py',layer:'timing',col:2,row:3,detail:'Pure Minervini exit rules: R-multiple scale-outs, failed-breakout, climax-top, and a 21-EMA trailing backstop. The watchdog calls into it.'},
@@ -202,17 +202,17 @@ const SUB = {
     {id:'t5',label:'write <name>.json',file:'one file each',kind:'output',col:3,row:1.5},
   ], edges:[['t1','t2'],['t1','t3'],['t2','t4'],['t3','t4'],['t4','t5','hot']]},
 
-  agent:{ title:'AI agent — pick top 4', file:'quant/agent/investor.py', legend:KIND, nodes:[
-    {id:'a1',label:'Load strategy results',file:'load_strategy_results()',kind:'input',col:0,row:1.5},
-    {id:'a2',label:'Merge + dedupe',file:'consensus weighting',kind:'process',col:1,row:1.5},
-    {id:'a3',label:'Exclude owned',file:'vs portfolio',kind:'process',col:2,row:1.5},
-    {id:'a4',label:'Build prompt',file:'lists + pool',kind:'process',col:3,row:1.5},
-    {id:'a5',label:'claude CLI',file:'subprocess -p',kind:'ext',col:4,row:1.5,detail:'The one LLM call — slow & costly, so it runs once a day. Strict-JSON top-N prompt.'},
-    {id:'a6',label:'Parse + validate',file:'tickers in pool?',kind:'decision',col:5,row:1.5},
-    {id:'a7',label:'Top-4 picks',file:'+ rationale',kind:'output',col:6,row:0.7},
-    {id:'a8',label:'Rule-rank fallback',file:'on LLM failure',kind:'process',col:6,row:2.3,detail:'If the CLI is missing / times out / returns junk, fall back to deterministic consensus-then-score ranking. The pipeline never stalls.'},
-    {id:'a9',label:'write buy_candidates.json',file:'.cache/',kind:'output',col:7,row:1.5},
-  ], edges:[['a1','a2'],['a2','a3'],['a3','a4'],['a4','a5'],['a5','a6'],['a6','a7'],['a6','a8','alt'],['a7','a9','hot'],['a8','a9','alt']]},
+  agent:{ title:'AI agent — due-diligence pipeline', file:'quant/agent/investor.py', legend:KIND, nodes:[
+    {id:'a1',label:'Pool',file:'merge + dedupe + exclude owned',kind:'input',col:0,row:1.5,detail:'Merges all strategy rows, dedupes tickers, records strategy votes, keeps best rank/score, excludes already-owned names.'},
+    {id:'a2',label:'Dossiers (peer-relative)',file:'parallel fetch per ticker',kind:'process',col:1,row:1.5,detail:'Concurrent fundamentals fetch: price/PE/target, EPS surprises, news. Adds peer-relative PE and price-to-target z-scores within each sector cohort.'},
+    {id:'a3',label:'Balanced blind shortlist',file:'source-cap + strip labels',kind:'process',col:2,row:1.5,detail:'Re-balances seats so no single strategy exceeds AGENT_SOURCE_BALANCE_CAP (default 50%). Strips strategy labels before the LLM sees the list (blind) to remove positivity bias. Logs source mix to .cache/agent_source_mix.csv.'},
+    {id:'a4',label:'Analyst (bull/bear)',file:'STAGE=ANALYST',kind:'ext',col:3,row:0.8,detail:'LLM writes a structured verdict per shortlisted ticker: {signal, confidence, thesis, risks, catalysts, bull, bear}. Falls back to rule-ranking on failure.'},
+    {id:'a5',label:'Critic',file:'STAGE=CRITIC',kind:'ext',col:3,row:2.2,detail:'LLM challenges each Analyst verdict. Verdicts that do not survive scrutiny are pruned before the PM sees them.'},
+    {id:'a6',label:'PM (0–5, floor)',file:'STAGE=PM',kind:'ext',col:4,row:1.5,detail:'PM selects 0–AGENT_MAX_PICKS final picks from surviving verdicts; may abstain (empty list) if conviction is insufficient. Picks below AGENT_CONVICTION_FLOOR are removed.'},
+    {id:'a7',label:'Picks + levels',file:'advisory buy/stop/tp',kind:'process',col:5,row:0.8,detail:'Each pick is enriched with advisory levels from technical/fundamental heuristics: buy_low, buy_high, stop_loss, take_profit (may be None). Rationale + levels appended to .cache/agent_reasons.log.'},
+    {id:'a8',label:'Rule-rank fallback',file:'on any LLM failure',kind:'process',col:5,row:2.2,detail:'If any stage fails or returns junk, deterministic consensus-then-score ranking takes over. The pipeline never stalls.'},
+    {id:'a9',label:'buy_candidates.json',file:'.cache/',kind:'output',col:6,row:1.5,detail:'Persisted picks with schema: {generated_at, picks:[{ticker,rationale,strategies,confidence,buy_low,buy_high,stop_loss,take_profit}]}.'},
+  ], edges:[['a1','a2'],['a2','a3'],['a3','a4'],['a3','a5'],['a4','a6'],['a5','a6'],['a6','a7'],['a6','a8','alt'],['a7','a9','hot'],['a8','a9','alt']]},
 
   watchdog:{ title:'Watchdog — daily & intraday', file:'quant/monitor/watchdog.py', legend:KIND, nodes:[
     {id:'w0',label:'Run',file:'cron',kind:'input',col:0,row:1.6},
