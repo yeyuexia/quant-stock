@@ -16,25 +16,36 @@
   #stage{position:fixed;inset:0}
   svg{width:100%;height:100%;display:block;cursor:grab;touch-action:none}
   svg.panning{cursor:grabbing}
+  #viewport{transition:opacity .18s ease}
   .edge{fill:none;stroke:#3a4655;stroke-width:1.6;opacity:.7;transition:stroke .15s,opacity .15s,stroke-width .15s}
   .edge.daily{stroke-dasharray:6 5;stroke:#a855f7;opacity:.55}
   .edge.hot{stroke:var(--accent);opacity:1;stroke-width:2.6}
-  .edge.dim{opacity:.12}
+  .edge.alt{stroke:#7c8a9a;stroke-dasharray:3 4;opacity:.6}
+  .edge.dim{opacity:.1}
+  .elabel{fill:var(--faint);font-size:10px;pointer-events:none}
   .node{cursor:grab}
   .node.dragging{cursor:grabbing}
-  .node rect{stroke-width:1.5;rx:12;ry:12;transition:filter .15s, opacity .15s}
+  .node.drill rect:first-of-type{stroke-dasharray:0}
+  .node rect{rx:12;ry:12;transition:filter .15s, opacity .15s}
   .node:hover rect, .node.sel rect{filter:drop-shadow(0 0 10px var(--glow))}
-  .node.dim{opacity:.28}
-  .node .lbl{fill:var(--ink);font-size:14px;font-weight:600;pointer-events:none}
+  .node.dim{opacity:.26}
+  .node .lbl{fill:var(--ink);font-size:13.5px;font-weight:600;pointer-events:none}
   .node .sub{fill:var(--faint);font-size:10.5px;pointer-events:none}
   .node .file{fill:var(--muted);font-size:10px;font-family:ui-monospace,Menlo,monospace;pointer-events:none}
+  .node .mag{fill:var(--accent);font-size:13px;pointer-events:none;opacity:.85}
 
-  /* HUD */
-  .hud{position:fixed;left:18px;top:16px;z-index:5;max-width:330px}
-  .hud h1{font-size:1.12rem;margin:0 0 4px}
-  .hud p{margin:0;color:var(--muted);font-size:.82rem}
+  .hud{position:fixed;left:18px;top:16px;z-index:5;max-width:340px}
+  .hud h1{font-size:1.1rem;margin:0 0 4px}
+  .hud p{margin:0;color:var(--muted);font-size:.8rem}
+  .crumb{position:fixed;left:50%;top:16px;transform:translateX(-50%);z-index:6;display:flex;align-items:center;gap:8px;
+    background:rgba(20,27,36,.9);border:1px solid var(--line);border-radius:999px;padding:7px 8px 7px 16px;backdrop-filter:blur(8px);font-size:.85rem}
+  .crumb a{color:var(--accent);cursor:pointer;text-decoration:none}
+  .crumb .sep{color:var(--faint)} .crumb .cur{color:var(--ink);font-weight:600}
+  .crumb button{display:none;border:none;background:var(--panel);color:var(--muted);border-radius:999px;width:26px;height:26px;cursor:pointer;font-size:.9rem}
+  .crumb.l1 button{display:inline-block}
+
   .legend{position:fixed;left:18px;bottom:16px;z-index:5;background:rgba(20,27,36,.85);backdrop-filter:blur(8px);
-    border:1px solid var(--line);border-radius:12px;padding:11px 14px;font-size:.78rem;color:var(--muted)}
+    border:1px solid var(--line);border-radius:12px;padding:11px 14px;font-size:.78rem;color:var(--muted);max-width:200px}
   .legend b{display:block;color:var(--faint);text-transform:uppercase;letter-spacing:.08em;font-size:.66rem;margin-bottom:7px;font-weight:600}
   .legend .row{display:flex;align-items:center;gap:8px;margin:4px 0}
   .legend .k{width:11px;height:11px;border-radius:3px;display:inline-block}
@@ -46,7 +57,6 @@
   .controls button:hover{border-color:var(--accent);color:var(--accent)}
   .controls button.sm{font-size:.66rem;letter-spacing:.04em}
 
-  /* Detail drawer */
   .drawer{position:fixed;top:0;right:0;height:100%;width:360px;max-width:88vw;z-index:9;
     background:linear-gradient(180deg,#121922,#0e141b);border-left:1px solid var(--line);
     transform:translateX(102%);transition:transform .26s cubic-bezier(.4,0,.2,1);
@@ -55,42 +65,39 @@
   .drawer .top{padding:20px 22px 14px;border-bottom:1px solid var(--line)}
   .drawer .chip{display:inline-block;font-size:.66rem;text-transform:uppercase;letter-spacing:.1em;
     padding:3px 10px;border-radius:999px;color:#0b0f14;font-weight:700;margin-bottom:10px}
-  .drawer h2{margin:0;font-size:1.25rem}
+  .drawer h2{margin:0;font-size:1.22rem}
   .drawer .file{font-family:ui-monospace,Menlo,monospace;font-size:.82rem;color:var(--accent);margin-top:3px}
-  .drawer .bd{padding:18px 22px;overflow:auto;color:var(--muted);font-size:.9rem;line-height:1.62}
-  .drawer .bd h3{color:var(--ink);font-size:.78rem;text-transform:uppercase;letter-spacing:.08em;margin:16px 0 6px;color:var(--faint)}
+  .drawer .bd{padding:16px 22px;overflow:auto;color:var(--muted);font-size:.9rem;line-height:1.62}
+  .drawer .drill{display:none;margin:4px 0 12px;width:100%;padding:11px;border-radius:10px;border:1px solid rgba(56,189,248,.45);
+    background:rgba(56,189,248,.1);color:var(--accent);font-weight:600;cursor:pointer;font-size:.9rem}
+  .drawer .drill.show{display:block}
+  .drawer h3{color:var(--faint);font-size:.74rem;text-transform:uppercase;letter-spacing:.08em;margin:16px 0 6px}
   .drawer .conns a{display:block;color:var(--accent);font-size:.86rem;padding:3px 0;cursor:pointer}
   .drawer .x{position:absolute;top:16px;right:16px;width:32px;height:32px;border-radius:9px;border:1px solid var(--line);
     background:transparent;color:var(--muted);cursor:pointer;font-size:1.1rem}
   .drawer .x:hover{color:var(--ink);border-color:var(--accent)}
   .hint{position:fixed;bottom:16px;right:18px;z-index:5;color:var(--faint);font-size:.76rem;background:rgba(20,27,36,.7);
-    border:1px solid var(--line);border-radius:8px;padding:6px 11px}
+    border:1px solid var(--line);border-radius:8px;padding:6px 11px;transition:opacity .6s}
   a.back{color:var(--accent);font-size:.8rem;text-decoration:none}
 </style>
 </head>
 <body>
 <div class="hud">
   <h1>System Architecture</h1>
-  <p>Drag the canvas to pan · scroll / +&minus; to zoom · drag a node to move it · <strong>click a node</strong> for details. <a class="back" href="system_overview.html">← narrative overview</a></p>
+  <p>Pan = drag canvas · zoom = scroll / +&minus; · drag a node to move it · <strong>click</strong> a node for details · <strong>double-click</strong> a ⤢ module to zoom into its internal flow · scroll out to come back. <a class="back" href="system_overview.html">← narrative</a></p>
 </div>
+
+<div class="crumb" id="crumb"><button id="crumbBack" title="Back to overview">←</button><span id="crumbText"><span class="cur">Overview</span></span></div>
 
 <div class="controls">
   <button id="zin" title="Zoom in">+</button>
   <button id="zout" title="Zoom out">−</button>
+  <button id="toggle" class="sm" title="Switch Timeline / Architecture">FLOW</button>
   <button id="fit" class="sm" title="Fit to screen">FIT</button>
   <button id="reset" class="sm" title="Reset layout">RST</button>
 </div>
 
-<div class="legend">
-  <b>Layers</b>
-  <div class="row"><i class="k" style="background:var(--signal)"></i>Signals</div>
-  <div class="row"><i class="k" style="background:var(--select)"></i>Selection (AI)</div>
-  <div class="row"><i class="k" style="background:var(--timing)"></i>Timing</div>
-  <div class="row"><i class="k" style="background:var(--exec)"></i>Execution</div>
-  <div class="row"><i class="k" style="background:var(--safety)"></i>Policy / Broker</div>
-  <div class="row"><i class="k" style="background:var(--data)"></i>State / Data</div>
-  <div class="row" style="margin-top:7px"><i class="ek"></i>daily LLM trigger</div>
-</div>
+<div class="legend" id="legend"></div>
 
 <div id="stage">
   <svg id="svg">
@@ -98,227 +105,332 @@
       <pattern id="grid" width="40" height="40" patternUnits="userSpaceOnUse">
         <path d="M40 0H0V40" fill="none" stroke="#161d26" stroke-width="1"/>
       </pattern>
-      <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
-        <path d="M0 0 L10 5 L0 10 z" fill="#4a5969"/>
-      </marker>
-      <marker id="arrowHot" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
-        <path d="M0 0 L10 5 L0 10 z" fill="var(--accent)"/>
-      </marker>
+      <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="#4a5969"/></marker>
+      <marker id="arrowHot" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="#38bdf8"/></marker>
     </defs>
-    <rect id="bg" x="-4000" y="-4000" width="8000" height="8000" fill="url(#grid)"/>
-    <g id="viewport">
-      <g id="edges"></g>
-      <g id="nodes"></g>
-    </g>
+    <rect id="bg" x="-6000" y="-6000" width="12000" height="12000" fill="url(#grid)"/>
+    <g id="viewport"><g id="ribbon"></g><g id="edges"></g><g id="nodes"></g></g>
   </svg>
 </div>
 
 <div class="drawer" id="drawer">
   <button class="x" id="drawerX">✕</button>
   <div class="top"><span class="chip" id="dChip"></span><h2 id="dTitle"></h2><div class="file" id="dFile"></div></div>
-  <div class="bd"><div id="dBody"></div><h3>Connections</h3><div class="conns" id="dConns"></div></div>
+  <div class="bd"><button class="drill" id="dDrill">⤢ Zoom into detail flow</button><div id="dBody"></div><h3>Connections</h3><div class="conns" id="dConns"></div></div>
 </div>
 
-<div class="hint" id="hint">scroll to zoom · drag to pan</div>
+<div class="hint" id="hint">scroll to zoom · double-click a ⤢ node to drill in</div>
 
 <script>
-const LAYER = {
-  signal:{c:'#3b82f6',label:'Signals'}, select:{c:'#a855f7',label:'Selection (AI)'},
-  timing:{c:'#f59e0b',label:'Timing'}, exec:{c:'#22c55e',label:'Execution'},
-  safety:{c:'#ef4444',label:'Policy / Broker'}, data:{c:'#14b8a6',label:'State / Data'}
-};
-// id, label, file, layer, column(0..4), row, detail
-const NODES = [
-  {id:'discovery', label:'Discovery', file:'discovery.py', layer:'signal', col:0, row:0,
-    detail:'Weekly job that builds the tradable universe (S&P 500 + Nasdaq-100 + S&P 400) into the auto-watchlist used by the screens.'},
-  {id:'momentum', label:'Momentum / ETF rotation', file:'momentum.py', layer:'signal', col:0, row:1,
-    detail:'Dual-momentum relative-strength ranking that drives the core ETF sleeve and the aggressive leveraged-ETF sleeve.'},
-  {id:'macro', label:'Macro regime', file:'macro.py', layer:'signal', col:0, row:2,
-    detail:'FRED-based macro overlay. Shrinks risk in hostile regimes and can trigger defensive (macro-flip) exits.'},
-  {id:'screener', label:'CANSLIM screener', file:'screener.py', layer:'signal', col:0, row:3,
-    detail:'Growth screen: quarterly EPS/revenue growth pre-filter, relative-strength percentile, and VCP base detection with a buy pivot. One of the two ensemble strategies.'},
-  {id:'value', label:'Value + Quality screen', file:'value_screen.py', layer:'signal', col:0, row:4,
-    detail:'Cheap-but-improving screen. Hard liquidity/price/cap/anti-trap gates, then a winsorized cross-sectional z-score blending value (FCF yield, earnings yield, EV/EBITDA, book/market), quality (ROE, low debt) and improving fundamentals. The "low value, high potential" source.'},
+/* ============ palettes ============ */
+const LAYER = { signal:['#3b82f6','Signals'], select:['#a855f7','Selection (AI)'], timing:['#f59e0b','Timing'],
+  exec:['#22c55e','Execution'], safety:['#ef4444','Policy / Broker'], data:['#14b8a6','State / Data'] };
+const KIND = { input:['#3b82f6','Input'], process:['#22c55e','Process'], decision:['#f59e0b','Decision'],
+  output:['#14b8a6','Output'], ext:['#a855f7','LLM / external'], safety:['#ef4444','Safety gate'] };
 
-  {id:'strategies', label:'Strategy runner', file:'strategies.py', layer:'select', col:1, row:1,
-    detail:'The isolated-strategy contract + parallel runner. Each strategy writes its own result file; a strategy that errors or hangs is skipped (bounded by a timeout) so one can never stall the others or the watchdog.'},
-  {id:'agent', label:'AI agent · top 4', file:'investor_agent.py', layer:'select', col:1, row:2.4,
-    detail:'The single Claude agent. Merges both strategy lists, dedupes with consensus weighting, excludes owned names, calls the claude CLI for the top-4 picks with rationale, validates the JSON, and falls back to a deterministic rule ranking on any LLM failure. Runs ONCE per day.'},
-  {id:'candidates', label:'buy_candidates.json', file:'.cache/', layer:'data', col:1, row:3.7,
-    detail:'The agent’s daily shortlist — the only names the watchdog will consider buying that day. A staleness guard makes the watchdog ignore it (and fall back to the screener) if the daily job hasn’t refreshed it.'},
-
-  {id:'watchdog', label:'Watchdog', file:'watchdog.py', layer:'timing', col:2, row:1.6,
-    detail:'Daily + intraday monitor. Daily (pre-market): sync, attach stops, macro, and the once-a-day ensemble trigger. Intraday (every 5 min, RTH): coded volume-breakout buy signals from the candidate list, stop-loss enforcement (auto market-sell on breach — works on fractional shares), and SEPA exits. No LLM on this loop.'},
-  {id:'sepa', label:'SEPA exits', file:'sepa_exits.py', layer:'timing', col:2, row:3,
-    detail:'Pure Minervini exit rules: R-multiple scale-outs (2R/3R), failed-breakout, climax-top detection, and a 21-EMA trailing backstop. The watchdog calls into it.'},
-
-  {id:'rebalancer', label:'Rebalancer', file:'rebalancer.py', layer:'exec', col:3, row:0.3,
-    detail:'Builds two-tranche target weights from the signals, sends the tiny actionable slice through orders.py, and writes the rest to the pending plan for the intraday executor.'},
-  {id:'planner', label:'Planner', file:'planner.py', layer:'exec', col:3, row:1.4,
-    detail:'Pure functions enriching raw order intents with execution tier, price limits and slice counts. No I/O.'},
-  {id:'plan', label:'pending_plan.json', file:'.cache/', layer:'data', col:3, row:2.5,
-    detail:'The on-disk daily plan. Written by the rebalancer, worked tick-by-tick by the executor.'},
-  {id:'executor', label:'Executor', file:'executor.py', layer:'exec', col:3, row:3.6,
-    detail:'Intraday driver (every 10 min, RTH). Consumes the pending plan, evaluates 5 circuit breakers (SPY drop, VIX spike, single-name, news, macro flip), and submits sliced marketable-limit orders.'},
-
-  {id:'orders', label:'Orders · policy + safety', file:'orders.py', layer:'safety', col:4, row:1.4,
-    detail:'The policy chokepoint EVERY order passes through: HALT kill-switch, paper/live guard, cash-aware gate, daily caps, large-order approval. Also reconciles state (sync_state) and adopts broker-imported positions into a sleeve.'},
-  {id:'broker', label:'Broker (Alpaca SDK)', file:'broker.py', layer:'safety', col:4, row:2.6,
-    detail:'Thin Alpaca wrapper — pure I/O, raises BrokerError, leaks no SDK objects. Live trading requires two explicit env flags; otherwise everything is paper.'},
-  {id:'portfolio', label:'portfolio.json', file:'state', layer:'data', col:4, row:3.7,
-    detail:'The cached source-of-truth snapshot (positions, cash, tranche tags, stop ids). Written by sync_state, read across the system.'},
-  {id:'alpaca', label:'Alpaca (paper)', file:'broker', layer:'safety', col:4, row:0.3,
-    detail:'The brokerage. Paper account by default — real prices, simulated money.'},
+/* timeline phases (clock order) + per-node [phase, row] placement */
+const PHASES=[
+  {t:'Weekly',time:'Sun 20:00 · universe',c:'#16202c'},
+  {t:'Pre-market',time:'20:30 · daily watchdog + AI ensemble',c:'#172234'},
+  {t:'Rebalance',time:'21:35 · build target weights',c:'#16242c'},
+  {t:'Intraday loop',time:'22:00–04:00 · every 5–10 min (RTH)',c:'#1d2230'},
+  {t:'Continuous',time:'every order · settle',c:'#231b27'},
 ];
-const EDGES = [
-  ['discovery','screener'],['discovery','value'],
-  ['screener','strategies'],['value','strategies'],
+const TPOS={ discovery:[0,0],
+  macro:[1,0], screener:[1,1], value:[1,2], strategies:[1,3], agent:[1,4], candidates:[1,5],
+  momentum:[2,0], rebalancer:[2,1], planner:[2,2], plan:[2,3],
+  watchdog:[3,0], executor:[3,1], sepa:[3,2],
+  alpaca:[4,0], orders:[4,1], broker:[4,2], portfolio:[4,3] };
+const PCOLW=252, ROWH_T=96, RTOP=160;
+
+/* ============ OVERVIEW graph ============ */
+const OVERVIEW = { legend:LAYER, nodes:[
+  {id:'discovery',label:'Discovery',file:'discovery.py',layer:'signal',col:0,row:0,detail:'Weekly job that builds the tradable universe (S&P 500 + Nasdaq-100 + S&P 400) into the auto-watchlist used by the screens.'},
+  {id:'momentum',label:'Momentum / ETF rotation',file:'momentum.py',layer:'signal',col:0,row:1,detail:'Dual-momentum relative-strength ranking driving the core ETF sleeve and the aggressive leveraged-ETF sleeve.'},
+  {id:'macro',label:'Macro regime',file:'macro.py',layer:'signal',col:0,row:2,detail:'FRED-based macro overlay. Shrinks risk in hostile regimes and can trigger defensive (macro-flip) exits.'},
+  {id:'screener',label:'CANSLIM screener',file:'screener.py',layer:'signal',col:0,row:3,detail:'Growth screen: EPS/revenue growth filter, relative-strength percentile, VCP base detection with a buy pivot. One of the two ensemble strategies.'},
+  {id:'value',label:'Value + Quality screen',file:'value_screen.py',layer:'signal',col:0,row:4,detail:'Cheap-but-improving screen: hard gates then a winsorized z-score blending value, quality and improving fundamentals. The other ensemble strategy.'},
+  {id:'strategies',label:'Strategy runner',file:'strategies.py',layer:'select',col:1,row:1,detail:'Isolated-strategy contract + parallel runner. Each strategy writes its own file; a hung/erroring one is skipped (timeout-bounded) so it can never stall the others or the watchdog.'},
+  {id:'agent',label:'AI agent · top 4',file:'investor_agent.py',layer:'select',col:1,row:2.4,detail:'The single Claude agent. Merges the lists, dedupes with consensus weighting, excludes owned names, asks the claude CLI for the top-4 picks + rationale, and rule-ranks on any LLM failure. Runs ONCE per day.'},
+  {id:'candidates',label:'buy_candidates.json',file:'.cache/',layer:'data',col:1,row:3.7,detail:'The agent’s daily shortlist — the only names the watchdog will consider buying. A staleness guard ignores it (falls back to the screener) if the daily job hasn’t refreshed it.'},
+  {id:'watchdog',label:'Watchdog',file:'watchdog.py',layer:'timing',col:2,row:1.6,detail:'Daily + intraday monitor. Daily: sync, stops, macro, and the once-a-day ensemble trigger. Intraday (5 min): coded volume-breakout buys, stop-loss enforcement, SEPA exits. No LLM on this loop.'},
+  {id:'sepa',label:'SEPA exits',file:'sepa_exits.py',layer:'timing',col:2,row:3,detail:'Pure Minervini exit rules: R-multiple scale-outs, failed-breakout, climax-top, and a 21-EMA trailing backstop. The watchdog calls into it.'},
+  {id:'rebalancer',label:'Rebalancer',file:'rebalancer.py',layer:'exec',col:3,row:0.3,detail:'Builds two-tranche target weights, sends the tiny actionable slice through orders.py, writes the rest to the pending plan.'},
+  {id:'planner',label:'Planner',file:'planner.py',layer:'exec',col:3,row:1.4,detail:'Pure functions enriching order intents with tier, price limits and slice counts. No I/O.'},
+  {id:'plan',label:'pending_plan.json',file:'.cache/',layer:'data',col:3,row:2.5,detail:'The on-disk daily plan — written by the rebalancer, worked tick-by-tick by the executor.'},
+  {id:'executor',label:'Executor',file:'executor.py',layer:'exec',col:3,row:3.6,detail:'Intraday driver (10 min). Consumes the plan, evaluates 5 circuit breakers, submits sliced marketable-limit orders.'},
+  {id:'orders',label:'Orders · policy + safety',file:'orders.py',layer:'safety',col:4,row:1.4,detail:'The policy chokepoint EVERY order passes through: HALT, paper/live guard, cash gate, daily caps, large-order approval. Also reconciles state and adopts broker-imported positions.'},
+  {id:'broker',label:'Broker (Alpaca SDK)',file:'broker.py',layer:'safety',col:4,row:2.6,detail:'Thin Alpaca wrapper — pure I/O, raises BrokerError, leaks no SDK objects. Live trading needs two explicit env flags; otherwise paper.'},
+  {id:'portfolio',label:'portfolio.json',file:'state',layer:'data',col:4,row:3.7,detail:'Cached source-of-truth snapshot (positions, cash, tranche tags, stop ids). Written by sync_state, read across the system.'},
+  {id:'alpaca',label:'Alpaca (paper)',file:'broker',layer:'safety',col:4,row:0.3,detail:'The brokerage. Paper account by default — real prices, simulated money.'},
+], edges:[
+  ['discovery','screener'],['discovery','value'],['screener','strategies'],['value','strategies'],
   ['strategies','agent'],['agent','candidates'],['candidates','watchdog','hot'],
-  ['watchdog','sepa'],['watchdog','orders','hot'],
-  ['watchdog','strategies','daily'],
+  ['watchdog','sepa'],['watchdog','orders','hot'],['watchdog','strategies','daily'],
   ['momentum','rebalancer'],['macro','rebalancer'],['macro','watchdog'],
   ['rebalancer','planner'],['planner','plan'],['plan','executor'],
-  ['rebalancer','orders'],['executor','orders'],
-  ['orders','broker'],['broker','alpaca'],['orders','portfolio'],
-];
+  ['rebalancer','orders'],['executor','orders'],['orders','broker'],['broker','alpaca'],['orders','portfolio'],
+]};
 
-const NW=186, NH=58, COLW=270, ROWH=104, OX=70, OY=70;
-const byId = Object.fromEntries(NODES.map(n=>[n.id,n]));
-function layout(){ NODES.forEach(n=>{ n.x = OX + n.col*COLW; n.y = OY + n.row*ROWH; }); }
-layout();
+/* ============ DETAIL sub-graphs (internal flow per module) ============ */
+const SUB = {
+  value:{ title:'Value + Quality screen', file:'value_screen.py', legend:KIND, nodes:[
+    {id:'v1',label:'Universe',file:'watchlist',kind:'input',col:0,row:1},
+    {id:'v2',label:'Hard gates',file:'liquidity·price·cap·trap',kind:'decision',col:1,row:1,detail:'Drop a name before ranking if it fails ADV·price ≥ $2M, price ≥ $5, mkt-cap ≥ $300M, or the FCF>0/ROE>0 anti-trap.'},
+    {id:'v3',label:'Raw factors',file:'value · quality · improving',kind:'process',col:2,row:1},
+    {id:'v4',label:'Winsorized z-score',file:'cross-sectional, ±3σ',kind:'process',col:3,row:1},
+    {id:'v5',label:'Weighted composite',file:'0.5 / 0.35 / 0.15',kind:'process',col:4,row:1},
+    {id:'v6',label:'Rank → top-N',file:'VS_TOP_N',kind:'process',col:5,row:1},
+    {id:'v7',label:'write value.json',file:'.cache/strategies/',kind:'output',col:6,row:1},
+  ], edges:[['v1','v2'],['v2','v3'],['v3','v4'],['v4','v5'],['v5','v6'],['v6','v7','hot']]},
 
+  screener:{ title:'CANSLIM screener', file:'screener.py', legend:KIND, nodes:[
+    {id:'c1',label:'Universe',file:'watchlist',kind:'input',col:0,row:1},
+    {id:'c2',label:'C + A filter',file:'EPS & revenue growth',kind:'decision',col:1,row:1},
+    {id:'c3',label:'RS percentile',file:'3/6/12-mo blend',kind:'process',col:2,row:1},
+    {id:'c4',label:'VCP base detect',file:'→ buy pivot',kind:'process',col:3,row:1},
+    {id:'c5',label:'Composite score',file:'',kind:'process',col:4,row:1},
+    {id:'c6',label:'top-N',file:'SCREEN_TOP_N',kind:'process',col:5,row:1},
+    {id:'c7',label:'write canslim.json',file:'.cache/strategies/',kind:'output',col:6,row:1},
+  ], edges:[['c1','c2'],['c2','c3'],['c3','c4'],['c4','c5'],['c5','c6'],['c6','c7','hot']]},
+
+  strategies:{ title:'Strategy runner (parallel + isolated)', file:'strategies.py', legend:KIND, nodes:[
+    {id:'t1',label:'Registry',file:'ENSEMBLE_STRATEGIES',kind:'input',col:0,row:1.5},
+    {id:'t2',label:'run value',file:'thread (yfinance)',kind:'process',col:1,row:0.6},
+    {id:'t3',label:'run canslim',file:'thread (yfinance)',kind:'process',col:1,row:2.4},
+    {id:'t4',label:'Timeout / isolation',file:'hang → skip',kind:'safety',col:2,row:1.5,detail:'Each strategy is bounded by ENSEMBLE_STRATEGY_TIMEOUT_SEC; a hung or erroring one is abandoned so it cannot stall the others or the daily watchdog.'},
+    {id:'t5',label:'write <name>.json',file:'one file each',kind:'output',col:3,row:1.5},
+  ], edges:[['t1','t2'],['t1','t3'],['t2','t4'],['t3','t4'],['t4','t5','hot']]},
+
+  agent:{ title:'AI agent — pick top 4', file:'investor_agent.py', legend:KIND, nodes:[
+    {id:'a1',label:'Load strategy results',file:'load_strategy_results()',kind:'input',col:0,row:1.5},
+    {id:'a2',label:'Merge + dedupe',file:'consensus weighting',kind:'process',col:1,row:1.5},
+    {id:'a3',label:'Exclude owned',file:'vs portfolio',kind:'process',col:2,row:1.5},
+    {id:'a4',label:'Build prompt',file:'lists + pool',kind:'process',col:3,row:1.5},
+    {id:'a5',label:'claude CLI',file:'subprocess -p',kind:'ext',col:4,row:1.5,detail:'The one LLM call — slow & costly, so it runs once a day. Strict-JSON top-N prompt.'},
+    {id:'a6',label:'Parse + validate',file:'tickers in pool?',kind:'decision',col:5,row:1.5},
+    {id:'a7',label:'Top-4 picks',file:'+ rationale',kind:'output',col:6,row:0.7},
+    {id:'a8',label:'Rule-rank fallback',file:'on LLM failure',kind:'process',col:6,row:2.3,detail:'If the CLI is missing / times out / returns junk, fall back to deterministic consensus-then-score ranking. The pipeline never stalls.'},
+    {id:'a9',label:'write buy_candidates.json',file:'.cache/',kind:'output',col:7,row:1.5},
+  ], edges:[['a1','a2'],['a2','a3'],['a3','a4'],['a4','a5'],['a5','a6'],['a6','a7'],['a6','a8','alt'],['a7','a9','hot'],['a8','a9','alt']]},
+
+  watchdog:{ title:'Watchdog — daily & intraday', file:'watchdog.py', legend:KIND, nodes:[
+    {id:'w0',label:'Run',file:'cron',kind:'input',col:0,row:1.6},
+    {id:'wd1',label:'Snapshot + adopt',file:'sync_state',kind:'process',col:1,row:0.4},
+    {id:'wd2',label:'Attach stops',file:'ensure_trailing_stops',kind:'process',col:2,row:0.4},
+    {id:'wd3',label:'Macro check',file:'',kind:'process',col:3,row:0.4},
+    {id:'wd4',label:'Run ensemble (once)',file:'_run_daily_ensemble',kind:'ext',col:4,row:0.4,detail:'DAILY only: strategies + agent → buy_candidates.json. Fail-open. This is the one place the LLM runs.'},
+    {id:'wi1',label:'Read candidates',file:'buy_candidates.json',kind:'input',col:1,row:2.8},
+    {id:'wi2',label:'Volume-breakout buy?',file:'coded rule',kind:'decision',col:2,row:2.8,detail:'INTRADAY: deterministic — estimated full-day volume breaking the max down-day volume. No LLM.'},
+    {id:'wi3',label:'Enforce stop-loss',file:'market-sell on breach',kind:'safety',col:3,row:2.8},
+    {id:'wi4',label:'SEPA exits',file:'sepa_exits.py',kind:'process',col:4,row:2.8},
+  ], edges:[['w0','wd1','daily'],['wd1','wd2'],['wd2','wd3'],['wd3','wd4','daily'],
+            ['w0','wi1'],['wi1','wi2'],['wi2','wi3'],['wi3','wi4']]},
+
+  rebalancer:{ title:'Rebalancer', file:'rebalancer.py', legend:KIND, nodes:[
+    {id:'r1',label:'Signals',file:'momentum·screen·macro',kind:'input',col:0,row:1.5},
+    {id:'r2',label:'Core targets',file:'ETFs + stocks',kind:'process',col:1,row:0.6},
+    {id:'r3',label:'Aggressive targets',file:'leveraged-ETF momentum',kind:'process',col:1,row:2.4},
+    {id:'r4',label:'Reconcile to targets',file:'MAX_POSITION_PCT cap',kind:'process',col:2,row:1.5},
+    {id:'r5',label:'Tiny slice → orders',file:'execute_plan',kind:'output',col:3,row:0.7},
+    {id:'r6',label:'Large → pending_plan',file:'+ Telegram note',kind:'output',col:3,row:2.3},
+  ], edges:[['r1','r2'],['r1','r3'],['r2','r4'],['r3','r4'],['r4','r5'],['r4','r6']]},
+
+  executor:{ title:'Executor (intraday)', file:'executor.py', legend:KIND, nodes:[
+    {id:'x1',label:'Load pending_plan',file:'.cache/',kind:'input',col:0,row:1.5},
+    {id:'x2',label:'5 circuit breakers',file:'SPY·VIX·name·news·macro',kind:'decision',col:1,row:1.5},
+    {id:'x3',label:'Tripped → abort',file:'sticky',kind:'safety',col:2,row:0.5},
+    {id:'x4',label:'Slice intents',file:'marketable-limit',kind:'process',col:2,row:2.3},
+    {id:'x5',label:'Submit → orders',file:'',kind:'output',col:3,row:2.3},
+    {id:'x6',label:'Update plan state',file:'write back',kind:'process',col:4,row:2.3},
+  ], edges:[['x1','x2'],['x2','x3','alt'],['x2','x4'],['x4','x5'],['x5','x6']]},
+
+  orders:{ title:'Orders — policy & safety rails', file:'orders.py', legend:KIND, nodes:[
+    {id:'o1',label:'Order intent',file:'from any trigger',kind:'input',col:0,row:1.2},
+    {id:'o2',label:'HALT?',file:'.cache/HALT',kind:'safety',col:1,row:1.2},
+    {id:'o3',label:'Market open?',file:'',kind:'decision',col:2,row:1.2},
+    {id:'o4',label:'Cash-aware gate',file:'fail-closed',kind:'decision',col:3,row:1.2},
+    {id:'o5',label:'Daily caps',file:'count + notional',kind:'decision',col:4,row:1.2},
+    {id:'o6',label:'Large-order gate',file:'≥ threshold',kind:'decision',col:5,row:1.2},
+    {id:'o7',label:'Submit → broker',file:'',kind:'output',col:6,row:0.5},
+    {id:'o8',label:'Queue pending',file:'Telegram approval',kind:'output',col:6,row:2.0},
+  ], edges:[['o1','o2'],['o2','o3'],['o3','o4'],['o4','o5'],['o5','o6'],['o6','o7'],['o6','o8','alt']]},
+
+  sepa:{ title:'SEPA exits (rule checks)', file:'sepa_exits.py', legend:KIND, nodes:[
+    {id:'p1',label:'Position + price',file:'',kind:'input',col:0,row:1},
+    {id:'p2',label:'R-tier hit?',file:'2R / 3R scale-out',kind:'decision',col:1,row:1},
+    {id:'p3',label:'Failed breakout?',file:'window expiry',kind:'decision',col:2,row:1},
+    {id:'p4',label:'Climax top?',file:'range/volume blow-off',kind:'decision',col:3,row:1},
+    {id:'p5',label:'21-EMA break?',file:'backstop',kind:'decision',col:4,row:1},
+    {id:'p6',label:'Emit exit action',file:'→ watchdog',kind:'output',col:5,row:1},
+  ], edges:[['p1','p2'],['p2','p3'],['p3','p4'],['p4','p5'],['p5','p6']]},
+};
+
+/* ============ generic renderer ============ */
+const NW=190, NH=58, COLW=250, ROWH=110, OX=70, OY=70;
 const SVGNS='http://www.w3.org/2000/svg';
 const gEdges=document.getElementById('edges'), gNodes=document.getElementById('nodes');
 const vp=document.getElementById('viewport'), svg=document.getElementById('svg');
-const edgeEls=[], nodeEls={};
 
-EDGES.forEach(e=>{
-  const p=document.createElementNS(SVGNS,'path');
-  p.setAttribute('class','edge'+(e[2]==='daily'?' daily':'')+(e[2]==='hot'?' hot':''));
-  p.setAttribute('marker-end', e[2]==='hot'?'url(#arrowHot)':'url(#arrow)');
-  p.dataset.from=e[0]; p.dataset.to=e[1];
-  gEdges.appendChild(p); edgeEls.push(p);
-});
-NODES.forEach(n=>{
-  const g=document.createElementNS(SVGNS,'g'); g.setAttribute('class','node'); g.dataset.id=n.id;
-  const r=document.createElementNS(SVGNS,'rect');
-  r.setAttribute('width',NW); r.setAttribute('height',NH);
-  r.setAttribute('fill','#141b24'); r.setAttribute('stroke',LAYER[n.layer].c);
-  g.style.setProperty('--glow', LAYER[n.layer].c);
-  const bar=document.createElementNS(SVGNS,'rect');
-  bar.setAttribute('width',5); bar.setAttribute('height',NH); bar.setAttribute('rx',2);
-  bar.setAttribute('fill',LAYER[n.layer].c);
-  const lbl=document.createElementNS(SVGNS,'text'); lbl.setAttribute('class','lbl');
-  lbl.setAttribute('x',16); lbl.setAttribute('y',24); lbl.textContent=n.label;
-  const file=document.createElementNS(SVGNS,'text'); file.setAttribute('class','file');
-  file.setAttribute('x',16); file.setAttribute('y',42); file.textContent=n.file;
-  g.appendChild(r); g.appendChild(bar); g.appendChild(lbl); g.appendChild(file);
-  gNodes.appendChild(g); nodeEls[n.id]=g;
-});
+let G=null, byId={}, edgeEls=[], nodeEls={}, level=0, currentSub=null, vmode='time';
 
-function cx(n){return n.x+NW/2} function cy(n){return n.y+NH/2}
-function renderEdges(){
-  edgeEls.forEach(p=>{
-    const a=byId[p.dataset.from], b=byId[p.dataset.to];
-    let x1,y1,x2,y2;
-    if(b.x>=a.x){ x1=a.x+NW; y1=cy(a); x2=b.x; y2=cy(b); }
-    else { x1=a.x; y1=cy(a); x2=b.x+NW; y2=cy(b); }      // backward edge: exit left
-    const dx=Math.max(40,Math.abs(x2-x1)*0.5);
-    const c1x = x1 + (x2>=x1?dx:-dx), c2x = x2 - (x2>=x1?dx:-dx);
-    p.setAttribute('d',`M${x1},${y1} C${c1x},${y1} ${c2x},${y2} ${x2},${y2}`);
+function colorOf(n){ return n.layer ? LAYER[n.layer][0] : KIND[n.kind][0]; }
+function tagOf(n){ return n.layer ? LAYER[n.layer][1] : KIND[n.kind][1]; }
+
+function buildGraph(def){
+  gEdges.innerHTML=''; gNodes.innerHTML=''; edgeEls=[]; nodeEls={};
+  G=def; byId=Object.fromEntries(def.nodes.map(n=>[n.id,n]));
+  const timeMode = (def===OVERVIEW && vmode==='time');
+  def.nodes.forEach(n=>{ if(timeMode){ const t=TPOS[n.id]; n.x=OX+t[0]*PCOLW; n.y=RTOP+t[1]*ROWH_T; }
+    else { n.x=OX+n.col*COLW; n.y=OY+n.row*ROWH; } });
+  def.edges.forEach(e=>{
+    const p=document.createElementNS(SVGNS,'path');
+    let cls='edge'; if(e[2]==='daily')cls+=' daily'; if(e[2]==='hot')cls+=' hot'; if(e[2]==='alt')cls+=' alt';
+    p.setAttribute('class',cls); p.setAttribute('marker-end', e[2]==='hot'?'url(#arrowHot)':'url(#arrow)');
+    p.dataset.from=e[0]; p.dataset.to=e[1]; gEdges.appendChild(p); edgeEls.push(p);
+  });
+  def.nodes.forEach(n=>{
+    const drill = level===0 && !!SUB[n.id];
+    const g=document.createElementNS(SVGNS,'g'); g.setAttribute('class','node'+(drill?' drill':'')); g.dataset.id=n.id;
+    g.style.setProperty('--glow', colorOf(n));
+    const r=document.createElementNS(SVGNS,'rect'); r.setAttribute('width',NW); r.setAttribute('height',NH);
+    r.setAttribute('fill','#141b24'); r.setAttribute('stroke',colorOf(n)); r.setAttribute('stroke-width',1.5);
+    const bar=document.createElementNS(SVGNS,'rect'); bar.setAttribute('width',5); bar.setAttribute('height',NH);
+    bar.setAttribute('rx',2); bar.setAttribute('fill',colorOf(n));
+    const lbl=document.createElementNS(SVGNS,'text'); lbl.setAttribute('class','lbl');
+    lbl.setAttribute('x',16); lbl.setAttribute('y',n.file?24:34); lbl.textContent=n.label;
+    g.appendChild(r); g.appendChild(bar); g.appendChild(lbl);
+    if(n.file){ const f=document.createElementNS(SVGNS,'text'); f.setAttribute('class','file');
+      f.setAttribute('x',16); f.setAttribute('y',42); f.textContent=n.file; g.appendChild(f); }
+    if(drill){ const m=document.createElementNS(SVGNS,'text'); m.setAttribute('class','mag');
+      m.setAttribute('x',NW-20); m.setAttribute('y',22); m.textContent='⤢'; g.appendChild(m); }
+    gNodes.appendChild(g); nodeEls[n.id]=g;
+  });
+  renderNodes(); renderEdges(); buildLegend(def.legend);
+  if(timeMode) buildRibbon(); else document.getElementById('ribbon').innerHTML='';
+}
+function buildRibbon(){
+  const g=document.getElementById('ribbon'); g.innerHTML='';
+  PHASES.forEach((ph,i)=>{
+    const ids=Object.keys(TPOS).filter(id=>TPOS[id][0]===i);
+    const maxR=Math.max(...ids.map(id=>TPOS[id][1]));
+    const x=OX+i*PCOLW-22, w=PCOLW-6, top=RTOP-72, bot=RTOP+maxR*ROWH_T+NH+22;
+    const band=document.createElementNS(SVGNS,'rect');
+    band.setAttribute('x',x); band.setAttribute('y',top); band.setAttribute('width',w);
+    band.setAttribute('height',bot-top); band.setAttribute('rx',16);
+    band.setAttribute('fill',ph.c); band.setAttribute('stroke','#26303d'); band.setAttribute('opacity','.75');
+    g.appendChild(band);
+    const num=document.createElementNS(SVGNS,'text'); num.setAttribute('x',x+16); num.setAttribute('y',top+30);
+    num.setAttribute('fill','#38bdf8'); num.setAttribute('font-size','12'); num.setAttribute('font-weight','700');
+    num.textContent='PHASE '+(i+1); g.appendChild(num);
+    const t1=document.createElementNS(SVGNS,'text'); t1.setAttribute('x',x+16); t1.setAttribute('y',top+52);
+    t1.setAttribute('fill','#e6edf3'); t1.setAttribute('font-size','17'); t1.setAttribute('font-weight','700');
+    t1.textContent=ph.t; g.appendChild(t1);
+    const t2=document.createElementNS(SVGNS,'text'); t2.setAttribute('x',x+16); t2.setAttribute('y',top+70);
+    t2.setAttribute('fill','#6b7785'); t2.setAttribute('font-size','11'); t2.textContent=ph.time; g.appendChild(t2);
   });
 }
-function renderNodes(){ NODES.forEach(n=>{ nodeEls[n.id].setAttribute('transform',`translate(${n.x},${n.y})`); }); }
-renderNodes(); renderEdges();
+function cy(n){return n.y+NH/2}
+function renderEdges(){ edgeEls.forEach(p=>{
+  const a=byId[p.dataset.from], b=byId[p.dataset.to]; let x1,y1,x2,y2;
+  if(b.x>=a.x){ x1=a.x+NW; y1=cy(a); x2=b.x; y2=cy(b); } else { x1=a.x; y1=cy(a); x2=b.x+NW; y2=cy(b); }
+  const dx=Math.max(36,Math.abs(x2-x1)*0.5), c1=x1+(x2>=x1?dx:-dx), c2=x2-(x2>=x1?dx:-dx);
+  p.setAttribute('d',`M${x1},${y1} C${c1},${y1} ${c2},${y2} ${x2},${y2}`); }); }
+function renderNodes(){ G.nodes.forEach(n=>nodeEls[n.id].setAttribute('transform',`translate(${n.x},${n.y})`)); }
 
-/* ---------- pan / zoom ---------- */
-let tx=0, ty=0, k=1;
-function apply(){ vp.setAttribute('transform',`translate(${tx} ${ty}) scale(${k})`);
-  document.getElementById('bg').setAttribute('transform',`translate(${tx} ${ty}) scale(${k})`); }
-function clampK(v){return Math.max(0.35,Math.min(2.6,v));}
-function zoomAt(px,py,factor){
-  const nk=clampK(k*factor); const wx=(px-tx)/k, wy=(py-ty)/k;
-  tx=px-wx*nk; ty=py-wy*nk; k=nk; apply();
-}
+function buildLegend(map){ const el=document.getElementById('legend');
+  let h='<b>'+(level===0?'Layers':'Step kind')+'</b>';
+  Object.values(map).forEach(([c,l])=>h+=`<div class="row"><i class="k" style="background:${c}"></i>${l}</div>`);
+  if(level===0) h+='<div class="row" style="margin-top:7px"><i class="ek"></i>daily LLM trigger</div>';
+  el.innerHTML=h; }
+
+/* ============ pan / zoom ============ */
+let tx=0,ty=0,k=1;
+function apply(){ const t=`translate(${tx} ${ty}) scale(${k})`; vp.setAttribute('transform',t); document.getElementById('bg').setAttribute('transform',t); }
+function clampK(v){return Math.max(0.3,Math.min(2.6,v));}
+function zoomAt(px,py,f){ const nk=clampK(k*f), wx=(px-tx)/k, wy=(py-ty)/k; tx=px-wx*nk; ty=py-wy*nk; k=nk; apply(); }
 svg.addEventListener('wheel',e=>{ e.preventDefault();
-  const r=svg.getBoundingClientRect();
-  zoomAt(e.clientX-r.left, e.clientY-r.top, Math.exp(-e.deltaY*0.0016));
-  document.getElementById('hint').style.opacity=0;
+  const r=svg.getBoundingClientRect(), f=Math.exp(-e.deltaY*0.0016);
+  if(level===1 && f<1 && k<=0.6){ drillOut(); return; }   // zoom out far → back to overview
+  zoomAt(e.clientX-r.left,e.clientY-r.top,f); document.getElementById('hint').style.opacity=0;
 },{passive:false});
 document.getElementById('zin').onclick=()=>zoomAt(svg.clientWidth/2,svg.clientHeight/2,1.25);
-document.getElementById('zout').onclick=()=>zoomAt(svg.clientWidth/2,svg.clientHeight/2,0.8);
-document.getElementById('reset').onclick=()=>{layout();renderNodes();renderEdges();fit();};
-function fit(){
-  const xs=NODES.map(n=>n.x), ys=NODES.map(n=>n.y);
-  const minX=Math.min(...xs)-40, minY=Math.min(...ys)-40;
-  const maxX=Math.max(...xs)+NW+40, maxY=Math.max(...ys)+NH+40;
-  const w=svg.clientWidth, h=svg.clientHeight;
-  k=clampK(Math.min(w/(maxX-minX), h/(maxY-minY)));
-  tx=(w-(maxX-minX)*k)/2 - minX*k; ty=(h-(maxY-minY)*k)/2 - minY*k; apply();
-}
+document.getElementById('zout').onclick=()=>{ if(level===1&&k<=0.62){drillOut();return;} zoomAt(svg.clientWidth/2,svg.clientHeight/2,0.8); };
+document.getElementById('reset').onclick=()=>{ buildGraph(level===0?OVERVIEW:SUB[currentSub]); fit(); };
+document.getElementById('toggle').onclick=()=>{ if(level!==0) drillOut();
+  vmode=(vmode==='time'?'arch':'time');
+  document.getElementById('toggle').textContent=(vmode==='time'?'FLOW':'TIME');
+  buildGraph(OVERVIEW); fit(); };
+function fit(){ const xs=G.nodes.map(n=>n.x), ys=G.nodes.map(n=>n.y);
+  const a=Math.min(...xs)-40, b=Math.min(...ys)-40, c=Math.max(...xs)+NW+40, d=Math.max(...ys)+NH+40;
+  const w=svg.clientWidth, h=svg.clientHeight; k=clampK(Math.min(w/(c-a),h/(d-b),1.4));
+  tx=(w-(c-a)*k)/2-a*k; ty=(h-(d-b)*k)/2-b*k; apply(); }
 document.getElementById('fit').onclick=fit;
 
-/* ---------- pointer: pan vs node-drag vs click ---------- */
-let mode=null, start=null, dragNode=null, moved=0;
-svg.addEventListener('pointerdown',e=>{
-  const ng=e.target.closest('.node');
+/* ============ pointer: pan / drag / click / dblclick ============ */
+let mode=null,start=null,dragNode=null,moved=0;
+svg.addEventListener('pointerdown',e=>{ const ng=e.target.closest('.node');
   start={x:e.clientX,y:e.clientY,tx,ty}; moved=0;
-  if(ng){ mode='node'; dragNode=byId[ng.dataset.id]; start.nx=dragNode.x; start.ny=dragNode.y;
-    ng.classList.add('dragging'); }
+  if(ng){ mode='node'; dragNode=byId[ng.dataset.id]; start.nx=dragNode.x; start.ny=dragNode.y; ng.classList.add('dragging'); }
   else { mode='pan'; svg.classList.add('panning'); }
-  svg.setPointerCapture(e.pointerId);
-});
-svg.addEventListener('pointermove',e=>{
-  if(!mode) return;
+  svg.setPointerCapture(e.pointerId); });
+svg.addEventListener('pointermove',e=>{ if(!mode)return;
   const dx=e.clientX-start.x, dy=e.clientY-start.y; moved=Math.max(moved,Math.abs(dx)+Math.abs(dy));
   if(mode==='pan'){ tx=start.tx+dx; ty=start.ty+dy; apply(); }
-  else if(mode==='node'){ dragNode.x=start.nx+dx/k; dragNode.y=start.ny+dy/k;
-    nodeEls[dragNode.id].setAttribute('transform',`translate(${dragNode.x},${dragNode.y})`); renderEdges(); }
-});
+  else { dragNode.x=start.nx+dx/k; dragNode.y=start.ny+dy/k; nodeEls[dragNode.id].setAttribute('transform',`translate(${dragNode.x},${dragNode.y})`); renderEdges(); } });
 svg.addEventListener('pointerup',e=>{
-  if(mode==='node'){ nodeEls[dragNode.id].classList.remove('dragging');
-    if(moved<5) openDrawer(dragNode.id); }
+  if(mode==='node'){ nodeEls[dragNode.id].classList.remove('dragging'); if(moved<5) openDrawer(dragNode.id); }
   else if(mode==='pan' && moved<5){ closeDrawer(); }
-  mode=null; dragNode=null; svg.classList.remove('panning');
-});
+  mode=null; dragNode=null; svg.classList.remove('panning'); });
+gNodes.addEventListener('dblclick',e=>{ const ng=e.target.closest('.node'); if(ng && level===0 && SUB[ng.dataset.id]) drillIn(ng.dataset.id); });
 
-/* ---------- hover highlight ---------- */
+/* ============ hover highlight ============ */
 gNodes.addEventListener('pointerover',e=>{ const ng=e.target.closest('.node'); if(ng) highlight(ng.dataset.id); });
-gNodes.addEventListener('pointerout',e=>{ if(!document.getElementById('drawer').classList.contains('open')) clearHi(); });
-function neighbors(id){ const s=new Set([id]);
-  EDGES.forEach(e=>{ if(e[0]===id)s.add(e[1]); if(e[1]===id)s.add(e[0]); }); return s; }
-function highlight(id){
-  const keep=neighbors(id);
-  NODES.forEach(n=>nodeEls[n.id].classList.toggle('dim',!keep.has(n.id)));
-  edgeEls.forEach(p=>{ const on=p.dataset.from===id||p.dataset.to===id;
-    p.classList.toggle('dim',!on); p.classList.toggle('hot',on); });
-}
-function clearHi(){ NODES.forEach(n=>nodeEls[n.id].classList.remove('dim','sel'));
-  edgeEls.forEach((p,i)=>{ p.classList.remove('dim'); p.classList.toggle('hot', EDGES[i][2]==='hot'); }); }
+gNodes.addEventListener('pointerout',()=>{ if(!document.getElementById('drawer').classList.contains('open')) clearHi(); });
+function neighbors(id){ const s=new Set([id]); G.edges.forEach(e=>{ if(e[0]===id)s.add(e[1]); if(e[1]===id)s.add(e[0]); }); return s; }
+function highlight(id){ const keep=neighbors(id);
+  G.nodes.forEach(n=>nodeEls[n.id].classList.toggle('dim',!keep.has(n.id)));
+  edgeEls.forEach(p=>{ const on=p.dataset.from===id||p.dataset.to===id; p.classList.toggle('dim',!on); }); }
+function clearHi(){ G.nodes.forEach(n=>nodeEls[n.id].classList.remove('dim','sel')); edgeEls.forEach(p=>p.classList.remove('dim')); }
 
-/* ---------- detail drawer ---------- */
+/* ============ drill in / out ============ */
+const crumb=document.getElementById('crumb');
+function swap(buildFn){ vp.style.opacity=0; setTimeout(()=>{ buildFn(); fit(); vp.style.opacity=1; },170); }
+function drillIn(id){ const def=SUB[id]; if(!def)return; level=1; currentSub=id; closeDrawer();
+  swap(()=>buildGraph(def));
+  crumb.className='crumb l1';
+  document.getElementById('crumbText').innerHTML=`<a id="toOv">Overview</a> <span class="sep">›</span> <span class="cur">${def.title}</span>`;
+  document.getElementById('toOv').onclick=drillOut;
+}
+function drillOut(){ if(level===0)return; level=0; currentSub=null; closeDrawer();
+  swap(()=>buildGraph(OVERVIEW));
+  crumb.className='crumb'; document.getElementById('crumbText').innerHTML='<span class="cur">Overview</span>';
+}
+document.getElementById('crumbBack').onclick=drillOut;
+document.addEventListener('keydown',e=>{ if(e.key==='Escape'){ if(level===1)drillOut(); else closeDrawer(); } });
+
+/* ============ detail drawer ============ */
 const drawer=document.getElementById('drawer');
-function openDrawer(id){
-  const n=byId[id]; const L=LAYER[n.layer];
-  document.getElementById('dChip').textContent=L.label; document.getElementById('dChip').style.background=L.c;
+function openDrawer(id){ const n=byId[id];
+  document.getElementById('dChip').textContent=tagOf(n); document.getElementById('dChip').style.background=colorOf(n);
   document.getElementById('dTitle').textContent=n.label;
-  document.getElementById('dFile').textContent=n.file;
-  document.getElementById('dBody').innerHTML='<p>'+n.detail+'</p>';
-  const ins=EDGES.filter(e=>e[1]===id).map(e=>byId[e[0]]);
-  const outs=EDGES.filter(e=>e[0]===id).map(e=>byId[e[1]]);
+  document.getElementById('dFile').textContent=n.file||'';
+  document.getElementById('dBody').innerHTML=n.detail?('<p>'+n.detail+'</p>'):'<p class="muted">'+(n.label)+'</p>';
+  const drillBtn=document.getElementById('dDrill');
+  if(level===0 && SUB[id]){ drillBtn.classList.add('show'); drillBtn.onclick=()=>drillIn(id); } else drillBtn.classList.remove('show');
+  const outs=G.edges.filter(e=>e[0]===id).map(e=>byId[e[1]]), ins=G.edges.filter(e=>e[1]===id).map(e=>byId[e[0]]);
   const conns=document.getElementById('dConns'); conns.innerHTML='';
   outs.forEach(t=>conns.insertAdjacentHTML('beforeend',`<a data-go="${t.id}">→ ${t.label}</a>`));
   ins.forEach(t=>conns.insertAdjacentHTML('beforeend',`<a data-go="${t.id}">← ${t.label}</a>`));
   conns.querySelectorAll('a').forEach(a=>a.onclick=()=>openDrawer(a.dataset.go));
-  drawer.classList.add('open');
-  NODES.forEach(x=>nodeEls[x.id].classList.remove('sel')); nodeEls[id].classList.add('sel'); highlight(id);
+  drawer.classList.add('open'); G.nodes.forEach(x=>nodeEls[x.id].classList.remove('sel')); nodeEls[id].classList.add('sel'); highlight(id);
 }
 function closeDrawer(){ drawer.classList.remove('open'); clearHi(); }
 document.getElementById('drawerX').onclick=closeDrawer;
 
 window.addEventListener('resize',fit);
-fit();
-setTimeout(()=>{document.getElementById('hint').style.transition='opacity .6s';},2500);
+buildGraph(OVERVIEW); fit();
+setTimeout(()=>document.getElementById('hint').style.opacity=0,4000);
 </script>
 </body>
 </html>
