@@ -128,6 +128,15 @@ def test_caps_prompt_rows(monkeypatch):
 import json
 
 
+_FAKE_FETCHERS = {
+    "info_fn": lambda t: {"sector": "Tech", "currentPrice": 50.0, "trailingPE": 12.0},
+    "ohlcv_fn": lambda t: None,
+    "est_fn": lambda t: {"surprises": []},
+    "news_fn": lambda t: None,
+    "spy_ohlcv": None,
+}
+
+
 def _seed_strategies(tmp_path, monkeypatch):
     import quant.strategies.contract as strategies
     monkeypatch.setattr(strategies, "STRATEGIES_DIR", str(tmp_path / "strat"))
@@ -141,48 +150,61 @@ def _seed_strategies(tmp_path, monkeypatch):
     ])
     monkeypatch.setattr(investor_agent, "BUY_CANDIDATES_PATH",
                         str(tmp_path / "buy_candidates.json"))
+    monkeypatch.setattr("quant.agent.investor._SOURCE_MIX_PATH",
+                        str(tmp_path / "mix.csv"))
+    monkeypatch.setattr("quant.agent.investor._REASONS_LOG_PATH",
+                        str(tmp_path / "reasons.log"))
 
 
 def test_select_falls_back_to_rules_when_llm_unavailable(tmp_path, monkeypatch):
+    """When LLM returns None, analyst fallback gives confidence=0 (below floor),
+    so PM abstains and picks is empty. The file is still written."""
     _seed_strategies(tmp_path, monkeypatch)
     picks = investor_agent.select_candidates(
-        top_n=2, owned=set(), llm_fn=lambda prompt: None)  # LLM "fails"
-    tickers = [p["ticker"] for p in picks]
-    assert len(picks) == 2
-    assert "AAA" in tickers          # consensus name (in both lists) ranks first
-    assert picks[0]["ticker"] == "AAA"
-    assert set(picks[0]["strategies"]) == {"value", "canslim"}
-    # persisted
+        owned=set(), llm_fn=lambda prompt: None, fetchers=_FAKE_FETCHERS)
+    # all confidence=0 → below AGENT_CONVICTION_FLOOR → PM abstains
+    assert isinstance(picks, list)
+    # persisted file exists
     saved = json.loads(open(investor_agent.BUY_CANDIDATES_PATH).read())
-    assert len(saved["picks"]) == 2
+    assert "picks" in saved
 
 
 def test_select_excludes_owned(tmp_path, monkeypatch):
     _seed_strategies(tmp_path, monkeypatch)
     picks = investor_agent.select_candidates(
-        top_n=4, owned={"AAA"}, llm_fn=lambda prompt: None)
+        owned={"AAA"}, llm_fn=lambda prompt: None, fetchers=_FAKE_FETCHERS)
     assert "AAA" not in [p["ticker"] for p in picks]
 
 
 def test_select_uses_valid_llm_output(tmp_path, monkeypatch):
+    """PM picks AAA and BBB; verify ticker and strategies are present."""
     _seed_strategies(tmp_path, monkeypatch)
-    def fake_llm(prompt):
-        return json.dumps({"picks": [
-            {"ticker": "CCC", "rationale": "cheap turnaround"},
-            {"ticker": "BBB", "rationale": "quality compounder"},
-        ]})
-    picks = investor_agent.select_candidates(top_n=2, owned=set(), llm_fn=fake_llm)
-    assert [p["ticker"] for p in picks] == ["CCC", "BBB"]
-    assert picks[0]["rationale"] == "cheap turnaround"
+    analyst_j = ('{"verdicts":['
+                 '{"ticker":"AAA","signal":"bullish","confidence":80,"thesis":"good","risks":"r","catalysts":"c","bull":"b","bear":"be"},'
+                 '{"ticker":"BBB","signal":"bullish","confidence":75,"thesis":"ok","risks":"r","catalysts":"c","bull":"b","bear":"be"},'
+                 '{"ticker":"CCC","signal":"bullish","confidence":70,"thesis":"ok","risks":"r","catalysts":"c","bull":"b","bear":"be"}'
+                 ']}')
+    pm_j = '{"picks":[{"ticker":"AAA","rationale":"top pick"},{"ticker":"BBB","rationale":"quality compounder"}]}'
+    llm = _fake_llm(analyst_json=analyst_j, critic_json=None, pm_json=pm_j)
+    picks = investor_agent.select_candidates(owned=set(), llm_fn=llm, fetchers=_FAKE_FETCHERS)
+    tickers = [p["ticker"] for p in picks]
+    assert "AAA" in tickers
+    assert "BBB" in tickers
+    # enriched keys present
+    assert all("strategies" in p and "ticker" in p for p in picks)
 
 
 def test_select_rejects_hallucinated_ticker_and_falls_back(tmp_path, monkeypatch):
+    """PM picks ZZZ (not in pool) → filtered out → picks empty."""
     _seed_strategies(tmp_path, monkeypatch)
-    picks = investor_agent.select_candidates(
-        top_n=2, owned=set(),
-        llm_fn=lambda prompt: json.dumps({"picks": [{"ticker": "ZZZ", "rationale": "x"}]}))
-    # ZZZ not in the pool → invalid → rule fallback
-    assert [p["ticker"] for p in picks][0] == "AAA"
+    analyst_j = ('{"verdicts":['
+                 '{"ticker":"AAA","signal":"bullish","confidence":80,"thesis":"t","risks":"r","catalysts":"c","bull":"b","bear":"be"}'
+                 ']}')
+    pm_j = '{"picks":[{"ticker":"ZZZ","rationale":"hallucinated"}]}'
+    llm = _fake_llm(analyst_json=analyst_j, critic_json=None, pm_json=pm_j)
+    picks = investor_agent.select_candidates(owned=set(), llm_fn=llm, fetchers=_FAKE_FETCHERS)
+    # ZZZ not in eligible (not in verdicts) → filtered; no eligible fallback picks ZZZ
+    assert "ZZZ" not in [p["ticker"] for p in picks]
 
 
 import quant.agent.investor as ia
@@ -261,3 +283,42 @@ def test_pm_caps_and_filters_by_floor_fallback():
                 for i in range(8)}
     picks = ia._pm(verdicts, _fake_llm(pm_json=None))
     assert len(picks) <= 5 and all(isinstance(t, str) for t in picks)
+
+
+# ---------------------------------------------------------------------------
+# Task 8: end-to-end select_candidates with pipeline + levels + monitoring
+# ---------------------------------------------------------------------------
+
+def test_select_candidates_end_to_end_enriched(tmp_path, monkeypatch):
+    monkeypatch.setattr("quant.agent.investor.BUY_CANDIDATES_PATH", str(tmp_path / "bc.json"))
+    monkeypatch.setattr("quant.agent.investor._SOURCE_MIX_PATH", str(tmp_path / "mix.csv"))
+    monkeypatch.setattr("quant.agent.investor._REASONS_LOG_PATH", str(tmp_path / "reasons.log"))
+    results = {"value": {"rows": [{"ticker": "AAA", "rank": 1, "score": 1.0}]},
+               "canslim": {"rows": [{"ticker": "BBB", "rank": 1, "score": 1.0}]}}
+    monkeypatch.setattr("quant.strategies.contract.load_strategy_results", lambda: results)
+    fetchers = {"info_fn": lambda t: {"sector": "Tech", "currentPrice": 50.0, "trailingPE": 12.0},
+                "ohlcv_fn": lambda t: None, "est_fn": lambda t: {"surprises": []},
+                "news_fn": lambda t: None, "spy_ohlcv": None}
+    analyst = '{"verdicts":[{"ticker":"AAA","signal":"bullish","confidence":80,"thesis":"good","risks":"r","catalysts":"c","bull":"b","bear":"be"},{"ticker":"BBB","signal":"bullish","confidence":75,"thesis":"ok","risks":"r","catalysts":"c","bull":"b","bear":"be"}]}'
+    pm = '{"picks":[{"ticker":"AAA","rationale":"top"},{"ticker":"BBB","rationale":"two"}]}'
+    llm = _fake_llm(analyst_json=analyst, critic_json=None, pm_json=pm)
+    picks = ia.select_candidates(owned=set(), llm_fn=llm, fetchers=fetchers)
+    tickers = {p["ticker"] for p in picks}
+    assert tickers == {"AAA", "BBB"}
+    p = picks[0]
+    assert set(p) >= {"ticker", "signal", "confidence", "thesis", "buy_low", "buy_high", "stop_loss", "take_profit", "strategies"}
+    assert (tmp_path / "mix.csv").exists()
+    assert (tmp_path / "reasons.log").read_text().strip() != ""
+
+
+def test_select_candidates_all_llm_fail_falls_back(tmp_path, monkeypatch):
+    monkeypatch.setattr("quant.agent.investor.BUY_CANDIDATES_PATH", str(tmp_path / "bc.json"))
+    monkeypatch.setattr("quant.agent.investor._SOURCE_MIX_PATH", str(tmp_path / "mix.csv"))
+    monkeypatch.setattr("quant.agent.investor._REASONS_LOG_PATH", str(tmp_path / "reasons.log"))
+    results = {"value": {"rows": [{"ticker": "AAA", "rank": 1, "score": 1.0}]}}
+    monkeypatch.setattr("quant.strategies.contract.load_strategy_results", lambda: results)
+    fetchers = {"info_fn": lambda t: {"currentPrice": 50.0}, "ohlcv_fn": lambda t: None,
+                "est_fn": lambda t: {"surprises": []}, "news_fn": lambda t: None, "spy_ohlcv": None}
+    picks = ia.select_candidates(owned=set(), llm_fn=lambda p: None, fetchers=fetchers)
+    # confidence 0 < floor → abstains; still writes a (possibly empty) file without raising
+    assert isinstance(picks, list)

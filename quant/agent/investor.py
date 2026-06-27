@@ -101,6 +101,44 @@ def run_investor_review(df: pd.DataFrame) -> Optional[str]:
 
 BUY_CANDIDATES_PATH = os.path.join(paths.REPO_ROOT, ".cache",
                                    "buy_candidates.json")
+_SOURCE_MIX_PATH = os.path.join(paths.REPO_ROOT, ".cache", "agent_source_mix.csv")
+_REASONS_LOG_PATH = os.path.join(paths.REPO_ROOT, ".cache", "agent_reasons.log")
+
+
+def _default_fetchers():
+    import quant.data.market as data
+    import quant.signals.sentiment as sentiment
+    import quant.config as config
+    spy = None
+    try:
+        spy = data.fetch_ohlcv("SPY", period="1y")
+    except Exception:
+        spy = None
+    news_fn = (lambda t: data and sentiment.fetch_yf_news([t])) if config.AGENT_INCLUDE_NEWS else (lambda t: None)
+    return {"info_fn": data.fetch_info, "ohlcv_fn": lambda t: data.fetch_ohlcv(t, period="1y"),
+            "est_fn": data.fetch_estimates, "news_fn": news_fn, "spy_ohlcv": spy}
+
+
+def _log_monitoring(results, shortlist, picks):
+    import datetime as _dt
+    day = _dt.date.today().isoformat()
+    pt = [p["ticker"] for p in picks]
+    sc_pick, sc_short = source_counts(pt, results), source_counts(shortlist, results)
+    try:
+        os.makedirs(os.path.dirname(_SOURCE_MIX_PATH), exist_ok=True)
+        new = not os.path.exists(_SOURCE_MIX_PATH)
+        with open(_SOURCE_MIX_PATH, "a") as f:
+            if new:
+                f.write("date,n_picks,n_value,n_canslim,n_other,shortlist_value,shortlist_canslim\n")
+            f.write(f"{day},{len(pt)},{sc_pick.get('value',0)},{sc_pick.get('canslim',0)},"
+                    f"{sc_pick.get('other',0)},{sc_short.get('value',0)},{sc_short.get('canslim',0)}\n")
+        with open(_REASONS_LOG_PATH, "a") as f:
+            for p in picks:
+                f.write(f"{day} {p['ticker']} {p.get('signal','?')} conf={p.get('confidence','?')} "
+                        f"buy={p.get('buy_low')}-{p.get('buy_high')} stop={p.get('stop_loss')} "
+                        f"tp={p.get('take_profit')} | {p.get('thesis','')}; risks: {p.get('risks','')}\n")
+    except Exception as e:
+        _log.warning("_log_monitoring: %s", e)
 
 _GROUNDING = ("Use ONLY the numbers in each dossier; never invent a figure; "
               "null → 'unknown'. Reply with STRICT JSON only.")
@@ -252,19 +290,6 @@ def source_counts(tickers, results):
     return counts
 
 
-def _build_prompt(per_strategy: dict, pool: list, top_n: int) -> str:
-    lines = ["You are a portfolio analyst. Pick the best BUY candidates.",
-             f"Return STRICT JSON: {{\"picks\":[{{\"ticker\":..,\"rationale\":\"<=15 words\"}}]}} with EXACTLY {top_n} picks.",
-             "Only choose tickers from this candidate pool:"]
-    for e in pool:
-        lines.append(f"  {e['ticker']} (strategies: {','.join(e['strategies'])}, best_rank {e['best_rank']})")
-    lines.append("\nPer-strategy lists:")
-    for name, payload in per_strategy.items():
-        tickers = ", ".join(r["ticker"] for r in payload.get("rows", [])[:10])
-        lines.append(f"  {name}: {tickers}")
-    return "\n".join(lines)
-
-
 def _default_llm(prompt: str):
     """Call the local claude CLI; None on any failure."""
     if shutil.which("claude") is None:
@@ -282,31 +307,12 @@ def _default_llm(prompt: str):
     return result.stdout
 
 
-def _parse_llm(text, valid_tickers, top_n) -> "list | None":
-    """Parse {'picks':[{ticker,rationale}]}; None if unusable."""
-    if not text:
-        return None
-    try:
-        start, end = text.index("{"), text.rindex("}") + 1
-        data = json.loads(text[start:end])
-        picks = data["picks"]
-    except (ValueError, KeyError, json.JSONDecodeError):
-        return None
-    out = []
-    for p in picks:
-        t = p.get("ticker")
-        if t in valid_tickers:
-            out.append({"ticker": t, "rationale": str(p.get("rationale", ""))[:120]})
-    if len(out) < top_n:
-        return None
-    return out[:top_n]
-
-
-def select_candidates(top_n=None, owned=None, llm_fn=None) -> list:
-    """Review all strategy results, pick top_n buy candidates, persist them."""
+def select_candidates(top_n=None, owned=None, llm_fn=None, *, fetchers=None) -> list:
+    """Dossier-grounded pipeline: balanced blind shortlist → analyst → critic → PM
+    (0..AGENT_MAX_PICKS, conviction floor) → enriched picks + advisory levels.
+    Fail-open: any stage failure degrades to a deterministic fallback."""
     import quant.config as config
     import quant.strategies.contract as strategies
-    top_n = top_n if top_n is not None else config.ENSEMBLE_TOP_N
     llm_fn = llm_fn or _default_llm
     if owned is None:
         try:
@@ -317,25 +323,31 @@ def select_candidates(top_n=None, owned=None, llm_fn=None) -> list:
 
     results = strategies.load_strategy_results()
     pool = [e for e in _merge_pool(results) if e["ticker"] not in owned]
+    by_ticker = {e["ticker"]: e for e in pool}
 
-    picks = None
+    picks = []
+    shortlist = []
     if pool:
-        valid = {e["ticker"] for e in pool}
-        by_ticker = {e["ticker"]: e for e in pool}
-        parsed = _parse_llm(llm_fn(_build_prompt(results, pool, top_n)), valid, top_n)
-        if parsed is not None:
-            picks = [{"ticker": p["ticker"], "rationale": p["rationale"],
-                      "strategies": by_ticker[p["ticker"]]["strategies"]}
-                     for p in parsed]
-        else:
-            picks = [{"ticker": e["ticker"], "rationale": "rule-ranked fallback",
-                      "strategies": e["strategies"]} for e in pool[:top_n]]
-    picks = picks or []
+        fetchers = fetchers or _default_fetchers()
+        dossiers = _build_dossiers(pool, **fetchers)
+        shortlist = [t for t in _balanced_shortlist(results, pool, owned) if t in dossiers]
+        if shortlist:
+            verdicts = _critic(_analyst(dossiers, shortlist, llm_fn), dossiers, llm_fn)
+            chosen = _pm(verdicts, llm_fn)
+            for t in chosen:
+                v = verdicts.get(t, {})
+                lv = dossier.suggested_levels(dossiers[t], buy_band_atr=config.AGENT_BUY_BAND_ATR,
+                                              stop_atr_mult=config.AGENT_STOP_ATR_MULT,
+                                              target_r=config.AGENT_TARGET_R)
+                picks.append({"ticker": t, "rationale": v.get("thesis", ""), "signal": v.get("signal"),
+                              "confidence": v.get("confidence"), "thesis": v.get("thesis", ""),
+                              "risks": v.get("risks", ""), "catalysts": v.get("catalysts", ""),
+                              **lv, "strategies": by_ticker[t]["strategies"]})
 
+    _log_monitoring(results, shortlist, picks)
     os.makedirs(os.path.dirname(BUY_CANDIDATES_PATH), exist_ok=True)
     tmp = BUY_CANDIDATES_PATH + ".tmp"
     with open(tmp, "w") as f:
-        json.dump({"generated_at": dt.datetime.now(dt.timezone.utc).isoformat(),
-                   "picks": picks}, f)
+        json.dump({"generated_at": dt.datetime.now(dt.timezone.utc).isoformat(), "picks": picks}, f)
     os.replace(tmp, BUY_CANDIDATES_PATH)
     return picks
