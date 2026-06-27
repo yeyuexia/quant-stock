@@ -98,10 +98,18 @@ def build_dossier(ticker, *, info, ohlcv=None, spy_ohlcv=None, news=None, estima
     news_section = None
     if news is not None:
         from quant.signals.sentiment import analyze_news_sentiment
-        sent = analyze_news_sentiment(news) if news else {}
+        # analyze_news_sentiment returns a LIST of per-article dicts
+        # ({sentiment_score, sentiment, ...}); aggregate to a mean score + label.
+        scored = analyze_news_sentiment(news) if news else []
+        vals = [a.get("sentiment_score") for a in scored
+                if isinstance(a.get("sentiment_score"), (int, float))]
+        mean = (sum(vals) / len(vals)) if vals else None
+        label = None
+        if mean is not None:
+            label = "positive" if mean > 0.05 else "negative" if mean < -0.05 else "neutral"
         news_section = {"count": len(news),
-                        "sentiment_score": sent.get("score"),
-                        "sentiment_label": sent.get("label"),
+                        "sentiment_score": mean,
+                        "sentiment_label": label,
                         "headlines": [n.get("title", "") for n in news[:3]]}
 
     return {

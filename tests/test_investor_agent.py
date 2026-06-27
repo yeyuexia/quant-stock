@@ -322,3 +322,15 @@ def test_select_candidates_all_llm_fail_falls_back(tmp_path, monkeypatch):
     picks = ia.select_candidates(owned=set(), llm_fn=lambda p: None, fetchers=fetchers)
     # confidence 0 < floor → abstains; still writes a (possibly empty) file without raising
     assert isinstance(picks, list)
+
+
+def test_stages_tolerate_nonnumeric_confidence():
+    # An LLM emitting confidence as "high"/"85%" must NOT abort the pipeline.
+    dossiers = {"AAA": _dos("AAA")}
+    j = ('{"verdicts":[{"ticker":"AAA","signal":"bullish","confidence":"high",'
+         '"thesis":"t","risks":"r","catalysts":"c","bull":"b","bear":"be"}]}')
+    out = ia._analyst(dossiers, ["AAA"], _fake_llm(analyst_json=j))
+    assert out["AAA"]["confidence"] == 0          # coerced, no crash
+    picks = ia._pm({"AAA": {"ticker": "AAA", "confidence": "85%", "signal": "bullish"}},
+                   _fake_llm(pm_json=None))
+    assert isinstance(picks, list)                # no raise on dirty confidence

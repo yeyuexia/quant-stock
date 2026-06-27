@@ -114,7 +114,7 @@ def _default_fetchers():
         spy = data.fetch_ohlcv("SPY", period="1y")
     except Exception:
         spy = None
-    news_fn = (lambda t: data and sentiment.fetch_yf_news([t])) if config.AGENT_INCLUDE_NEWS else (lambda t: None)
+    news_fn = (lambda t: sentiment.fetch_yf_news([t])) if config.AGENT_INCLUDE_NEWS else (lambda t: None)
     return {"info_fn": data.fetch_info, "ohlcv_fn": lambda t: data.fetch_ohlcv(t, period="1y"),
             "est_fn": data.fetch_estimates, "news_fn": news_fn, "spy_ohlcv": spy}
 
@@ -144,6 +144,15 @@ _GROUNDING = ("Use ONLY the numbers in each dossier; never invent a figure; "
               "null → 'unknown'. Reply with STRICT JSON only.")
 
 
+def _to_int(x, default=0):
+    """Tolerant int coercion — an LLM may emit confidence as "high"/"85%"/None.
+    Never raises; falls back so a dirty field can't abort the pipeline."""
+    try:
+        return int(float(x))
+    except (TypeError, ValueError):
+        return default
+
+
 def _extract_json(text):
     if not text:
         return None
@@ -168,7 +177,7 @@ def _analyst(dossiers, shortlist, llm_fn):
             t = v.get("ticker")
             if t in dossiers:
                 out[t] = {"ticker": t, "signal": v.get("signal", "neutral"),
-                          "confidence": int(v.get("confidence", 0) or 0),
+                          "confidence": _to_int(v.get("confidence")),
                           "thesis": str(v.get("thesis", ""))[:200], "risks": str(v.get("risks", ""))[:200],
                           "catalysts": str(v.get("catalysts", ""))[:200],
                           "bull": str(v.get("bull", ""))[:200], "bear": str(v.get("bear", ""))[:200]}
@@ -193,7 +202,7 @@ def _critic(verdicts, dossiers, llm_fn):
     for v in data["verdicts"]:
         t = v.get("ticker")
         if t in out:
-            out[t] = {**out[t], "confidence": int(v.get("confidence", out[t]["confidence"]) or 0),
+            out[t] = {**out[t], "confidence": _to_int(v.get("confidence"), out[t]["confidence"]),
                       "signal": v.get("signal", out[t]["signal"]),
                       "critic_notes": str(v.get("critic_notes", ""))[:200]}
     return out
@@ -202,7 +211,7 @@ def _critic(verdicts, dossiers, llm_fn):
 def _pm(verdicts, llm_fn):
     import quant.config as config
     floor, cap = config.AGENT_CONVICTION_FLOOR, config.AGENT_MAX_PICKS
-    eligible = {t: v for t, v in verdicts.items() if v.get("confidence", 0) >= floor}
+    eligible = {t: v for t, v in verdicts.items() if _to_int(v.get("confidence")) >= floor}
     prompt = ("STAGE=PM\nYou are the portfolio manager. From these analyst verdicts, choose the best "
               f"risk-adjusted set: buy ONLY names with confidence >= {floor}; return BETWEEN 0 and {cap} "
               "tickers; prefer cash to a weak buy. " + _GROUNDING +
@@ -214,7 +223,7 @@ def _pm(verdicts, llm_fn):
         chosen = [p.get("ticker") for p in data["picks"] if p.get("ticker") in eligible]
         picks = chosen[:cap]
     if picks is None:                        # fallback: floor-eligible by confidence
-        picks = [t for t, _ in sorted(eligible.items(), key=lambda kv: -kv[1].get("confidence", 0))][:cap]
+        picks = [t for t, _ in sorted(eligible.items(), key=lambda kv: -_to_int(kv[1].get("confidence")))][:cap]
     return picks
 
 
@@ -328,21 +337,29 @@ def select_candidates(top_n=None, owned=None, llm_fn=None, *, fetchers=None) -> 
     picks = []
     shortlist = []
     if pool:
-        fetchers = fetchers or _default_fetchers()
-        dossiers = _build_dossiers(pool, **fetchers)
-        shortlist = [t for t in _balanced_shortlist(results, pool, owned) if t in dossiers]
-        if shortlist:
-            verdicts = _critic(_analyst(dossiers, shortlist, llm_fn), dossiers, llm_fn)
-            chosen = _pm(verdicts, llm_fn)
-            for t in chosen:
-                v = verdicts.get(t, {})
-                lv = dossier.suggested_levels(dossiers[t], buy_band_atr=config.AGENT_BUY_BAND_ATR,
-                                              stop_atr_mult=config.AGENT_STOP_ATR_MULT,
-                                              target_r=config.AGENT_TARGET_R)
-                picks.append({"ticker": t, "rationale": v.get("thesis", ""), "signal": v.get("signal"),
-                              "confidence": v.get("confidence"), "thesis": v.get("thesis", ""),
-                              "risks": v.get("risks", ""), "catalysts": v.get("catalysts", ""),
-                              **lv, "strategies": by_ticker[t]["strategies"]})
+        # Function-level fail-open guard: any unexpected error still leaves picks=[]
+        # and falls through to persist a (possibly empty) buy_candidates.json, so the
+        # contract "never raises into the watchdog" holds at this function, not by luck
+        # of the caller.
+        try:
+            fetchers = fetchers or _default_fetchers()
+            dossiers = _build_dossiers(pool, **fetchers)
+            shortlist = [t for t in _balanced_shortlist(results, pool, owned) if t in dossiers]
+            if shortlist:
+                verdicts = _critic(_analyst(dossiers, shortlist, llm_fn), dossiers, llm_fn)
+                chosen = _pm(verdicts, llm_fn)
+                for t in chosen:
+                    v = verdicts.get(t, {})
+                    lv = dossier.suggested_levels(dossiers[t], buy_band_atr=config.AGENT_BUY_BAND_ATR,
+                                                  stop_atr_mult=config.AGENT_STOP_ATR_MULT,
+                                                  target_r=config.AGENT_TARGET_R)
+                    picks.append({"ticker": t, "rationale": v.get("thesis", ""), "signal": v.get("signal"),
+                                  "confidence": v.get("confidence"), "thesis": v.get("thesis", ""),
+                                  "risks": v.get("risks", ""), "catalysts": v.get("catalysts", ""),
+                                  **lv, "strategies": by_ticker[t]["strategies"]})
+        except Exception as e:
+            _log.warning("select_candidates: pipeline failed, persisting empty picks: %s", e)
+            picks = []
 
     _log_monitoring(results, shortlist, picks)
     os.makedirs(os.path.dirname(BUY_CANDIDATES_PATH), exist_ok=True)

@@ -113,3 +113,13 @@ def test_suggested_levels_failopen():
     lv = d.suggested_levels({"price_action": {"price": None, "atr14": None}},
                             buy_band_atr=0.5, stop_atr_mult=1.5, target_r=2.5)
     assert lv == {"buy_low": None, "buy_high": None, "stop_loss": None, "take_profit": None}
+
+
+def test_build_dossier_with_news_aggregates_not_crash():
+    # analyze_news_sentiment returns a LIST; build_dossier must aggregate, not crash.
+    news = [{"title": "Company X beats earnings", "summary": "strong growth quarter"},
+            {"title": "X expands into new market", "summary": "record revenue"}]
+    dos = d.build_dossier("X", info={"currentPrice": 50.0}, ohlcv=None, news=news)
+    assert dos["news"]["count"] == 2
+    assert dos["news"]["sentiment_score"] is None or isinstance(dos["news"]["sentiment_score"], float)
+    assert len(dos["news"]["headlines"]) == 2
