@@ -38,6 +38,7 @@ import json
 import time
 import re
 import datetime as dt
+import logging
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import List, Optional
 
@@ -46,6 +47,8 @@ import pandas as pd
 
 import config
 import data as data_mod
+
+_log = logging.getLogger(__name__)
 
 CACHE_DIR = os.path.join(os.path.dirname(__file__), ".cache")
 os.makedirs(CACHE_DIR, exist_ok=True)
@@ -166,6 +169,57 @@ def get_nasdaq100_tickers() -> List[str]:
 def get_sp400_tickers() -> List[str]:
     """S&P 400 MidCap constituents from Wikipedia (1-week cache)."""
     return _get_wiki_index("sp400")
+
+
+def _fetch_text(url: str) -> str:
+    """GET a URL's text with a browser UA (past the iShares geo-disclaimer)."""
+    import urllib.request
+    req = urllib.request.Request(
+        url, headers={"User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)"})
+    with urllib.request.urlopen(req, timeout=30) as resp:
+        return resp.read().decode("utf-8", "replace")
+
+
+def _russell3000_from_csv(text: str) -> List[str]:
+    """Parse the iShares IWV holdings CSV: skip the fund-info preamble, read the
+    holdings table, keep Asset Class == Equity, return the Ticker column. [] on
+    any parse failure (fail-open)."""
+    import io as _io
+    try:
+        lines = text.splitlines()
+        start = next((i for i, ln in enumerate(lines)
+                      if ln.lstrip('"').startswith("Ticker,")), None)
+        if start is None:
+            return []
+        df = pd.read_csv(_io.StringIO("\n".join(lines[start:])))
+        if "Ticker" not in df.columns:
+            return []
+        if "Asset Class" in df.columns:
+            df = df[df["Asset Class"].astype(str).str.strip().str.lower() == "equity"]
+        out: List[str] = []
+        for s in df["Ticker"].tolist():
+            s = str(s).strip().upper().replace("\xa0", "")
+            if s and s != "-" and s.replace(".", "").replace("-", "").isalpha() and 1 <= len(s) <= 6:
+                out.append(s)
+        return list(dict.fromkeys(out))
+    except Exception:
+        return []
+
+
+def get_russell3000_tickers() -> List[str]:
+    """Russell 3000 constituents via the iShares IWV holdings CSV. Weekly-cached.
+    Fail-open: [] on any HTTP/format failure (caller degrades gracefully)."""
+    cached = _cache_get("russell3000", ttl_hours=168)
+    if cached:
+        return cached
+    try:
+        syms = _russell3000_from_csv(_fetch_text(config.RUSSELL3000_IWV_URL))
+    except Exception as e:
+        _log.warning("get_russell3000_tickers: %s", e)
+        syms = []
+    if len(syms) >= 1000:          # sanity floor — don't cache a partial parse
+        _cache_set("russell3000", syms)
+    return syms
 
 
 # Maps a config.DISCOVERY_UNIVERSE_INDICES key to the NAME of the getter that

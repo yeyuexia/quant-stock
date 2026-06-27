@@ -760,3 +760,26 @@ def test_growth_exemption_neutralizes_value_pe(monkeypatch):
     ])
     scored = discovery.compute_composite_scores(df.copy())
     assert scored.loc[scored.ticker == "HIGROW", "rank_value_pe"].iloc[0] == 50.0
+
+
+# ── Russell 3000 parser ────────────────
+
+IWV_CSV = '''iShares Russell 3000 ETF
+Fund Holdings as of,"Jun 26, 2026"
+
+Ticker,Name,Sector,Asset Class,Market Value,Weight (%)
+AAPL,APPLE INC,Information Technology,Equity,"1,000",3.1
+MSFT,MICROSOFT CORP,Information Technology,Equity,"900",2.8
+-,USD CASH,Cash and/or Derivatives,Cash,"50",0.2
+BRK.B,BERKSHIRE HATHAWAY,Financials,Equity,"800",2.0
+'''
+
+
+def test_russell3000_parser_keeps_equity_tickers():
+    syms = discovery._russell3000_from_csv(IWV_CSV)
+    assert syms == ["AAPL", "MSFT", "BRK.B"]   # cash row dropped, order preserved
+
+
+def test_russell3000_parser_failopen_on_garbage():
+    assert discovery._russell3000_from_csv("not,a,holdings,file\n1,2,3,4") == []
+    assert discovery._russell3000_from_csv("") == []
