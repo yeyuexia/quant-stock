@@ -4,7 +4,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from indicators import atr
+from quant.signals.indicators import atr
 import os
 import sys
 
@@ -93,7 +93,7 @@ import pytest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 
-from indicators import atr
+from quant.signals.indicators import atr
 
 
 def test_atr_returns_none_on_invalid_period():

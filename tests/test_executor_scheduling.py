@@ -1,6 +1,6 @@
 # tests/test_executor_scheduling.py
 import datetime as dt
-from executor import _slice_windows, _next_slice_due
+from quant.execution.executor import _slice_windows, _next_slice_due
 
 
 def test_2_slice_windows():

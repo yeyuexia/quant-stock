@@ -5,11 +5,11 @@ import os
 import re
 import pytest
 
-from broker import BrokerError
+from quant.execution.broker import BrokerError
 from tests.fakes import FakeBroker, FakeClock
-from orders import OrderIntent
-from broker import BrokerError, Position, AccountSnapshot
-from orders import (
+from quant.execution.orders import OrderIntent
+from quant.execution.broker import BrokerError, Position, AccountSnapshot
+from quant.execution.orders import (
     OrderIntent, OrderPlan, ExecutionResult, PortfolioSnapshot,
     execute_plan, reconcile_to_targets, sync_state, approve_pending,
     submit_exit, submit_partial_exit, tag_position,
@@ -21,21 +21,21 @@ import sys
 
 
 def test_make_cid_format():
-    from orders import _make_cid
+    from quant.execution.orders import _make_cid
     cid = _make_cid(tranche="core", reason="rebalance", symbol="SPY",
                     today=dt.date(2026, 4, 17))
     assert re.fullmatch(r"core-rebalance-SPY-20260417-[0-9a-f]{6}", cid), cid
 
 
 def test_make_cid_deterministic_per_day():
-    from orders import _make_cid
+    from quant.execution.orders import _make_cid
     a = _make_cid("core", "rebalance", "SPY", dt.date(2026, 4, 17))
     b = _make_cid("core", "rebalance", "SPY", dt.date(2026, 4, 17))
     assert a == b
 
 
 def test_make_cid_varies_by_day():
-    from orders import _make_cid
+    from quant.execution.orders import _make_cid
     a = _make_cid("core", "rebalance", "SPY", dt.date(2026, 4, 17))
     b = _make_cid("core", "rebalance", "SPY", dt.date(2026, 4, 18))
     assert a != b
@@ -45,14 +45,14 @@ def test_make_cid_varies_by_day():
 
 def _portfolio_cache(tmp_path, monkeypatch, data):
     """Point PORTFOLIO_PATH/etc at tmp dir and seed portfolio.json."""
-    monkeypatch.setattr("orders.PORTFOLIO_PATH", str(tmp_path / "portfolio.json"))
-    monkeypatch.setattr("orders.DAILY_LOG_PATH", str(tmp_path / "daily_log.csv"))
+    monkeypatch.setattr("quant.execution.orders.PORTFOLIO_PATH", str(tmp_path / "portfolio.json"))
+    monkeypatch.setattr("quant.execution.orders.DAILY_LOG_PATH", str(tmp_path / "daily_log.csv"))
     if data is not None:
         (tmp_path / "portfolio.json").write_text(json.dumps(data))
 
 
 def test_sync_state_carries_forward_known_tranche(tmp_path, monkeypatch):
-    from orders import sync_state
+    from quant.execution.orders import sync_state
 
     old = {
         "synced_at": "2026-04-16T14:00:00+00:00",
@@ -80,8 +80,8 @@ def test_sync_state_carries_forward_known_tranche(tmp_path, monkeypatch):
 
 
 def test_sync_state_marks_unknown_tranche(tmp_path, monkeypatch):
-    from orders import sync_state
-    monkeypatch.setattr("config.ADOPT_EXTERNAL_POSITIONS", False)
+    from quant.execution.orders import sync_state
+    monkeypatch.setattr("quant.config.ADOPT_EXTERNAL_POSITIONS", False)
 
     _portfolio_cache(tmp_path, monkeypatch, None)  # no cache
 
@@ -96,8 +96,8 @@ def test_sync_state_marks_unknown_tranche(tmp_path, monkeypatch):
 
 
 def test_sync_state_adopts_external_position_into_core(tmp_path, monkeypatch):
-    from orders import sync_state
-    monkeypatch.setattr("config.ADOPT_EXTERNAL_POSITIONS", True)
+    from quant.execution.orders import sync_state
+    monkeypatch.setattr("quant.config.ADOPT_EXTERNAL_POSITIONS", True)
 
     _portfolio_cache(tmp_path, monkeypatch, None)  # no cache → external
 
@@ -113,8 +113,8 @@ def test_sync_state_adopts_external_position_into_core(tmp_path, monkeypatch):
 
 
 def test_sync_state_adopts_leveraged_etf_into_aggressive(tmp_path, monkeypatch):
-    from orders import sync_state
-    monkeypatch.setattr("config.ADOPT_EXTERNAL_POSITIONS", True)
+    from quant.execution.orders import sync_state
+    monkeypatch.setattr("quant.config.ADOPT_EXTERNAL_POSITIONS", True)
 
     _portfolio_cache(tmp_path, monkeypatch, None)
 
@@ -127,7 +127,7 @@ def test_sync_state_adopts_leveraged_etf_into_aggressive(tmp_path, monkeypatch):
 
 
 def test_sync_state_drops_closed_positions(tmp_path, monkeypatch):
-    from orders import sync_state
+    from quant.execution.orders import sync_state
 
     old = {
         "synced_at": "2026-04-16T14:00:00+00:00", "alpaca_env": "paper",
@@ -150,7 +150,7 @@ def test_sync_state_drops_closed_positions(tmp_path, monkeypatch):
 
 
 def test_sync_state_flags_missing_bracket(tmp_path, monkeypatch):
-    from orders import sync_state
+    from quant.execution.orders import sync_state
 
     _portfolio_cache(tmp_path, monkeypatch, None)
     fb = FakeBroker()
@@ -163,9 +163,9 @@ def test_sync_state_flags_missing_bracket(tmp_path, monkeypatch):
 
 
 def test_sync_state_alerts_when_untagged_starves_rebalancer(tmp_path, monkeypatch):
-    from orders import sync_state
-    monkeypatch.setattr("config.ADOPT_EXTERNAL_POSITIONS", False)  # keep them unknown
-    monkeypatch.setattr("config.UNKNOWN_MV_HALT_PCT", 0.20)
+    from quant.execution.orders import sync_state
+    monkeypatch.setattr("quant.config.ADOPT_EXTERNAL_POSITIONS", False)  # keep them unknown
+    monkeypatch.setattr("quant.config.UNKNOWN_MV_HALT_PCT", 0.20)
 
     _portfolio_cache(tmp_path, monkeypatch, None)
 
@@ -182,7 +182,7 @@ def test_sync_state_alerts_when_untagged_starves_rebalancer(tmp_path, monkeypatc
 # ── reconcile_to_targets ────────────────────────────────────────
 
 def _snap(positions, cash=10_000, equity=100_000):
-    from orders import PortfolioSnapshot
+    from quant.execution.orders import PortfolioSnapshot
     return PortfolioSnapshot(
         synced_at="2026-04-17T14:00:00+00:00",
         alpaca_env="paper",
@@ -194,10 +194,10 @@ def _snap(positions, cash=10_000, equity=100_000):
 
 
 def test_reconcile_opens_new_positions(tmp_path, monkeypatch):
-    from orders import reconcile_to_targets
+    from quant.execution.orders import reconcile_to_targets
     # This test exercises the diff arithmetic with arbitrary weights — disable
     # the MAX_POSITION_PCT cap (default 25%) so 50% targets pass through.
-    monkeypatch.setattr("config.MAX_POSITION_PCT", 1.0)
+    monkeypatch.setattr("quant.config.MAX_POSITION_PCT", 1.0)
 
     snap = _snap(positions=[], cash=90_000, equity=90_000)
     plan = reconcile_to_targets(
@@ -216,7 +216,7 @@ def test_reconcile_opens_new_positions(tmp_path, monkeypatch):
 
 
 def test_reconcile_closes_removed_positions(tmp_path, monkeypatch):
-    from orders import reconcile_to_targets
+    from quant.execution.orders import reconcile_to_targets
 
     positions = [
         {"symbol": "TSLA", "shares": 10, "avg_entry": 300,
@@ -236,7 +236,7 @@ def test_reconcile_closes_removed_positions(tmp_path, monkeypatch):
 
 
 def test_reconcile_ignores_unknown_tranche(tmp_path, monkeypatch):
-    from orders import reconcile_to_targets
+    from quant.execution.orders import reconcile_to_targets
 
     positions = [
         {"symbol": "NVDA", "shares": 5, "avg_entry": 100,
@@ -255,10 +255,10 @@ def test_reconcile_ignores_unknown_tranche(tmp_path, monkeypatch):
 
 
 def test_reconcile_rebalance_within_tranche(tmp_path, monkeypatch):
-    from orders import reconcile_to_targets
+    from quant.execution.orders import reconcile_to_targets
     # 40% weights here exceed default MAX_POSITION_PCT=25% — this test isn't
     # about the cap, it's about diff arithmetic, so lift the cap locally.
-    monkeypatch.setattr("config.MAX_POSITION_PCT", 1.0)
+    monkeypatch.setattr("quant.config.MAX_POSITION_PCT", 1.0)
 
     positions = [
         {"symbol": "SPY", "shares": 10, "avg_entry": 500,
@@ -287,9 +287,9 @@ def test_reconcile_rebalance_within_tranche(tmp_path, monkeypatch):
 
 def _safety_paths(tmp_path, monkeypatch):
     """Redirect all safety-rail paths into tmp_path."""
-    monkeypatch.setattr("orders.HALT_PATH", str(tmp_path / "HALT"))
-    monkeypatch.setattr("orders.DAILY_TRADE_LOG", str(tmp_path / "daily_trade_log.json"))
-    monkeypatch.setattr("orders.PENDING_ORDERS_PATH", str(tmp_path / "pending_orders.json"))
+    monkeypatch.setattr("quant.execution.orders.HALT_PATH", str(tmp_path / "HALT"))
+    monkeypatch.setattr("quant.execution.orders.DAILY_TRADE_LOG", str(tmp_path / "daily_trade_log.json"))
+    monkeypatch.setattr("quant.execution.orders.PENDING_ORDERS_PATH", str(tmp_path / "pending_orders.json"))
 
 
 def test_halt_blocks_all_orders(tmp_path, monkeypatch):
@@ -297,7 +297,7 @@ def test_halt_blocks_all_orders(tmp_path, monkeypatch):
     _portfolio_cache(tmp_path, monkeypatch, None)
     (tmp_path / "HALT").write_text("paused")
 
-    from orders import OrderIntent, OrderPlan, execute_plan
+    from quant.execution.orders import OrderIntent, OrderPlan, execute_plan
     plan = OrderPlan(
         buys=[OrderIntent(symbol="SPY", notional=500, side="buy",
                            reason="test", tranche="core",
@@ -315,7 +315,7 @@ def test_halt_blocks_all_orders(tmp_path, monkeypatch):
 # ── Daily caps ──────────────────────────────────────────────────
 
 def _intent(sym, notional, side="buy"):
-    from orders import OrderIntent
+    from quant.execution.orders import OrderIntent
     return OrderIntent(
         symbol=sym, notional=notional, side=side,
         reason="test", tranche="core",
@@ -328,11 +328,11 @@ def _intent(sym, notional, side="buy"):
 def test_daily_max_orders_cap(tmp_path, monkeypatch):
     _safety_paths(tmp_path, monkeypatch)
     _portfolio_cache(tmp_path, monkeypatch, None)
-    monkeypatch.setattr("orders.DAILY_MAX_ORDERS", 2)
-    monkeypatch.setattr("orders.DAILY_MAX_NOTIONAL", 100_000)
-    monkeypatch.setattr("orders.LARGE_ORDER_THRESHOLD", 10_000)
+    monkeypatch.setattr("quant.execution.orders.DAILY_MAX_ORDERS", 2)
+    monkeypatch.setattr("quant.execution.orders.DAILY_MAX_NOTIONAL", 100_000)
+    monkeypatch.setattr("quant.execution.orders.LARGE_ORDER_THRESHOLD", 10_000)
 
-    from orders import OrderPlan, execute_plan
+    from quant.execution.orders import OrderPlan, execute_plan
     plan = OrderPlan(
         buys=[_intent("A", 100), _intent("B", 100), _intent("C", 100)],
         sells=[], holds=[],
@@ -346,11 +346,11 @@ def test_daily_max_orders_cap(tmp_path, monkeypatch):
 def test_daily_max_notional_cap(tmp_path, monkeypatch):
     _safety_paths(tmp_path, monkeypatch)
     _portfolio_cache(tmp_path, monkeypatch, None)
-    monkeypatch.setattr("orders.DAILY_MAX_ORDERS", 100)
-    monkeypatch.setattr("orders.DAILY_MAX_NOTIONAL", 500)
-    monkeypatch.setattr("orders.LARGE_ORDER_THRESHOLD", 10_000)
+    monkeypatch.setattr("quant.execution.orders.DAILY_MAX_ORDERS", 100)
+    monkeypatch.setattr("quant.execution.orders.DAILY_MAX_NOTIONAL", 500)
+    monkeypatch.setattr("quant.execution.orders.LARGE_ORDER_THRESHOLD", 10_000)
 
-    from orders import OrderPlan, execute_plan
+    from quant.execution.orders import OrderPlan, execute_plan
     plan = OrderPlan(
         buys=[_intent("A", 300), _intent("B", 300)],
         sells=[], holds=[],
@@ -364,11 +364,11 @@ def test_daily_max_notional_cap(tmp_path, monkeypatch):
 def test_caps_persist_across_calls(tmp_path, monkeypatch):
     _safety_paths(tmp_path, monkeypatch)
     _portfolio_cache(tmp_path, monkeypatch, None)
-    monkeypatch.setattr("orders.DAILY_MAX_ORDERS", 2)
-    monkeypatch.setattr("orders.DAILY_MAX_NOTIONAL", 100_000)
-    monkeypatch.setattr("orders.LARGE_ORDER_THRESHOLD", 10_000)
+    monkeypatch.setattr("quant.execution.orders.DAILY_MAX_ORDERS", 2)
+    monkeypatch.setattr("quant.execution.orders.DAILY_MAX_NOTIONAL", 100_000)
+    monkeypatch.setattr("quant.execution.orders.LARGE_ORDER_THRESHOLD", 10_000)
 
-    from orders import OrderPlan, execute_plan
+    from quant.execution.orders import OrderPlan, execute_plan
     fb = FakeBroker(default_price=100.0)
     execute_plan(OrderPlan(buys=[_intent("A", 100)], sells=[], holds=[]),
                  broker=fb, reason="t1")
@@ -386,11 +386,11 @@ def test_caps_persist_across_calls(tmp_path, monkeypatch):
 def test_large_order_queued_not_submitted(tmp_path, monkeypatch):
     _safety_paths(tmp_path, monkeypatch)
     _portfolio_cache(tmp_path, monkeypatch, None)
-    monkeypatch.setattr("orders.DAILY_MAX_ORDERS", 100)
-    monkeypatch.setattr("orders.DAILY_MAX_NOTIONAL", 100_000)
-    monkeypatch.setattr("orders.LARGE_ORDER_THRESHOLD", 1_000)
+    monkeypatch.setattr("quant.execution.orders.DAILY_MAX_ORDERS", 100)
+    monkeypatch.setattr("quant.execution.orders.DAILY_MAX_NOTIONAL", 100_000)
+    monkeypatch.setattr("quant.execution.orders.LARGE_ORDER_THRESHOLD", 1_000)
 
-    from orders import OrderPlan, execute_plan
+    from quant.execution.orders import OrderPlan, execute_plan
     plan = OrderPlan(
         buys=[_intent("SMALL", 500), _intent("BIG", 2_500)],
         sells=[], holds=[],
@@ -408,11 +408,11 @@ def test_large_order_queued_not_submitted(tmp_path, monkeypatch):
 def test_approve_pending_submits(tmp_path, monkeypatch):
     _safety_paths(tmp_path, monkeypatch)
     _portfolio_cache(tmp_path, monkeypatch, None)
-    monkeypatch.setattr("orders.DAILY_MAX_ORDERS", 100)
-    monkeypatch.setattr("orders.DAILY_MAX_NOTIONAL", 100_000)
-    monkeypatch.setattr("orders.LARGE_ORDER_THRESHOLD", 1_000)
+    monkeypatch.setattr("quant.execution.orders.DAILY_MAX_ORDERS", 100)
+    monkeypatch.setattr("quant.execution.orders.DAILY_MAX_NOTIONAL", 100_000)
+    monkeypatch.setattr("quant.execution.orders.LARGE_ORDER_THRESHOLD", 1_000)
 
-    from orders import OrderPlan, execute_plan, approve_pending, list_pending
+    from quant.execution.orders import OrderPlan, execute_plan, approve_pending, list_pending
     fb = FakeBroker(default_price=100.0)
     execute_plan(OrderPlan(buys=[_intent("BIG", 2_500)], sells=[], holds=[]),
                  broker=fb, reason="test")
@@ -426,9 +426,9 @@ def test_approve_pending_submits(tmp_path, monkeypatch):
 def test_reject_pending_removes(tmp_path, monkeypatch):
     _safety_paths(tmp_path, monkeypatch)
     _portfolio_cache(tmp_path, monkeypatch, None)
-    monkeypatch.setattr("orders.LARGE_ORDER_THRESHOLD", 1_000)
+    monkeypatch.setattr("quant.execution.orders.LARGE_ORDER_THRESHOLD", 1_000)
 
-    from orders import OrderPlan, execute_plan, reject_pending, list_pending
+    from quant.execution.orders import OrderPlan, execute_plan, reject_pending, list_pending
     fb = FakeBroker()
     execute_plan(OrderPlan(buys=[_intent("BIG", 2_500)], sells=[], holds=[]),
                  broker=fb, reason="test")
@@ -440,10 +440,10 @@ def test_reject_pending_removes(tmp_path, monkeypatch):
 def test_approve_expired_rejected(tmp_path, monkeypatch):
     _safety_paths(tmp_path, monkeypatch)
     _portfolio_cache(tmp_path, monkeypatch, None)
-    monkeypatch.setattr("orders.LARGE_ORDER_THRESHOLD", 1_000)
-    monkeypatch.setattr("orders.PENDING_ORDER_TTL_HOURS", 0)  # expires instantly
+    monkeypatch.setattr("quant.execution.orders.LARGE_ORDER_THRESHOLD", 1_000)
+    monkeypatch.setattr("quant.execution.orders.PENDING_ORDER_TTL_HOURS", 0)  # expires instantly
 
-    from orders import OrderPlan, execute_plan, approve_pending, list_pending
+    from quant.execution.orders import OrderPlan, execute_plan, approve_pending, list_pending
     fb = FakeBroker()
     execute_plan(OrderPlan(buys=[_intent("BIG", 2_500)], sells=[], holds=[]),
                  broker=fb, reason="test")
@@ -462,9 +462,9 @@ def test_submit_exit_queues_high_tier_intent(tmp_path, monkeypatch):
     The intent is preserved: exit is unconditionally queued for the executor to slice
     out. No order reaches the broker here — slicing happens on the next executor tick.
     """
-    import baseline as bl
+    import quant.signals.baseline as bl
     _safety_paths(tmp_path, monkeypatch)
-    monkeypatch.setattr("pending_plan.PENDING_PLAN_PATH", str(tmp_path / "plan.json"))
+    monkeypatch.setattr("quant.execution.pending_plan.PENDING_PLAN_PATH", str(tmp_path / "plan.json"))
     monkeypatch.setattr(bl, "_fetch_spy", lambda: 480.0)
     monkeypatch.setattr(bl, "_fetch_vix", lambda: 18.0)
     monkeypatch.setattr(bl, "_fetch_macro_score", lambda: -0.25)
@@ -482,10 +482,10 @@ def test_submit_exit_queues_high_tier_intent(tmp_path, monkeypatch):
                      "aggressive": {"last_rebalance": None}},
     }
     _portfolio_cache(tmp_path, monkeypatch, old)
-    monkeypatch.setattr("orders.LARGE_ORDER_THRESHOLD", 10_000)
+    monkeypatch.setattr("quant.execution.orders.LARGE_ORDER_THRESHOLD", 10_000)
 
-    from orders import submit_exit
-    from pending_plan import load_plan
+    from quant.execution.orders import submit_exit
+    from quant.execution.pending_plan import load_plan
     fb = FakeBroker()
     fb.seed_position("TQQQ", qty=50, avg_entry=60, mv=3000)
     fb.set_latest_price("TQQQ", 60.0)
@@ -508,17 +508,17 @@ def test_submit_exit_conflict_falls_back_to_direct(tmp_path, monkeypatch):
     """When pending_plan already has an intent for the symbol, submit_exit falls
     back to direct execute_plan to avoid double-selling. HALT blocks that path.
     """
-    import baseline as bl
+    import quant.signals.baseline as bl
     _safety_paths(tmp_path, monkeypatch)
-    monkeypatch.setattr("pending_plan.PENDING_PLAN_PATH", str(tmp_path / "plan.json"))
+    monkeypatch.setattr("quant.execution.pending_plan.PENDING_PLAN_PATH", str(tmp_path / "plan.json"))
     monkeypatch.setattr(bl, "_fetch_spy", lambda: 480.0)
     monkeypatch.setattr(bl, "_fetch_vix", lambda: 18.0)
     monkeypatch.setattr(bl, "_fetch_macro_score", lambda: -0.25)
 
     # Pre-populate pending plan with a conflicting TQQQ intent.
     import datetime as _dt
-    from pending_plan import write_plan, PendingPlan, IntentState, Baseline
-    from orders import OrderIntent
+    from quant.execution.pending_plan import write_plan, PendingPlan, IntentState, Baseline
+    from quant.execution.orders import OrderIntent
     existing_intent = OrderIntent(
         symbol="TQQQ", notional=3000.0, side="sell",
         reason="rebalance", tranche="aggressive",
@@ -547,7 +547,7 @@ def test_submit_exit_conflict_falls_back_to_direct(tmp_path, monkeypatch):
     })
     (tmp_path / "HALT").touch()
 
-    from orders import submit_exit
+    from quant.execution.orders import submit_exit
     fb = FakeBroker()
     result = submit_exit("TQQQ", reason="macro→contraction", broker=fb)
 
@@ -572,7 +572,7 @@ def test_tag_position_updates_metadata(tmp_path, monkeypatch):
     }
     _portfolio_cache(tmp_path, monkeypatch, old)
 
-    from orders import tag_position
+    from quant.execution.orders import tag_position
     tag_position("NVDA", tranche="core", entry_reason="manual 2026-04-17")
 
     got = json.loads((tmp_path / "portfolio.json").read_text())
@@ -587,7 +587,7 @@ def test_tag_position_bad_tranche_raises(tmp_path, monkeypatch):
         "positions": [], "tranches": {"core": {"last_rebalance": None},
                                        "aggressive": {"last_rebalance": None}},
     })
-    from orders import tag_position
+    from quant.execution.orders import tag_position
     with pytest.raises(ValueError):
         tag_position("NVDA", tranche="invalid")
 
@@ -598,7 +598,7 @@ def test_execute_plan_skips_when_market_closed(tmp_path, monkeypatch):
     _safety_paths(tmp_path, monkeypatch)
     _portfolio_cache(tmp_path, monkeypatch, None)
 
-    from orders import OrderPlan, execute_plan
+    from quant.execution.orders import OrderPlan, execute_plan
     fb = FakeBroker()
     fb.market_open = False
     plan = OrderPlan(buys=[_intent("A", 500)], sells=[], holds=[])
@@ -613,9 +613,9 @@ def test_execute_plan_skips_when_market_closed(tmp_path, monkeypatch):
 def test_approve_pending_halt_preserves_queue(tmp_path, monkeypatch):
     _safety_paths(tmp_path, monkeypatch)
     _portfolio_cache(tmp_path, monkeypatch, None)
-    monkeypatch.setattr("orders.LARGE_ORDER_THRESHOLD", 1_000)
+    monkeypatch.setattr("quant.execution.orders.LARGE_ORDER_THRESHOLD", 1_000)
 
-    from orders import OrderPlan, execute_plan, approve_pending, list_pending
+    from quant.execution.orders import OrderPlan, execute_plan, approve_pending, list_pending
     fb = FakeBroker()
     execute_plan(OrderPlan(buys=[_intent("BIG", 2_500)], sells=[], holds=[]),
                  broker=fb, reason="test")
@@ -636,19 +636,19 @@ def test_approve_pending_halt_preserves_queue(tmp_path, monkeypatch):
 def test_approve_pending_cap_preserves_queue(tmp_path, monkeypatch):
     _safety_paths(tmp_path, monkeypatch)
     _portfolio_cache(tmp_path, monkeypatch, None)
-    monkeypatch.setattr("orders.LARGE_ORDER_THRESHOLD", 1_000)
+    monkeypatch.setattr("quant.execution.orders.LARGE_ORDER_THRESHOLD", 1_000)
     # Normal caps so the order queues first
-    monkeypatch.setattr("orders.DAILY_MAX_ORDERS", 100)
-    monkeypatch.setattr("orders.DAILY_MAX_NOTIONAL", 100_000)
+    monkeypatch.setattr("quant.execution.orders.DAILY_MAX_ORDERS", 100)
+    monkeypatch.setattr("quant.execution.orders.DAILY_MAX_NOTIONAL", 100_000)
 
-    from orders import OrderPlan, execute_plan, approve_pending, list_pending
+    from quant.execution.orders import OrderPlan, execute_plan, approve_pending, list_pending
     fb = FakeBroker()
     execute_plan(OrderPlan(buys=[_intent("BIG", 2_500)], sells=[], holds=[]),
                  broker=fb, reason="test")
     pid = list_pending()[0]["id"]
 
     # Squeeze the cap before approval
-    monkeypatch.setattr("orders.DAILY_MAX_ORDERS", 0)
+    monkeypatch.setattr("quant.execution.orders.DAILY_MAX_ORDERS", 0)
     result = approve_pending(pid, broker=fb)
     assert result.submitted == []
     assert any("cap" in msg.lower() for _, msg in result.skipped)
@@ -659,9 +659,9 @@ def test_approve_pending_cap_preserves_queue(tmp_path, monkeypatch):
 def test_approve_pending_market_closed_preserves_queue(tmp_path, monkeypatch):
     _safety_paths(tmp_path, monkeypatch)
     _portfolio_cache(tmp_path, monkeypatch, None)
-    monkeypatch.setattr("orders.LARGE_ORDER_THRESHOLD", 1_000)
+    monkeypatch.setattr("quant.execution.orders.LARGE_ORDER_THRESHOLD", 1_000)
 
-    from orders import OrderPlan, execute_plan, approve_pending, list_pending
+    from quant.execution.orders import OrderPlan, execute_plan, approve_pending, list_pending
     fb = FakeBroker()
     execute_plan(OrderPlan(buys=[_intent("BIG", 2_500)], sells=[], holds=[]),
                  broker=fb, reason="test")
@@ -690,7 +690,7 @@ def test_ensure_trailing_stops_attaches_to_new_positions(tmp_path, monkeypatch):
                      "aggressive": {"last_rebalance": None}},
     })
 
-    from orders import ensure_trailing_stops
+    from quant.execution.orders import ensure_trailing_stops
     fb = FakeBroker()
     fb.seed_position("SPY", qty=10, avg_entry=500)
 
@@ -716,8 +716,8 @@ def test_ensure_trailing_stops_skips_when_already_attached(tmp_path, monkeypatch
                      "aggressive": {"last_rebalance": None}},
     })
 
-    from orders import ensure_trailing_stops
-    from broker import Order
+    from quant.execution.orders import ensure_trailing_stops
+    from quant.execution.broker import Order
     fb = FakeBroker()
     fb.seed_position("SPY", qty=10, avg_entry=500)
     fb.seed_open_order(Order(
@@ -734,7 +734,7 @@ def test_ensure_trailing_stops_skips_unknown_tranche(tmp_path, monkeypatch):
     _safety_paths(tmp_path, monkeypatch)
     _portfolio_cache(tmp_path, monkeypatch, None)  # no cache → position is unknown
 
-    from orders import ensure_trailing_stops
+    from quant.execution.orders import ensure_trailing_stops
     fb = FakeBroker()
     fb.seed_position("NVDA", qty=5, avg_entry=100)
 
@@ -757,7 +757,7 @@ def test_ensure_trailing_stops_respects_halt(tmp_path, monkeypatch):
     })
     (tmp_path / "HALT").write_text("paused")
 
-    from orders import ensure_trailing_stops
+    from quant.execution.orders import ensure_trailing_stops
     fb = FakeBroker()
     fb.seed_position("SPY", qty=10, avg_entry=500)
 
@@ -793,8 +793,8 @@ def test_order_intent_new_fields_default_to_none():
 
 
 def test_submit_limit_slice_respects_halt(tmp_path, monkeypatch):
-    import orders
-    from orders import submit_limit_slice
+    import quant.execution.orders as orders
+    from quant.execution.orders import submit_limit_slice
     from tests.fakes import FakeBroker
 
     halt_path = tmp_path / "HALT"
@@ -813,8 +813,8 @@ def test_submit_limit_slice_respects_halt(tmp_path, monkeypatch):
 
 
 def test_submit_limit_slice_respects_market_closed(monkeypatch, tmp_path):
-    import orders
-    from orders import submit_limit_slice
+    import quant.execution.orders as orders
+    from quant.execution.orders import submit_limit_slice
     from tests.fakes import FakeBroker
 
     monkeypatch.setattr(orders, "HALT_PATH", str(tmp_path / "no_halt"))
@@ -830,8 +830,8 @@ def test_submit_limit_slice_respects_market_closed(monkeypatch, tmp_path):
 
 
 def test_submit_limit_slice_counts_against_daily_cap(monkeypatch, tmp_path):
-    import orders
-    from orders import submit_limit_slice
+    import quant.execution.orders as orders
+    from quant.execution.orders import submit_limit_slice
     from tests.fakes import FakeBroker
 
     monkeypatch.setattr(orders, "HALT_PATH", str(tmp_path / "no_halt"))
@@ -863,10 +863,10 @@ def test_submit_limit_slice_counts_against_daily_cap(monkeypatch, tmp_path):
 
 def test_reconcile_buy_uses_effective_stop(tmp_path, monkeypatch):
     """Buy intent's stop_pct comes from _effective_stop_pct, not _tranche_stops."""
-    from orders import reconcile_to_targets
+    from quant.execution.orders import reconcile_to_targets
 
     # Force _effective_stop_pct to return a recognizable value.
-    monkeypatch.setattr("orders._effective_stop_pct",
+    monkeypatch.setattr("quant.execution.orders._effective_stop_pct",
                         lambda sym, tranche: 0.037 if tranche == "core" else 0.10)
 
     snap = _snap(positions=[], cash=90_000, equity=90_000)
@@ -881,14 +881,14 @@ def test_reconcile_buy_uses_effective_stop(tmp_path, monkeypatch):
     assert plan.buys[0].symbol == "SPY"
     assert abs(plan.buys[0].stop_pct - 0.037) < 1e-9
     # trail_pct unchanged: still from _tranche_stops("core")
-    import config
+    import quant.config as config
     assert abs(plan.buys[0].trail_pct - config.TRAILING_STOP_PCT) < 1e-9
 
 
 def test_reconcile_aggressive_buy_uses_fixed_stop(tmp_path, monkeypatch):
     """Aggressive tranche keeps the fixed stop_loss_pct."""
-    from orders import reconcile_to_targets
-    import config
+    from quant.execution.orders import reconcile_to_targets
+    import quant.config as config
 
     snap = _snap(positions=[], cash=10_000, equity=10_000)
     plan = reconcile_to_targets(
@@ -908,7 +908,7 @@ def test_reconcile_aggressive_buy_uses_fixed_stop(tmp_path, monkeypatch):
 def _seed_stop_order(fb, symbol: str, stop_price: float, qty: float = 30.0,
                      parent_id: str = "parent_1"):
     """Attach a fake bracket stop-loss leg for symbol."""
-    from broker import Order
+    from quant.execution.broker import Order
     fb.seed_open_order(Order(
         id=f"stop_{symbol}", symbol=symbol, side="sell", type="stop",
         qty=qty, notional=None, status="accepted",
@@ -918,7 +918,7 @@ def _seed_stop_order(fb, symbol: str, stop_price: float, qty: float = 30.0,
 
 
 def test_sync_state_snapshots_initial_fields_on_first_seen_core_position(tmp_path, monkeypatch):
-    from orders import sync_state
+    from quant.execution.orders import sync_state
 
     _portfolio_cache(tmp_path, monkeypatch, {
         "synced_at": "2026-05-10T14:00:00+00:00",
@@ -948,7 +948,7 @@ def test_sync_state_snapshots_initial_fields_on_first_seen_core_position(tmp_pat
 
 def test_sync_state_preserves_initial_fields_across_runs(tmp_path, monkeypatch):
     """Once snapshotted, initial_* fields are never re-written."""
-    from orders import sync_state
+    from quant.execution.orders import sync_state
 
     _portfolio_cache(tmp_path, monkeypatch, {
         "synced_at": "2026-05-10T14:00:00+00:00",
@@ -980,7 +980,7 @@ def test_sync_state_preserves_initial_fields_across_runs(tmp_path, monkeypatch):
 
 
 def test_sync_state_initial_stop_none_when_no_open_stop_order(tmp_path, monkeypatch):
-    from orders import sync_state
+    from quant.execution.orders import sync_state
 
     _portfolio_cache(tmp_path, monkeypatch, {
         "synced_at": "2026-05-10T14:00:00+00:00",
@@ -1009,7 +1009,7 @@ def test_sync_state_initial_stop_none_when_no_open_stop_order(tmp_path, monkeypa
 
 
 def test_sync_state_appends_r_tier_when_qty_drops_to_two_thirds(tmp_path, monkeypatch):
-    from orders import sync_state
+    from quant.execution.orders import sync_state
 
     _portfolio_cache(tmp_path, monkeypatch, {
         "synced_at": "2026-05-10T14:00:00+00:00",
@@ -1037,7 +1037,7 @@ def test_sync_state_appends_r_tier_when_qty_drops_to_two_thirds(tmp_path, monkey
 
 
 def test_sync_state_appends_r_tier_3R_when_qty_drops_to_one_third(tmp_path, monkeypatch):
-    from orders import sync_state
+    from quant.execution.orders import sync_state
 
     _portfolio_cache(tmp_path, monkeypatch, {
         "synced_at": "2026-05-10T14:00:00+00:00",
@@ -1066,7 +1066,7 @@ def test_sync_state_appends_r_tier_3R_when_qty_drops_to_one_third(tmp_path, monk
 
 def test_sync_state_appends_both_tiers_when_qty_drops_in_one_step(tmp_path, monkeypatch):
     """Gap-up partial-sell scenario: r_tier_filled went [] → ["2R", "3R"] in one sync."""
-    from orders import sync_state
+    from quant.execution.orders import sync_state
 
     _portfolio_cache(tmp_path, monkeypatch, {
         "synced_at": "2026-05-10T14:00:00+00:00",
@@ -1094,7 +1094,7 @@ def test_sync_state_appends_both_tiers_when_qty_drops_in_one_step(tmp_path, monk
 
 
 def test_sync_state_does_not_append_r_tier_on_full_qty(tmp_path, monkeypatch):
-    from orders import sync_state
+    from quant.execution.orders import sync_state
 
     _portfolio_cache(tmp_path, monkeypatch, {
         "synced_at": "2026-05-10T14:00:00+00:00",
@@ -1128,10 +1128,10 @@ def test_sync_state_does_not_append_r_tier_on_full_qty(tmp_path, monkeypatch):
 # ── cancel_position_trailing ───────────────────────────────────
 
 def test_cancel_position_trailing_cancels_open_trailing_order(tmp_path, monkeypatch):
-    from orders import cancel_position_trailing
-    from broker import Order
+    from quant.execution.orders import cancel_position_trailing
+    from quant.execution.broker import Order
 
-    monkeypatch.setattr("orders.HALT_PATH", str(tmp_path / "no_halt"))
+    monkeypatch.setattr("quant.execution.orders.HALT_PATH", str(tmp_path / "no_halt"))
     fb = FakeBroker()
     fb.seed_open_order(Order(
         id="ord_trail_1", symbol="AAPL", side="sell", type="trailing_stop",
@@ -1152,9 +1152,9 @@ def test_cancel_position_trailing_cancels_open_trailing_order(tmp_path, monkeypa
 
 
 def test_cancel_position_trailing_noop_when_no_trailing(tmp_path, monkeypatch):
-    from orders import cancel_position_trailing
+    from quant.execution.orders import cancel_position_trailing
 
-    monkeypatch.setattr("orders.HALT_PATH", str(tmp_path / "no_halt"))
+    monkeypatch.setattr("quant.execution.orders.HALT_PATH", str(tmp_path / "no_halt"))
     fb = FakeBroker()
     result = cancel_position_trailing("AAPL", broker=fb)
     assert fb._canceled == []
@@ -1163,12 +1163,12 @@ def test_cancel_position_trailing_noop_when_no_trailing(tmp_path, monkeypatch):
 
 
 def test_cancel_position_trailing_respects_halt(tmp_path, monkeypatch):
-    from orders import cancel_position_trailing
-    from broker import Order
+    from quant.execution.orders import cancel_position_trailing
+    from quant.execution.broker import Order
 
     halt = tmp_path / "HALT"
     halt.write_text("paused")
-    monkeypatch.setattr("orders.HALT_PATH", str(halt))
+    monkeypatch.setattr("quant.execution.orders.HALT_PATH", str(halt))
 
     fb = FakeBroker()
     fb.seed_open_order(Order(
@@ -1185,31 +1185,31 @@ def test_cancel_position_trailing_respects_halt(tmp_path, monkeypatch):
 # ── entry pivots sidecar ─────────────────────────────────────────
 
 def test_load_entry_pivots_missing_file_returns_empty(tmp_path, monkeypatch):
-    from orders import _load_entry_pivots
-    monkeypatch.setattr("orders.ENTRY_PIVOTS_PATH", str(tmp_path / "pivots.json"))
+    from quant.execution.orders import _load_entry_pivots
+    monkeypatch.setattr("quant.execution.orders.ENTRY_PIVOTS_PATH", str(tmp_path / "pivots.json"))
     assert _load_entry_pivots() == {}
 
 
 def test_save_then_load_entry_pivots_roundtrip(tmp_path, monkeypatch):
-    from orders import _load_entry_pivots, _save_entry_pivots
-    monkeypatch.setattr("orders.ENTRY_PIVOTS_PATH", str(tmp_path / "pivots.json"))
+    from quant.execution.orders import _load_entry_pivots, _save_entry_pivots
+    monkeypatch.setattr("quant.execution.orders.ENTRY_PIVOTS_PATH", str(tmp_path / "pivots.json"))
     data = {"AAPL": {"pivot": 200.5, "entry_date": "2026-05-18"}}
     _save_entry_pivots(data)
     assert _load_entry_pivots() == data
 
 
 def test_load_entry_pivots_malformed_returns_empty(tmp_path, monkeypatch):
-    from orders import _load_entry_pivots
+    from quant.execution.orders import _load_entry_pivots
     path = tmp_path / "pivots.json"
     path.write_text("not-json")
-    monkeypatch.setattr("orders.ENTRY_PIVOTS_PATH", str(path))
+    monkeypatch.setattr("quant.execution.orders.ENTRY_PIVOTS_PATH", str(path))
     assert _load_entry_pivots() == {}
 
 
 # ── sync_state climax_fired ─────────────────────────────────────
 
 def test_sync_state_initializes_climax_fired_false_on_first_seen(tmp_path, monkeypatch):
-    from orders import sync_state
+    from quant.execution.orders import sync_state
 
     _portfolio_cache(tmp_path, monkeypatch, {
         "synced_at": "2026-05-10T14:00:00+00:00",
@@ -1236,7 +1236,7 @@ def test_sync_state_initializes_climax_fired_false_on_first_seen(tmp_path, monke
 
 def test_sync_state_preserves_climax_fired_across_runs(tmp_path, monkeypatch):
     """Once set to True (by watchdog._set_climax_fired), sync_state preserves it."""
-    from orders import sync_state
+    from quant.execution.orders import sync_state
 
     _portfolio_cache(tmp_path, monkeypatch, {
         "synced_at": "2026-05-10T14:00:00+00:00",
@@ -1266,7 +1266,7 @@ def test_sync_state_preserves_climax_fired_across_runs(tmp_path, monkeypatch):
 
 def test_sync_state_does_not_append_r_tier_when_climax_fired_true(tmp_path, monkeypatch):
     """Climax sold 50%; qty drop must NOT trigger r_tier 2R/3R appends."""
-    from orders import sync_state
+    from quant.execution.orders import sync_state
 
     _portfolio_cache(tmp_path, monkeypatch, {
         "synced_at": "2026-05-10T14:00:00+00:00",
@@ -1303,7 +1303,7 @@ def test_execute_plan_rejects_buys_when_cash_insufficient(tmp_path, monkeypatch)
     _safety_paths(tmp_path, monkeypatch)
     _portfolio_cache(tmp_path, monkeypatch, None)
 
-    from orders import OrderIntent, OrderPlan, execute_plan
+    from quant.execution.orders import OrderIntent, OrderPlan, execute_plan
     plan = OrderPlan(
         buys=[OrderIntent(symbol="SPY", notional=15_000, side="buy",
                           reason="test", tranche="core",
@@ -1333,7 +1333,7 @@ def test_execute_plan_allows_buys_when_cash_sufficient(tmp_path, monkeypatch):
     _safety_paths(tmp_path, monkeypatch)
     _portfolio_cache(tmp_path, monkeypatch, None)
 
-    from orders import OrderIntent, OrderPlan, execute_plan
+    from quant.execution.orders import OrderIntent, OrderPlan, execute_plan
     plan = OrderPlan(
         buys=[OrderIntent(symbol="SPY", notional=5_000, side="buy",
                           reason="test", tranche="core",
@@ -1354,9 +1354,9 @@ def test_execute_plan_allows_margin_when_config_flag_true(tmp_path, monkeypatch)
     """ALLOW_MARGIN=True bypasses the cash-aware gate."""
     _safety_paths(tmp_path, monkeypatch)
     _portfolio_cache(tmp_path, monkeypatch, None)
-    monkeypatch.setattr("config.ALLOW_MARGIN", True)
+    monkeypatch.setattr("quant.config.ALLOW_MARGIN", True)
 
-    from orders import OrderIntent, OrderPlan, execute_plan
+    from quant.execution.orders import OrderIntent, OrderPlan, execute_plan
     plan = OrderPlan(
         buys=[OrderIntent(symbol="SPY", notional=15_000, side="buy",
                           reason="test", tranche="core",
@@ -1377,7 +1377,7 @@ def test_execute_plan_rejects_buys_when_account_fetch_fails(tmp_path, monkeypatc
     _safety_paths(tmp_path, monkeypatch)
     _portfolio_cache(tmp_path, monkeypatch, None)
 
-    from orders import OrderIntent, OrderPlan, execute_plan
+    from quant.execution.orders import OrderIntent, OrderPlan, execute_plan
     plan = OrderPlan(
         buys=[OrderIntent(symbol="SPY", notional=5_000, side="buy",
                           reason="test", tranche="core",
@@ -1387,7 +1387,7 @@ def test_execute_plan_rejects_buys_when_account_fetch_fails(tmp_path, monkeypatc
     )
     fb = FakeBroker(cash=20_000.0)
     monkeypatch.setattr(fb, "get_account", lambda: (_ for _ in ()).throw(
-        __import__("broker").BrokerError("account fetch failed")))
+        __import__("quant.execution.broker", fromlist=["BrokerError"]).BrokerError("account fetch failed")))
 
     result = execute_plan(plan, broker=fb, reason="test")
 
@@ -1401,7 +1401,7 @@ def test_execute_plan_cash_aware_does_not_affect_sell_only_plan(tmp_path, monkey
     _safety_paths(tmp_path, monkeypatch)
     _portfolio_cache(tmp_path, monkeypatch, None)
 
-    from orders import OrderIntent, OrderPlan, execute_plan
+    from quant.execution.orders import OrderIntent, OrderPlan, execute_plan
     plan = OrderPlan(
         buys=[],
         sells=[OrderIntent(symbol="QQQ", notional=2_000, side="sell",
@@ -1421,8 +1421,8 @@ def test_execute_plan_cash_aware_does_not_affect_sell_only_plan(tmp_path, monkey
 
 def test_sync_state_stamps_entry_date_for_adopted_position(tmp_path, monkeypatch):
     import datetime as dt
-    from orders import sync_state
-    monkeypatch.setattr("config.ADOPT_EXTERNAL_POSITIONS", True)
+    from quant.execution.orders import sync_state
+    monkeypatch.setattr("quant.config.ADOPT_EXTERNAL_POSITIONS", True)
     _portfolio_cache(tmp_path, monkeypatch, None)
     fb = FakeBroker()
     fb.seed_position("AAPL", qty=5, avg_entry=100, mv=520)
@@ -1431,7 +1431,7 @@ def test_sync_state_stamps_entry_date_for_adopted_position(tmp_path, monkeypatch
 
 
 def test_sync_state_preserves_entry_date_across_syncs(tmp_path, monkeypatch):
-    from orders import sync_state
+    from quant.execution.orders import sync_state
     old = {
         "synced_at": "2026-04-16T14:00:00+00:00", "alpaca_env": "paper",
         "cash": 0.0, "equity": 0.0,
@@ -1468,13 +1468,13 @@ from unittest.mock import MagicMock, patch
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 
-from orders import (
+from quant.execution.orders import (
     OrderIntent, OrderPlan, ExecutionResult, PortfolioSnapshot,
     execute_plan, reconcile_to_targets, sync_state, approve_pending,
     submit_exit, submit_partial_exit, tag_position,
     _buy_priority, _try_consume_daily_cap, _record_daily_cap,
 )
-from broker import BrokerError, Position, AccountSnapshot
+from quant.execution.broker import BrokerError, Position, AccountSnapshot
 from tests.fakes import FakeBroker
 
 
@@ -1499,18 +1499,18 @@ def _snap_opt(positions=None, cash=10_000.0, equity=100_000.0,
 
 
 def _isolate_paths(tmp_path, monkeypatch):
-    monkeypatch.setattr("orders.PORTFOLIO_PATH", str(tmp_path / "p.json"))
-    monkeypatch.setattr("orders.DAILY_LOG_PATH", str(tmp_path / "events.csv"))
-    monkeypatch.setattr("orders.HALT_PATH", str(tmp_path / "no_halt"))
-    monkeypatch.setattr("orders.DAILY_TRADE_LOG", str(tmp_path / "trade_log.json"))
-    monkeypatch.setattr("orders.PENDING_ORDERS_PATH", str(tmp_path / "pending.json"))
-    monkeypatch.setattr("orders.ENTRY_PIVOTS_PATH", str(tmp_path / "pivots.json"))
+    monkeypatch.setattr("quant.execution.orders.PORTFOLIO_PATH", str(tmp_path / "p.json"))
+    monkeypatch.setattr("quant.execution.orders.DAILY_LOG_PATH", str(tmp_path / "events.csv"))
+    monkeypatch.setattr("quant.execution.orders.HALT_PATH", str(tmp_path / "no_halt"))
+    monkeypatch.setattr("quant.execution.orders.DAILY_TRADE_LOG", str(tmp_path / "trade_log.json"))
+    monkeypatch.setattr("quant.execution.orders.PENDING_ORDERS_PATH", str(tmp_path / "pending.json"))
+    monkeypatch.setattr("quant.execution.orders.ENTRY_PIVOTS_PATH", str(tmp_path / "pivots.json"))
 
 
 # ── O6: orders event log lives in .cache, not shared with watchdog ──
 
 def test_daily_log_path_separate_from_watchdog_csv():
-    import orders
+    import quant.execution.orders as orders
     assert "orders_events.csv" in orders.DAILY_LOG_PATH
     assert "daily_log.csv" not in orders.DAILY_LOG_PATH
 
@@ -1519,7 +1519,7 @@ def test_daily_log_path_separate_from_watchdog_csv():
 
 def test_reconcile_caps_overweight_target(monkeypatch):
     """A 50% weight when MAX_POSITION_PCT=25% must be capped to 25%."""
-    monkeypatch.setattr("config.MAX_POSITION_PCT", 0.25)
+    monkeypatch.setattr("quant.config.MAX_POSITION_PCT", 0.25)
     snap = _snap_opt(positions=[])
     plan = reconcile_to_targets(
         {"NVDA": 0.50}, tranche="core", snapshot=snap,
@@ -1532,8 +1532,8 @@ def test_reconcile_caps_overweight_target(monkeypatch):
 
 def test_reconcile_defensive_symbol_not_capped(monkeypatch):
     """BIL etc. are the BIL sink for unallocated capital — must not be capped."""
-    monkeypatch.setattr("config.MAX_POSITION_PCT", 0.25)
-    monkeypatch.setattr("config.DEFENSIVE_SYMBOLS", {"BIL"})
+    monkeypatch.setattr("quant.config.MAX_POSITION_PCT", 0.25)
+    monkeypatch.setattr("quant.config.DEFENSIVE_SYMBOLS", {"BIL"})
     snap = _snap_opt(positions=[])
     plan = reconcile_to_targets(
         {"BIL": 0.60}, tranche="core", snapshot=snap,
@@ -1548,7 +1548,7 @@ def test_reconcile_defensive_symbol_not_capped(monkeypatch):
 def test_execute_plan_greedy_skips_individual_overrun(tmp_path, monkeypatch):
     """When one buy exceeds cash, only THAT buy is skipped — others fit."""
     _isolate_paths(tmp_path, monkeypatch)
-    monkeypatch.setattr("config.ALLOW_MARGIN", False)
+    monkeypatch.setattr("quant.config.ALLOW_MARGIN", False)
 
     # Cash = $10K. Plan: 4 buys totaling $25K — should accept first few that fit.
     intents = [
@@ -1559,7 +1559,7 @@ def test_execute_plan_greedy_skips_individual_overrun(tmp_path, monkeypatch):
     ]
     plan = OrderPlan(buys=intents, sells=[], holds=[])
     fb = FakeBroker(cash=10_000, equity=10_000)
-    monkeypatch.setattr("orders.LARGE_ORDER_THRESHOLD", 999_999)  # disable
+    monkeypatch.setattr("quant.execution.orders.LARGE_ORDER_THRESHOLD", 999_999)  # disable
 
     result = execute_plan(plan, broker=fb, reason="test")
 
@@ -1576,8 +1576,8 @@ def test_execute_plan_greedy_skips_individual_overrun(tmp_path, monkeypatch):
 def test_execute_plan_defensive_buys_sort_first(tmp_path, monkeypatch):
     """When cash is tight, defensive symbols must get priority."""
     _isolate_paths(tmp_path, monkeypatch)
-    monkeypatch.setattr("config.ALLOW_MARGIN", False)
-    monkeypatch.setattr("config.DEFENSIVE_SYMBOLS", {"BIL"})
+    monkeypatch.setattr("quant.config.ALLOW_MARGIN", False)
+    monkeypatch.setattr("quant.config.DEFENSIVE_SYMBOLS", {"BIL"})
 
     # $5K cash, $4K BIL + $4K NVDA + $4K QQQ = $12K total. Should buy BIL + ONE
     # other (in alphabetical order by notional asc).
@@ -1588,7 +1588,7 @@ def test_execute_plan_defensive_buys_sort_first(tmp_path, monkeypatch):
     ]
     plan = OrderPlan(buys=intents, sells=[], holds=[])
     fb = FakeBroker(cash=5000, equity=5000)
-    monkeypatch.setattr("orders.LARGE_ORDER_THRESHOLD", 999_999)
+    monkeypatch.setattr("quant.execution.orders.LARGE_ORDER_THRESHOLD", 999_999)
 
     result = execute_plan(plan, broker=fb, reason="test")
     submitted = {o.symbol for o in result.submitted}
@@ -1597,7 +1597,7 @@ def test_execute_plan_defensive_buys_sort_first(tmp_path, monkeypatch):
 
 
 def test_buy_priority_orders_defensive_first(monkeypatch):
-    monkeypatch.setattr("config.DEFENSIVE_SYMBOLS", {"BIL", "SHY"})
+    monkeypatch.setattr("quant.config.DEFENSIVE_SYMBOLS", {"BIL", "SHY"})
     intents = [_intent_opt("NVDA", 5000), _intent_opt("BIL", 500), _intent_opt("AAPL", 100)]
     sorted_buys = sorted(intents, key=_buy_priority)
     # BIL first (defensive), then AAPL (small), then NVDA (big)
@@ -1609,7 +1609,7 @@ def test_buy_priority_orders_defensive_first(monkeypatch):
 def test_approve_pending_rejects_when_cash_insufficient(tmp_path, monkeypatch):
     """An approved buy that no longer fits cash must STAY in the queue (not submit)."""
     _isolate_paths(tmp_path, monkeypatch)
-    monkeypatch.setattr("config.ALLOW_MARGIN", False)
+    monkeypatch.setattr("quant.config.ALLOW_MARGIN", False)
 
     # Seed a pending $5K buy
     intent = _intent_opt("NVDA", 5000.0)
@@ -1637,8 +1637,8 @@ def test_approve_pending_rejects_when_cash_insufficient(tmp_path, monkeypatch):
 
 def test_approve_pending_succeeds_when_cash_sufficient(tmp_path, monkeypatch):
     _isolate_paths(tmp_path, monkeypatch)
-    monkeypatch.setattr("config.ALLOW_MARGIN", False)
-    monkeypatch.setattr("orders.LARGE_ORDER_THRESHOLD", 999_999)
+    monkeypatch.setattr("quant.config.ALLOW_MARGIN", False)
+    monkeypatch.setattr("quant.execution.orders.LARGE_ORDER_THRESHOLD", 999_999)
 
     intent = _intent_opt("NVDA", 5000.0)
     pending = [{
@@ -1667,8 +1667,8 @@ def test_approve_pending_succeeds_when_cash_sufficient(tmp_path, monkeypatch):
 def test_execute_plan_sells_before_buys(tmp_path, monkeypatch):
     """Cash from sells should feed into the cash budget for buys."""
     _isolate_paths(tmp_path, monkeypatch)
-    monkeypatch.setattr("config.ALLOW_MARGIN", False)
-    monkeypatch.setattr("orders.LARGE_ORDER_THRESHOLD", 999_999)
+    monkeypatch.setattr("quant.config.ALLOW_MARGIN", False)
+    monkeypatch.setattr("quant.execution.orders.LARGE_ORDER_THRESHOLD", 999_999)
 
     plan = OrderPlan(
         buys=[_intent_opt("BUY1", 4000.0)],
@@ -1723,7 +1723,7 @@ def test_sync_state_raises_after_both_attempts_fail(tmp_path, monkeypatch):
 
 def test_submit_exit_uses_provided_current_price(tmp_path, monkeypatch):
     _isolate_paths(tmp_path, monkeypatch)
-    monkeypatch.setattr("pending_plan.PENDING_PLAN_PATH",
+    monkeypatch.setattr("quant.execution.pending_plan.PENDING_PLAN_PATH",
                         str(tmp_path / "pending_plan.json"))
 
     # Seed a position in cache
@@ -1740,8 +1740,8 @@ def test_submit_exit_uses_provided_current_price(tmp_path, monkeypatch):
     with open(tmp_path / "p.json", "w") as f:
         json.dump(cache, f)
 
-    import baseline
-    from pending_plan import Baseline as _B
+    import quant.signals.baseline as baseline
+    from quant.execution.pending_plan import Baseline as _B
     monkeypatch.setattr(baseline, "capture_baseline",
                         lambda: _B(spy=480, vix=14, macro_score=0.20,
                                     news_cursor_at=dt.datetime.now(dt.timezone.utc)))
@@ -1756,7 +1756,7 @@ def test_submit_exit_uses_provided_current_price(tmp_path, monkeypatch):
 
 def test_submit_partial_exit_uses_provided_current_price(tmp_path, monkeypatch):
     _isolate_paths(tmp_path, monkeypatch)
-    monkeypatch.setattr("pending_plan.PENDING_PLAN_PATH",
+    monkeypatch.setattr("quant.execution.pending_plan.PENDING_PLAN_PATH",
                         str(tmp_path / "pending_plan.json"))
 
     cache = {
@@ -1774,8 +1774,8 @@ def test_submit_partial_exit_uses_provided_current_price(tmp_path, monkeypatch):
     with open(tmp_path / "p.json", "w") as f:
         json.dump(cache, f)
 
-    import baseline
-    from pending_plan import Baseline as _B
+    import quant.signals.baseline as baseline
+    from quant.execution.pending_plan import Baseline as _B
     monkeypatch.setattr(baseline, "capture_baseline",
                         lambda: _B(spy=480, vix=14, macro_score=0.20,
                                     news_cursor_at=dt.datetime.now(dt.timezone.utc)))
@@ -1846,14 +1846,14 @@ def test_sync_state_r_tier_eps_scales_with_initial_qty(tmp_path, monkeypatch):
 def test_load_pending_recovers_from_corrupt_json(tmp_path, monkeypatch):
     _isolate_paths(tmp_path, monkeypatch)
     (tmp_path / "pending.json").write_text("not valid json {{")
-    from orders import _load_pending
+    from quant.execution.orders import _load_pending
     assert _load_pending() == []   # graceful empty, doesn't crash
 
 
 def test_load_portfolio_cache_recovers_from_corrupt_json(tmp_path, monkeypatch):
     _isolate_paths(tmp_path, monkeypatch)
     (tmp_path / "p.json").write_text("corrupt!!!")
-    from orders import _load_portfolio_cache
+    from quant.execution.orders import _load_portfolio_cache
     cache = _load_portfolio_cache()
     # Default skeleton
     assert "positions" in cache
@@ -1863,7 +1863,7 @@ def test_load_portfolio_cache_recovers_from_corrupt_json(tmp_path, monkeypatch):
 # ── O1-O5: fileio helper is what does the locking ────────────────
 
 def test_fileio_atomic_write_creates_lock_and_data_files(tmp_path):
-    from fileio import atomic_write_json
+    from quant.infra.fileio import atomic_write_json
     target = tmp_path / "data.json"
     atomic_write_json(str(target), {"hello": "world"})
     assert target.exists()
@@ -1872,7 +1872,7 @@ def test_fileio_atomic_write_creates_lock_and_data_files(tmp_path):
 
 
 def test_fileio_read_modify_write_default_on_missing(tmp_path):
-    from fileio import read_modify_write_json
+    from quant.infra.fileio import read_modify_write_json
     target = tmp_path / "missing.json"
     def mutate(data):
         data["count"] = data.get("count", 0) + 1
@@ -1883,7 +1883,7 @@ def test_fileio_read_modify_write_default_on_missing(tmp_path):
 
 
 def test_fileio_read_modify_write_handles_corrupt(tmp_path):
-    from fileio import read_modify_write_json
+    from quant.infra.fileio import read_modify_write_json
     target = tmp_path / "corrupt.json"
     target.write_text("garbage")
     def mutate(data):
@@ -1939,8 +1939,8 @@ def _cache_with_unknown(tmp_path, monkeypatch, symbol, tranche="unknown",
 
 
 def test_sync_state_adopts_already_cached_unknown_when_flag_on(tmp_path, monkeypatch):
-    from orders import sync_state
-    monkeypatch.setattr("config.ADOPT_EXTERNAL_POSITIONS", True)
+    from quant.execution.orders import sync_state
+    monkeypatch.setattr("quant.config.ADOPT_EXTERNAL_POSITIONS", True)
     _cache_with_unknown(tmp_path, monkeypatch, "AAPL")  # cached as unknown/external
 
     fb = FakeBroker()
@@ -1955,8 +1955,8 @@ def test_sync_state_adopts_already_cached_unknown_when_flag_on(tmp_path, monkeyp
 
 
 def test_sync_state_adopts_cached_unknown_leveraged_into_aggressive(tmp_path, monkeypatch):
-    from orders import sync_state
-    monkeypatch.setattr("config.ADOPT_EXTERNAL_POSITIONS", True)
+    from quant.execution.orders import sync_state
+    monkeypatch.setattr("quant.config.ADOPT_EXTERNAL_POSITIONS", True)
     _cache_with_unknown(tmp_path, monkeypatch, "SOXL")  # in config.ETF_LEVERAGED
 
     fb = FakeBroker()
@@ -1968,8 +1968,8 @@ def test_sync_state_adopts_cached_unknown_leveraged_into_aggressive(tmp_path, mo
 
 
 def test_sync_state_keeps_cached_unknown_when_flag_off(tmp_path, monkeypatch):
-    from orders import sync_state
-    monkeypatch.setattr("config.ADOPT_EXTERNAL_POSITIONS", False)
+    from quant.execution.orders import sync_state
+    monkeypatch.setattr("quant.config.ADOPT_EXTERNAL_POSITIONS", False)
     _cache_with_unknown(tmp_path, monkeypatch, "AAPL")
 
     fb = FakeBroker()
@@ -1982,8 +1982,8 @@ def test_sync_state_keeps_cached_unknown_when_flag_off(tmp_path, monkeypatch):
 
 def test_sync_state_preserves_real_tranche_when_flag_on(tmp_path, monkeypatch):
     """Adoption must NOT clobber a position already tagged to a real sleeve."""
-    from orders import sync_state
-    monkeypatch.setattr("config.ADOPT_EXTERNAL_POSITIONS", True)
+    from quant.execution.orders import sync_state
+    monkeypatch.setattr("quant.config.ADOPT_EXTERNAL_POSITIONS", True)
     _cache_with_unknown(tmp_path, monkeypatch, "MSFT",
                         tranche="core", entry_reason="core rebalance 2026-05-01")
 

@@ -9,7 +9,7 @@ from unittest.mock import MagicMock, patch
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 
-import investor_agent
+import quant.agent.investor as investor_agent
 
 
 def _df():
@@ -129,7 +129,7 @@ import json
 
 
 def _seed_strategies(tmp_path, monkeypatch):
-    import strategies
+    import quant.strategies.contract as strategies
     monkeypatch.setattr(strategies, "STRATEGIES_DIR", str(tmp_path / "strat"))
     strategies.write_strategy_result("value", [
         {"ticker": "AAA", "score": 2.0, "rank": 1, "factors": {}},

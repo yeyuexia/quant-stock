@@ -1,6 +1,6 @@
 # tests/test_signal_rank.py
 def test_momentum_signals_expose_rank_per_holding():
-    from momentum import generate_signals
+    from quant.signals.momentum import generate_signals
     sig = generate_signals()
     # Each (ticker, weight, rank) triple; rank 1 = best, ascending.
     assert "holdings_ranked" in sig
@@ -10,7 +10,7 @@ def test_momentum_signals_expose_rank_per_holding():
 
 
 def test_momentum_top_1_is_rank_1():
-    from momentum import generate_signals
+    from quant.signals.momentum import generate_signals
     sig = generate_signals()
     if sig["holdings_ranked"]:
         top = sig["holdings_ranked"][0]
@@ -18,7 +18,7 @@ def test_momentum_top_1_is_rank_1():
 
 
 def test_screener_output_has_rank_column():
-    from screener import screen_stocks
+    from quant.signals.screener import screen_stocks
     df = screen_stocks(tickers=["AAPL", "MSFT", "GOOGL"])
     if df is None or df.empty:
         return

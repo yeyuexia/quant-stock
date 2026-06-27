@@ -15,8 +15,8 @@ from typing import Optional, List
 import math
 import numpy as np
 import pandas as pd
-from data import fetch_ohlcv, fetch_prices, fetch_fundamentals
-from config import (
+from quant.data.market import fetch_ohlcv, fetch_prices, fetch_fundamentals
+from quant.config import (
     WATCHLIST, SCREEN_TOP_N,
     SCREEN_RS_MIN, SCREEN_ADR_MIN, SCREEN_ADR_PERIOD,
     SCREEN_EMA_FAST, SCREEN_EMA_SLOW,
@@ -28,7 +28,7 @@ from config import (
 # Optional hook so discovery.find_stale_watchlist has data to work with.
 # Resolved at import time so tests can monkeypatch `screener.record_screener_pass`.
 try:
-    from discovery import record_screener_pass
+    from quant.data.universe import record_screener_pass
 except Exception:
     def record_screener_pass(_tickers):  # noqa: E301
         return None
@@ -339,6 +339,6 @@ def screen_stocks(
     if not with_review:
         return result
 
-    from investor_agent import run_investor_review
+    from quant.agent.investor import run_investor_review
     review = run_investor_review(result)
     return result, review

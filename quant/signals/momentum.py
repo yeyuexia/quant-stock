@@ -12,8 +12,8 @@ capital because you only trade a handful of low-cost ETFs once a month.
 from typing import Optional, Iterable
 import pandas as pd
 import numpy as np
-from data import fetch_prices
-from config import (
+from quant.data.market import fetch_prices
+from quant.config import (
     ETF_UNIVERSE, SAFE_HAVEN, MOMENTUM_LOOKBACK_MONTHS,
     MOMENTUM_TOP_N, SMA_FILTER_PERIOD, MOMENTUM_HYSTERESIS_DEPTH,
 )

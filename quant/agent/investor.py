@@ -9,6 +9,7 @@ import datetime as dt
 import json
 import logging
 import os
+from quant import paths
 import shutil
 import subprocess
 from typing import Optional
@@ -95,7 +96,7 @@ def run_investor_review(df: pd.DataFrame) -> Optional[str]:
     return text if text else None
 
 
-BUY_CANDIDATES_PATH = os.path.join(os.path.dirname(__file__), ".cache",
+BUY_CANDIDATES_PATH = os.path.join(paths.REPO_ROOT, ".cache",
                                    "buy_candidates.json")
 
 
@@ -172,13 +173,13 @@ def _parse_llm(text, valid_tickers, top_n) -> "list | None":
 
 def select_candidates(top_n=None, owned=None, llm_fn=None) -> list:
     """Review all strategy results, pick top_n buy candidates, persist them."""
-    import config
-    import strategies
+    import quant.config as config
+    import quant.strategies.contract as strategies
     top_n = top_n if top_n is not None else config.ENSEMBLE_TOP_N
     llm_fn = llm_fn or _default_llm
     if owned is None:
         try:
-            import orders
+            import quant.execution.orders as orders
             owned = {p["symbol"] for p in orders._load_portfolio_cache().get("positions", [])}
         except Exception:
             owned = set()

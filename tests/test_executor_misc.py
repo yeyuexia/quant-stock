@@ -9,9 +9,9 @@ import os
 import pytest
 from unittest.mock import MagicMock, patch
 
-from pending_plan import PendingPlan, IntentState, Baseline, write_plan, load_plan
-from orders import OrderIntent
-from broker import BrokerError
+from quant.execution.pending_plan import PendingPlan, IntentState, Baseline, write_plan, load_plan
+from quant.execution.orders import OrderIntent
+from quant.execution.broker import BrokerError
 from tests.fakes import FakeBroker
 
 
@@ -40,10 +40,10 @@ def _plan_with_intents(intents, *, breakers_tripped=None, news_hits_seen=None):
 
 
 def _setup_paths(tmp_path, monkeypatch):
-    import executor, orders
+    import quant.execution.executor as executor, quant.execution.orders as orders
     monkeypatch.setattr(orders, "HALT_PATH", str(tmp_path / "no_halt"))
     monkeypatch.setattr(executor, "HALT_PATH", str(tmp_path / "no_halt"))
-    monkeypatch.setattr("pending_plan.PENDING_PLAN_PATH", str(tmp_path / "p.json"))
+    monkeypatch.setattr("quant.execution.pending_plan.PENDING_PLAN_PATH", str(tmp_path / "p.json"))
     # Place us inside RTH so _is_rth_now() passes.
     monkeypatch.setattr(executor, "_now_et",
                         lambda: dt.datetime(2026, 4, 17, 11, 0))
@@ -55,7 +55,7 @@ def _setup_paths(tmp_path, monkeypatch):
 def test_sticky_breaker_a_aborts_mid_day_merged_intent(tmp_path, monkeypatch):
     """Plan has A already tripped from earlier; a NEW active intent (mimicking
     a mid-day manual rebalance merge) must be aborted by the sticky re-apply."""
-    import executor
+    import quant.execution.executor as executor
     _setup_paths(tmp_path, monkeypatch)
 
     plan = _plan_with_intents(
@@ -81,7 +81,7 @@ def test_sticky_breaker_a_aborts_mid_day_merged_intent(tmp_path, monkeypatch):
 
 def test_sticky_breaker_e_exempts_defensive_symbols(tmp_path, monkeypatch):
     """E (macro flip) sticky abort must still exempt DEFENSIVE_SYMBOLS."""
-    import executor, config
+    import quant.execution.executor as executor, quant.config as config
     _setup_paths(tmp_path, monkeypatch)
     defensive = next(iter(config.DEFENSIVE_SYMBOLS))
 
@@ -109,7 +109,7 @@ def test_sticky_breaker_e_exempts_defensive_symbols(tmp_path, monkeypatch):
 
 def test_sticky_breaker_c_aborts_only_matching_symbol(tmp_path, monkeypatch):
     """C is per-symbol — sticky 'C:NVDA' should abort NVDA only, not AAPL."""
-    import executor
+    import quant.execution.executor as executor
     _setup_paths(tmp_path, monkeypatch)
 
     plan = _plan_with_intents([
@@ -139,7 +139,7 @@ def test_sticky_breaker_c_aborts_only_matching_symbol(tmp_path, monkeypatch):
 def test_already_tripped_breaker_a_not_re_added(tmp_path, monkeypatch):
     """A was tripped on a prior tick; this tick must not re-add it to
     tripped_breakers (would duplicate the TG notification)."""
-    import executor
+    import quant.execution.executor as executor
     _setup_paths(tmp_path, monkeypatch)
 
     plan = _plan_with_intents(
@@ -167,7 +167,7 @@ def test_already_tripped_breaker_a_not_re_added(tmp_path, monkeypatch):
 def test_news_dedupe_persists_across_ticks(tmp_path, monkeypatch):
     """A headline already in plan.news_hits_seen on a prior tick should NOT
     appear in the new hits list on this tick (and so not be re-logged)."""
-    import executor, news_shock
+    import quant.execution.executor as executor, quant.signals.news_shock as news_shock
     _setup_paths(tmp_path, monkeypatch)
 
     title = "Fed surprise rate cut shocks markets"
@@ -194,9 +194,9 @@ def test_news_dedupe_persists_across_ticks(tmp_path, monkeypatch):
                         lambda hits, win: hits)
 
     # Patch the baseline fetchers + 15min so the obs path runs.
-    monkeypatch.setattr("baseline._fetch_spy", lambda: 480.0)
-    monkeypatch.setattr("baseline._fetch_vix", lambda: 14.0)
-    monkeypatch.setattr("baseline._fetch_macro_score", lambda: 0.20)
+    monkeypatch.setattr("quant.signals.baseline._fetch_spy", lambda: 480.0)
+    monkeypatch.setattr("quant.signals.baseline._fetch_vix", lambda: 14.0)
+    monkeypatch.setattr("quant.signals.baseline._fetch_macro_score", lambda: 0.20)
     monkeypatch.setattr(executor, "_spy_15min_ago_price", lambda: 480.0)
 
     fb = FakeBroker()
@@ -213,7 +213,7 @@ def test_news_dedupe_persists_across_ticks(tmp_path, monkeypatch):
 
 def test_news_dedupe_admits_genuinely_new_hit(tmp_path, monkeypatch):
     """A different headline (different hash) must be admitted and stamped."""
-    import executor, news_shock
+    import quant.execution.executor as executor, quant.signals.news_shock as news_shock
     _setup_paths(tmp_path, monkeypatch)
 
     old_title = "Old news from yesterday"
@@ -237,9 +237,9 @@ def test_news_dedupe_admits_genuinely_new_hit(tmp_path, monkeypatch):
                         lambda heads, kws, syms: [new_hit])
     monkeypatch.setattr(news_shock, "dedupe_by_title_hash",
                         lambda hits, win: hits)
-    monkeypatch.setattr("baseline._fetch_spy", lambda: 480.0)
-    monkeypatch.setattr("baseline._fetch_vix", lambda: 14.0)
-    monkeypatch.setattr("baseline._fetch_macro_score", lambda: 0.20)
+    monkeypatch.setattr("quant.signals.baseline._fetch_spy", lambda: 480.0)
+    monkeypatch.setattr("quant.signals.baseline._fetch_vix", lambda: 14.0)
+    monkeypatch.setattr("quant.signals.baseline._fetch_macro_score", lambda: 0.20)
     monkeypatch.setattr(executor, "_spy_15min_ago_price", lambda: 480.0)
     fb = FakeBroker()
     fb.set_latest_quote("SPY", 100.0, 100.1)
@@ -255,7 +255,7 @@ def test_news_dedupe_admits_genuinely_new_hit(tmp_path, monkeypatch):
 def test_write_plan_skipped_when_nothing_changes(tmp_path, monkeypatch):
     """A tick with no fills, no aborts, no breakers should not rewrite the
     plan file."""
-    import executor
+    import quant.execution.executor as executor
     _setup_paths(tmp_path, monkeypatch)
 
     plan = _plan_with_intents([
@@ -284,7 +284,7 @@ def test_write_plan_skipped_when_nothing_changes(tmp_path, monkeypatch):
 
 def test_write_plan_fires_when_breaker_trips(tmp_path, monkeypatch):
     """A new breaker trip mutates plan.breakers_tripped → must write."""
-    import executor
+    import quant.execution.executor as executor
     _setup_paths(tmp_path, monkeypatch)
 
     plan = _plan_with_intents([IntentState(intent=_intent("SPY", "buy"))])
@@ -311,7 +311,7 @@ def test_write_plan_fires_when_breaker_trips(tmp_path, monkeypatch):
 # ── E11: broker retry helper ───────────────────────────────────────
 
 def test_retry_broker_succeeds_on_second_attempt():
-    import executor
+    import quant.execution.executor as executor
     calls = {"n": 0}
     def flaky():
         calls["n"] += 1
@@ -323,7 +323,7 @@ def test_retry_broker_succeeds_on_second_attempt():
 
 
 def test_retry_broker_raises_after_all_attempts():
-    import executor
+    import quant.execution.executor as executor
     def always_fail():
         raise BrokerError("dead")
     with pytest.raises(BrokerError):
@@ -334,10 +334,10 @@ def test_retry_broker_raises_after_all_attempts():
 
 def test_outside_rth_skips_broker_call(tmp_path, monkeypatch):
     """Local clock outside 9:30–16:00 ET → market_closed without calling broker."""
-    import executor, orders
+    import quant.execution.executor as executor, quant.execution.orders as orders
     monkeypatch.setattr(orders, "HALT_PATH", str(tmp_path / "no_halt"))
     monkeypatch.setattr(executor, "HALT_PATH", str(tmp_path / "no_halt"))
-    monkeypatch.setattr("pending_plan.PENDING_PLAN_PATH", str(tmp_path / "p.json"))
+    monkeypatch.setattr("quant.execution.pending_plan.PENDING_PLAN_PATH", str(tmp_path / "p.json"))
     # 18:00 ET on a weekday — definitely outside RTH
     monkeypatch.setattr(executor, "_now_et",
                         lambda: dt.datetime(2026, 4, 17, 18, 0))
@@ -353,10 +353,10 @@ def test_outside_rth_skips_broker_call(tmp_path, monkeypatch):
 
 
 def test_weekend_skips_broker_call(tmp_path, monkeypatch):
-    import executor, orders
+    import quant.execution.executor as executor, quant.execution.orders as orders
     monkeypatch.setattr(orders, "HALT_PATH", str(tmp_path / "no_halt"))
     monkeypatch.setattr(executor, "HALT_PATH", str(tmp_path / "no_halt"))
-    monkeypatch.setattr("pending_plan.PENDING_PLAN_PATH", str(tmp_path / "p.json"))
+    monkeypatch.setattr("quant.execution.pending_plan.PENDING_PLAN_PATH", str(tmp_path / "p.json"))
     # 2026-04-18 is a Saturday
     monkeypatch.setattr(executor, "_now_et",
                         lambda: dt.datetime(2026, 4, 18, 11, 0))
@@ -373,7 +373,7 @@ def test_weekend_skips_broker_call(tmp_path, monkeypatch):
 # ── E7: notifications helper (lock-protected append) ───────────────
 
 def test_append_notification_creates_new_file(tmp_path, monkeypatch):
-    import notifications, config
+    import quant.infra.notifications as notifications, quant.config as config
     notify_path = tmp_path / "tg.json"
     monkeypatch.setattr(config, "TELEGRAM_NOTIFY_PATH", str(notify_path))
 
@@ -385,7 +385,7 @@ def test_append_notification_creates_new_file(tmp_path, monkeypatch):
 
 
 def test_append_notification_appends_to_existing(tmp_path, monkeypatch):
-    import notifications, config
+    import quant.infra.notifications as notifications, quant.config as config
     notify_path = tmp_path / "tg.json"
     notify_path.write_text(json.dumps([{"source": "old", "message": "x", "ts": "2026-01-01"}]))
     monkeypatch.setattr(config, "TELEGRAM_NOTIFY_PATH", str(notify_path))
@@ -399,7 +399,7 @@ def test_append_notification_appends_to_existing(tmp_path, monkeypatch):
 
 def test_append_notification_recovers_from_corrupt_file(tmp_path, monkeypatch):
     """A pre-existing corrupted JSON file shouldn't cause loss — start fresh."""
-    import notifications, config
+    import quant.infra.notifications as notifications, quant.config as config
     notify_path = tmp_path / "tg.json"
     notify_path.write_text("not valid json {{{")
     monkeypatch.setattr(config, "TELEGRAM_NOTIFY_PATH", str(notify_path))
@@ -411,7 +411,7 @@ def test_append_notification_recovers_from_corrupt_file(tmp_path, monkeypatch):
 
 
 def test_append_notification_with_explicit_path_override(tmp_path, monkeypatch):
-    import notifications, config
+    import quant.infra.notifications as notifications, quant.config as config
     main_path = tmp_path / "main.json"
     quant_path = tmp_path / "quant.json"
     monkeypatch.setattr(config, "TELEGRAM_NOTIFY_PATH", str(main_path))

@@ -8,8 +8,8 @@ from __future__ import annotations
 from dataclasses import dataclass, replace
 from typing import Iterable
 
-import config
-from orders import OrderIntent
+import quant.config as config
+from quant.execution.orders import OrderIntent
 
 
 @dataclass(frozen=True)
@@ -88,6 +88,6 @@ class RuleBasedIntentPricer:
     Implements planning.IntentPricer."""
 
     def price(self, intents, ctx: PricingContext):
-        from planning import IntentPricerOutput
+        from quant.execution.planning import IntentPricerOutput
         priced = build_priced_intents(intents, ctx)
         return IntentPricerOutput(priced=priced, provider="rule-based")

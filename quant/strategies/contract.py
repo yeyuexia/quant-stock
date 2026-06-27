@@ -6,10 +6,11 @@ import datetime as dt
 import json
 import logging
 import os
+from quant import paths
 
 _log = logging.getLogger(__name__)
 
-STRATEGIES_DIR = os.path.join(os.path.dirname(__file__), ".cache", "strategies")
+STRATEGIES_DIR = os.path.join(paths.REPO_ROOT, ".cache", "strategies")
 
 
 def write_strategy_result(name: str, rows: list) -> str:
@@ -67,7 +68,7 @@ def run_strategies(registry: dict) -> list:
     abandoned and skipped rather than blocking the caller. This matters because
     run_strategies runs inside the daily watchdog; an unbounded hang would stall
     it. We shut the pool down with wait=False so a stuck worker can't join-block."""
-    import config
+    import quant.config as config
     from concurrent.futures import ThreadPoolExecutor, TimeoutError as _FTimeout
     items = list(registry.items())
     if not items:
@@ -93,7 +94,7 @@ def run_strategies(registry: dict) -> list:
 
 def _canslim_rows() -> list:
     """Adapt screener.screen_stocks() DataFrame to strategy rows."""
-    from screener import screen_stocks
+    from quant.signals.screener import screen_stocks
     df = screen_stocks()
     if df is None or df.empty:
         return []
@@ -111,8 +112,8 @@ def _canslim_rows() -> list:
 
 def default_registry() -> dict:
     """Map each config.ENSEMBLE_STRATEGIES name to a zero-arg rows-producer."""
-    import config
-    import value_screen
+    import quant.config as config
+    import quant.strategies.value.screen as value_screen
     available = {
         "value": value_screen.run,
         "canslim": _canslim_rows,

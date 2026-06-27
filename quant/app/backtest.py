@@ -5,8 +5,8 @@ Runs monthly rebalancing over historical data and computes performance metrics.
 """
 import pandas as pd
 import numpy as np
-from data import fetch_prices
-from config import (
+from quant.data.market import fetch_prices
+from quant.config import (
     ETF_UNIVERSE, SAFE_HAVEN, MOMENTUM_LOOKBACK_MONTHS,
     MOMENTUM_TOP_N, SMA_FILTER_PERIOD, INITIAL_CAPITAL,
     TRANSACTION_COST_BPS,

@@ -1,5 +1,5 @@
 # tests/test_config_intraday.py
-import config
+import quant.config as config
 
 
 def test_circuit_breaker_defaults_present():

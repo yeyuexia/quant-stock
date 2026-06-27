@@ -33,6 +33,7 @@ Usage:
 from __future__ import annotations
 import sys
 import os
+from quant import paths
 import io
 import json
 import time
@@ -45,12 +46,12 @@ from typing import List, Optional
 import numpy as np
 import pandas as pd
 
-import config
-import data as data_mod
+import quant.config as config
+import quant.data.market as data_mod
 
 _log = logging.getLogger(__name__)
 
-CACHE_DIR = os.path.join(os.path.dirname(__file__), ".cache")
+CACHE_DIR = os.path.join(paths.REPO_ROOT, ".cache")
 os.makedirs(CACHE_DIR, exist_ok=True)
 
 DISCOVERY_LOG = os.path.join(CACHE_DIR, "discovery.log")

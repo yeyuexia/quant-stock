@@ -10,7 +10,7 @@ import ast
 import os
 
 
-EXECUTOR_PATH = os.path.join(os.path.dirname(__file__), "..", "executor.py")
+EXECUTOR_PATH = os.path.join(os.path.dirname(__file__), "..", "quant", "execution", "executor.py")
 
 
 def _is_main_guard(node: ast.AST) -> bool:

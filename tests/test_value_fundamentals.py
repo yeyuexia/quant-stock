@@ -1,4 +1,4 @@
-from value_fundamentals import from_info, Fundamentals
+from quant.data.fundamentals import from_info, Fundamentals
 
 
 def test_from_info_maps_and_normalizes():

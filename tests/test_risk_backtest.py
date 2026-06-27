@@ -7,8 +7,8 @@ import pytest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 
-import risk
-import backtest
+import quant.risk.risk as risk
+import quant.app.backtest as backtest
 
 
 # ── risk.half_kelly ───────────────────────────────────────────────

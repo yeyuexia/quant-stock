@@ -13,28 +13,28 @@ from unittest.mock import patch
 # Format: (import_path, attr_name, tmp_filename_or_None_if_dir)
 _ISOLATED_PATHS = [
     # config — shared between most modules
-    ("config", "_OVERRIDES_PATH",          "strategy_overrides.json"),
-    ("config", "TELEGRAM_NOTIFY_PATH",     "telegram_notifications.json"),
-    ("config", "HALT_PATH",                "HALT"),
-    ("config", "ENTRY_PIVOTS_PATH",        "entry_pivots.json"),
-    ("config", "PENDING_ORDERS_PATH",      "pending_orders.json"),
-    ("config", "PENDING_PLAN_PATH",        "pending_plan.json"),
-    ("config", "WATCHLIST_AUTO_PATH",      "watchlist_auto.json"),
+    ("quant.config", "_OVERRIDES_PATH",          "strategy_overrides.json"),
+    ("quant.config", "TELEGRAM_NOTIFY_PATH",     "telegram_notifications.json"),
+    ("quant.config", "HALT_PATH",                "HALT"),
+    ("quant.config", "ENTRY_PIVOTS_PATH",        "entry_pivots.json"),
+    ("quant.config", "PENDING_ORDERS_PATH",      "pending_orders.json"),
+    ("quant.config", "PENDING_PLAN_PATH",        "pending_plan.json"),
+    ("quant.config", "WATCHLIST_AUTO_PATH",      "watchlist_auto.json"),
     # orders — re-binds several config paths at import; patch its copies too
-    ("orders", "PORTFOLIO_PATH",           "portfolio.json"),
-    ("orders", "DAILY_LOG_PATH",           "orders_events.csv"),
-    ("orders", "HALT_PATH",                "HALT"),
-    ("orders", "ENTRY_PIVOTS_PATH",        "entry_pivots.json"),
-    ("orders", "PENDING_ORDERS_PATH",      "pending_orders.json"),
+    ("quant.execution.orders", "PORTFOLIO_PATH",           "portfolio.json"),
+    ("quant.execution.orders", "DAILY_LOG_PATH",           "orders_events.csv"),
+    ("quant.execution.orders", "HALT_PATH",                "HALT"),
+    ("quant.execution.orders", "ENTRY_PIVOTS_PATH",        "entry_pivots.json"),
+    ("quant.execution.orders", "PENDING_ORDERS_PATH",      "pending_orders.json"),
     # executor — also re-binds HALT_PATH at import
-    ("executor", "HALT_PATH",              "HALT"),
+    ("quant.execution.executor", "HALT_PATH",              "HALT"),
     # pending_plan
-    ("pending_plan", "PENDING_PLAN_PATH",  "pending_plan.json"),
+    ("quant.execution.pending_plan", "PENDING_PLAN_PATH",  "pending_plan.json"),
     # watchdog — operational sentinels + persistent caches
-    ("watchdog", "_DEGRADED_SENTINEL_PATH","tg.json"),
-    ("watchdog", "_MACRO_SCORE_PATH",      "macro_score.json"),
-    ("watchdog", "_SCREENER_CACHE_PATH",   "screener_result.json"),
-    ("watchdog", "_BUY_SIGNALS_TODAY_PATH","buy_signals_today.json"),
+    ("quant.monitor.watchdog", "_DEGRADED_SENTINEL_PATH","tg.json"),
+    ("quant.monitor.watchdog", "_MACRO_SCORE_PATH",      "macro_score.json"),
+    ("quant.monitor.watchdog", "_SCREENER_CACHE_PATH",   "screener_result.json"),
+    ("quant.monitor.watchdog", "_BUY_SIGNALS_TODAY_PATH","buy_signals_today.json"),
     # quant.applier — every artifact it writes
     ("quant.applier", "OVERRIDES_PATH",    "strategy_overrides.json"),
     ("quant.applier", "PROPOSALS_PATH",    "strategy_proposals.json"),
@@ -75,7 +75,7 @@ def _mock_fetch_fundamentals():
     """Prevent fetch_fundamentals from hitting the network during tests.
     Returns {} so _fundamental_ok fails open (all tickers pass the filter)."""
     try:
-        with patch("screener.fetch_fundamentals", return_value={}):
+        with patch("quant.signals.screener.fetch_fundamentals", return_value={}):
             yield
     except (ImportError, AttributeError):
         yield
@@ -87,7 +87,7 @@ def _mock_record_screener_pass():
     during tests. Tests that care about the hook (test_screener) override this
     fixture locally to inspect calls."""
     try:
-        with patch("screener.record_screener_pass") as m:
+        with patch("quant.signals.screener.record_screener_pass") as m:
             yield m
     except (ImportError, AttributeError):
         yield None

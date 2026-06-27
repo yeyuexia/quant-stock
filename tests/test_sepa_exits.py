@@ -3,7 +3,7 @@ import math
 import pandas as pd
 import pytest
 
-from sepa_exits import (
+from quant.risk.sepa_exits import (
     initial_r, r_multiple, next_r_tier_action,
     ma_break, ma_trail_should_exit,
 )
@@ -157,9 +157,9 @@ def test_ma_trail_insufficient_data_returns_false():
 # ── failed_breakout ──────────────────────────────────────────────
 
 import datetime as dt
-import config
+import quant.config as config
 import os
-import sepa_exits
+import quant.risk.sepa_exits as sepa_exits
 import sys
 
 
@@ -169,7 +169,7 @@ def _closes_with_dates(values, start="2026-05-15"):
 
 
 def test_failed_breakout_within_window_close_below_pivot_true():
-    from sepa_exits import failed_breakout
+    from quant.risk.sepa_exits import failed_breakout
     pos = {"symbol": "AAPL"}
     pivots = {"AAPL": {"pivot": 200.0, "entry_date": "2026-05-15"}}
     # entry day = Mon 2026-05-15; Day 0 close=201, Day 1 close=199 (below)
@@ -180,7 +180,7 @@ def test_failed_breakout_within_window_close_below_pivot_true():
 
 
 def test_failed_breakout_within_window_all_closes_above_pivot_false():
-    from sepa_exits import failed_breakout
+    from quant.risk.sepa_exits import failed_breakout
     pos = {"symbol": "AAPL"}
     pivots = {"AAPL": {"pivot": 200.0, "entry_date": "2026-05-15"}}
     closes = _closes_with_dates([201.0, 202.0, 205.0], start="2026-05-15")
@@ -189,7 +189,7 @@ def test_failed_breakout_within_window_all_closes_above_pivot_false():
 
 
 def test_failed_breakout_window_expired_false():
-    from sepa_exits import failed_breakout
+    from quant.risk.sepa_exits import failed_breakout
     pos = {"symbol": "AAPL"}
     pivots = {"AAPL": {"pivot": 200.0, "entry_date": "2026-05-11"}}
     # 4 bars after entry (window=3) — past the window
@@ -202,7 +202,7 @@ def test_failed_breakout_window_expired_false():
 
 
 def test_failed_breakout_no_pivot_record_false():
-    from sepa_exits import failed_breakout
+    from quant.risk.sepa_exits import failed_breakout
     pos = {"symbol": "AAPL"}
     pivots = {}  # no pivot for AAPL
     closes = _closes_with_dates([180.0, 170.0], start="2026-05-15")
@@ -212,7 +212,7 @@ def test_failed_breakout_no_pivot_record_false():
 
 def test_failed_breakout_insufficient_closes_false():
     """Closes series doesn't reach today → no in-window data → False."""
-    from sepa_exits import failed_breakout
+    from quant.risk.sepa_exits import failed_breakout
     pos = {"symbol": "AAPL"}
     pivots = {"AAPL": {"pivot": 200.0, "entry_date": "2026-05-15"}}
     closes = pd.Series(dtype=float)  # empty
@@ -244,7 +244,7 @@ def _ohlcv_df(symbol, *, close, high=None, low=None, volume=None, start="2026-01
 
 def test_climax_all_three_conditions_true():
     """30% return over 8 days + 3× ADR + 4× volume → climax True."""
-    from sepa_exits import climax_check
+    from quant.risk.sepa_exits import climax_check
     # 50 quiet bars (close=100, narrow range, low volume), then 8 wild bars.
     quiet_closes = [100.0] * 50
     quiet_highs  = [100.5] * 50
@@ -274,7 +274,7 @@ def test_climax_all_three_conditions_true():
 
 def test_climax_return_only_false():
     """Return high, but range and volume baseline → no climax."""
-    from sepa_exits import climax_check
+    from quant.risk.sepa_exits import climax_check
     closes = [100.0] * 50 + [102, 105, 108, 112, 116, 121, 126, 130.0]
     df = _ohlcv_df("X", close=closes)  # default narrow range, flat volume
     assert climax_check(df, "X") is False
@@ -282,7 +282,7 @@ def test_climax_return_only_false():
 
 def test_climax_range_only_false():
     """Range expanded but return is small."""
-    from sepa_exits import climax_check
+    from quant.risk.sepa_exits import climax_check
     # close stays near 100 but daily range widens
     quiet_close = [100.0] * 50
     recent_close = [100.0, 100.5, 99.8, 100.2, 100.6, 100.1, 99.9, 100.3]
@@ -301,7 +301,7 @@ def test_climax_range_only_false():
 
 def test_climax_volume_only_false():
     """Volume spiked, but return and range are normal."""
-    from sepa_exits import climax_check
+    from quant.risk.sepa_exits import climax_check
     closes = [100.0] * 50 + [100.5, 99.8, 100.2, 100.6, 100.1, 99.9, 100.3, 100.4]
     volume = [1_000_000] * 50 + [4_000_000] * 8
     df = _ohlcv_df("X", close=closes, volume=volume)
@@ -310,7 +310,7 @@ def test_climax_volume_only_false():
 
 def test_climax_insufficient_data_false():
     """Fewer than 30 bars → not enough history → False."""
-    from sepa_exits import climax_check
+    from quant.risk.sepa_exits import climax_check
     df = _ohlcv_df("X", close=[100.0] * 20)
     assert climax_check(df, "X") is False
 
@@ -332,8 +332,8 @@ import pytest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 
-import sepa_exits
-import config
+import quant.risk.sepa_exits as sepa_exits
+import quant.config as config
 
 
 # ── S1: r_multiple rejects R ≤ 0 ──────────────────────────────────

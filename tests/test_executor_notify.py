@@ -1,8 +1,8 @@
 # tests/test_executor_notify.py
 import json
 import datetime as dt
-from pending_plan import PendingPlan, IntentState, Baseline, write_plan
-from orders import OrderIntent
+from quant.execution.pending_plan import PendingPlan, IntentState, Baseline, write_plan
+from quant.execution.orders import OrderIntent
 from tests.fakes import FakeBroker
 
 
@@ -21,12 +21,12 @@ def _plan():
 
 
 def test_breaker_trip_writes_notification_file(tmp_path, monkeypatch):
-    import executor, orders, config as cfg
+    import quant.execution.executor as executor, quant.execution.orders as orders, quant.config as cfg
     notify_path = tmp_path / "telegram_notifications.json"
     monkeypatch.setattr(cfg, "TELEGRAM_NOTIFY_PATH", str(notify_path))
     monkeypatch.setattr(orders, "HALT_PATH", str(tmp_path / "no_halt"))
     monkeypatch.setattr(executor, "HALT_PATH", str(tmp_path / "no_halt"))
-    monkeypatch.setattr("pending_plan.PENDING_PLAN_PATH", str(tmp_path / "p.json"))
+    monkeypatch.setattr("quant.execution.pending_plan.PENDING_PLAN_PATH", str(tmp_path / "p.json"))
     monkeypatch.setattr(executor, "_now_et",
                         lambda: dt.datetime(2026, 4, 17, 11, 0))
 
@@ -71,12 +71,12 @@ def _plan_with_prior_slice(cid_prior: str):
 def test_slice_fill_writes_notification(tmp_path, monkeypatch):
     """When _process_slices detects a non-zero prior_filled (= a slice filled),
     one TG notification per filled intent is appended, with source='executor-fill'."""
-    import executor, orders, config as cfg
+    import quant.execution.executor as executor, quant.execution.orders as orders, quant.config as cfg
     notify_path = tmp_path / "telegram_notifications.json"
     monkeypatch.setattr(cfg, "TELEGRAM_NOTIFY_PATH", str(notify_path))
     monkeypatch.setattr(orders, "HALT_PATH", str(tmp_path / "no_halt"))
     monkeypatch.setattr(executor, "HALT_PATH", str(tmp_path / "no_halt"))
-    monkeypatch.setattr("pending_plan.PENDING_PLAN_PATH", str(tmp_path / "p.json"))
+    monkeypatch.setattr("quant.execution.pending_plan.PENDING_PLAN_PATH", str(tmp_path / "p.json"))
     monkeypatch.setattr(executor, "_now_et",
                         lambda: dt.datetime(2026, 4, 17, 11, 0))
 
@@ -107,12 +107,12 @@ def test_slice_fill_writes_notification(tmp_path, monkeypatch):
 
 def test_zero_fill_writes_no_notification(tmp_path, monkeypatch):
     """If the prior slice filled zero, no fill notification should be written."""
-    import executor, orders, config as cfg
+    import quant.execution.executor as executor, quant.execution.orders as orders, quant.config as cfg
     notify_path = tmp_path / "telegram_notifications.json"
     monkeypatch.setattr(cfg, "TELEGRAM_NOTIFY_PATH", str(notify_path))
     monkeypatch.setattr(orders, "HALT_PATH", str(tmp_path / "no_halt"))
     monkeypatch.setattr(executor, "HALT_PATH", str(tmp_path / "no_halt"))
-    monkeypatch.setattr("pending_plan.PENDING_PLAN_PATH", str(tmp_path / "p.json"))
+    monkeypatch.setattr("quant.execution.pending_plan.PENDING_PLAN_PATH", str(tmp_path / "p.json"))
     monkeypatch.setattr(executor, "_now_et",
                         lambda: dt.datetime(2026, 4, 17, 11, 0))
 

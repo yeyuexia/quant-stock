@@ -8,7 +8,7 @@ import pytest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 
-import sentiment
+import quant.signals.sentiment as sentiment
 
 
 # ── SE5: word-boundary matching (was substring) ───────────────────

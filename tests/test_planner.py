@@ -1,8 +1,8 @@
 # tests/test_planner.py
-from orders import OrderIntent
-from planner import build_priced_intents, PricingContext
-from planner import build_priced_intents, PricingContext, _tier_for, _slice_count
-import config
+from quant.execution.orders import OrderIntent
+from quant.execution.planner import build_priced_intents, PricingContext
+from quant.execution.planner import build_priced_intents, PricingContext, _tier_for, _slice_count
+import quant.config as config
 import os
 import pytest
 import sys
@@ -135,9 +135,9 @@ import pytest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 
-from orders import OrderIntent
-from planner import build_priced_intents, PricingContext, _tier_for, _slice_count
-import config
+from quant.execution.orders import OrderIntent
+from quant.execution.planner import build_priced_intents, PricingContext, _tier_for, _slice_count
+import quant.config as config
 
 
 def _intent_opt(symbol="SPY", side="buy", notional=1000.0):

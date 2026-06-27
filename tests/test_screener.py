@@ -8,8 +8,8 @@ from unittest.mock import patch
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 
-import screener as sc
-from screener import _adr, _ema_value, _detect_base, _compute_rs, screen_stocks, _fundamental_ok, _eps_acceleration
+import quant.signals.screener as sc
+from quant.signals.screener import _adr, _ema_value, _detect_base, _compute_rs, screen_stocks, _fundamental_ok, _eps_acceleration
 
 
 # ── helpers ──────────────────────────────────────────────────────
@@ -160,8 +160,8 @@ def test_screen_stocks_returns_dataframe():
     tickers = ["AAA", "BBB", "CCC"]
     ohlcv, closes = _build_mock_data(tickers)
 
-    with patch("screener.fetch_ohlcv", return_value=ohlcv), \
-         patch("screener.fetch_prices", return_value=closes):
+    with patch("quant.signals.screener.fetch_ohlcv", return_value=ohlcv), \
+         patch("quant.signals.screener.fetch_prices", return_value=closes):
         df = screen_stocks(tickers)
 
     assert isinstance(df, pd.DataFrame)
@@ -174,7 +174,7 @@ def test_screen_stocks_returns_dataframe():
 
 
 def test_screen_stocks_respects_top_n():
-    from config import SCREEN_TOP_N
+    from quant.config import SCREEN_TOP_N
     tickers = [f"T{i}" for i in range(20)]
     closes = _make_closes(300, tickers)
     # Make all pass filters: bias upward
@@ -182,15 +182,15 @@ def test_screen_stocks_respects_top_n():
         closes[t] *= np.linspace(0.7, 1.0, 300)
     ohlcv = _make_ohlcv(closes)
 
-    with patch("screener.fetch_ohlcv", return_value=ohlcv), \
-         patch("screener.fetch_prices", return_value=closes):
+    with patch("quant.signals.screener.fetch_ohlcv", return_value=ohlcv), \
+         patch("quant.signals.screener.fetch_prices", return_value=closes):
         df = screen_stocks(tickers)
 
     assert len(df) <= SCREEN_TOP_N
 
 
 def test_screen_stocks_empty_on_fetch_error():
-    with patch("screener.fetch_ohlcv", side_effect=Exception("network error")):
+    with patch("quant.signals.screener.fetch_ohlcv", side_effect=Exception("network error")):
         df = screen_stocks(["FAIL"])
     assert df.empty
 
@@ -199,8 +199,8 @@ def test_screen_stocks_rank_column_sequential():
     tickers = ["AAA", "BBB", "CCC"]
     ohlcv, closes = _build_mock_data(tickers)
 
-    with patch("screener.fetch_ohlcv", return_value=ohlcv), \
-         patch("screener.fetch_prices", return_value=closes):
+    with patch("quant.signals.screener.fetch_ohlcv", return_value=ohlcv), \
+         patch("quant.signals.screener.fetch_prices", return_value=closes):
         df = screen_stocks(tickers)
 
     if not df.empty:
@@ -290,8 +290,8 @@ def test_screen_stocks_has_fundamental_columns():
     tickers = ["AAA", "BBB", "CCC"]
     ohlcv, closes = _build_mock_data(tickers)
 
-    with patch("screener.fetch_ohlcv", return_value=ohlcv), \
-         patch("screener.fetch_prices", return_value=closes):
+    with patch("quant.signals.screener.fetch_ohlcv", return_value=ohlcv), \
+         patch("quant.signals.screener.fetch_prices", return_value=closes):
         df = screen_stocks(tickers)
 
     if not df.empty:
@@ -305,8 +305,8 @@ def test_screen_stocks_has_in_base_column():
     tickers = ["AAA", "BBB", "CCC"]
     ohlcv, closes = _build_mock_data(tickers)
 
-    with patch("screener.fetch_ohlcv", return_value=ohlcv), \
-         patch("screener.fetch_prices", return_value=closes):
+    with patch("quant.signals.screener.fetch_ohlcv", return_value=ohlcv), \
+         patch("quant.signals.screener.fetch_prices", return_value=closes):
         df = screen_stocks(tickers)
 
     if not df.empty:
@@ -339,10 +339,10 @@ def test_screen_stocks_eps_accel_in_composite():
                    "annual_eps": [5.0, 3.0], "quarterly_eps": [3.0, 2.0, 1.0]},
     }
 
-    with patch("screener.fetch_ohlcv", return_value=df_ohlcv), \
-         patch("screener.fetch_prices", return_value=closes), \
-         patch("screener.fetch_fundamentals", side_effect=lambda t: fund_data.get(t, {})), \
-         patch("screener._detect_base", return_value={"in_base": True, "base_weeks": 8,
+    with patch("quant.signals.screener.fetch_ohlcv", return_value=df_ohlcv), \
+         patch("quant.signals.screener.fetch_prices", return_value=closes), \
+         patch("quant.signals.screener.fetch_fundamentals", side_effect=lambda t: fund_data.get(t, {})), \
+         patch("quant.signals.screener._detect_base", return_value={"in_base": True, "base_weeks": 8,
                                                        "depth": 0.05, "tightness": 0.02, "hi": 100.0,
                                                        "vcp_contractions": 2, "vol_contracting": True}):
         df = sc.screen_stocks(tickers)
@@ -357,7 +357,7 @@ def test_screen_stocks_eps_accel_in_composite():
 def test_screen_stocks_returns_base_hi_column():
     """base_hi (price ceiling of detected base) is present on the result df."""
     import pandas as pd
-    import screener as sc
+    import quant.signals.screener as sc
 
     # Build OHLCV with a clear base: 16 weekly closes tight around 100, last bar at 102.
     n_days = 16 * 5  # ~16 weeks of business days
@@ -373,8 +373,8 @@ def test_screen_stocks_returns_base_hi_column():
     prices = pd.DataFrame({"TEST": base_close_path}, index=dates)
 
     from unittest.mock import patch
-    with patch("screener.fetch_ohlcv", return_value=df_ohlcv), \
-         patch("screener.fetch_prices", return_value=prices):
+    with patch("quant.signals.screener.fetch_ohlcv", return_value=df_ohlcv), \
+         patch("quant.signals.screener.fetch_prices", return_value=prices):
         df = sc.screen_stocks(tickers=["TEST"])
 
     if df.empty:

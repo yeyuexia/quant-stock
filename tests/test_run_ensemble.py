@@ -1,5 +1,5 @@
 """Tests for the ensemble entrypoint (strategies -> agent pick)."""
-import run_ensemble
+import quant.app.ensemble as run_ensemble
 
 
 def test_run_invokes_strategies_then_select(monkeypatch):

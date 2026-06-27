@@ -8,7 +8,7 @@ import pytest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 
-import config
+import quant.config as config
 
 
 # ── C1, C3-C5, C7, C8, C12, C13: dead constants are gone ──────────

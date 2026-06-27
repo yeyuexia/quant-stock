@@ -16,6 +16,7 @@ Core modes (set via PORTFOLIO_MODE env var):
   growth       — aggressive, small/mid-cap heavy, leveraged ETFs in core too
 """
 import os
+from quant import paths
 import json  # used by _load_auto_watchlist() at module load — must precede it
 
 # ── Portfolio Mode ──────────────────────────────────────────────
@@ -153,7 +154,7 @@ SEPA_MA_HISTORY = "6mo"                    # data.fetch_prices period for the EM
 
 # ── SEPA Phase 2 — failed-breakout ──────────────────────────────
 SEPA_FAILED_BREAKOUT_WINDOW_DAYS = 3
-ENTRY_PIVOTS_PATH = os.path.join(os.path.dirname(__file__),
+ENTRY_PIVOTS_PATH = os.path.join(paths.REPO_ROOT,
                                   ".cache", "entry_pivots.json")
 
 # ── SEPA Phase 2 — climax detection ─────────────────────────────
@@ -358,7 +359,7 @@ WATCHLIST_SEED = [
 # Auto-discovered tickers (appended by `discovery.py --update`, trimmed by
 # `--prune --confirm`). A generated file — never hand-edit it; edit
 # WATCHLIST_SEED above instead.
-WATCHLIST_AUTO_PATH = os.path.join(os.path.dirname(__file__), "watchlist_auto.json")
+WATCHLIST_AUTO_PATH = os.path.join(paths.REPO_ROOT, "watchlist_auto.json")
 
 
 def _is_valid_ticker(t) -> bool:
@@ -446,9 +447,9 @@ ALPACA_API_KEY = os.environ.get("ALPACA_API_KEY")
 ALPACA_API_SECRET = os.environ.get("ALPACA_API_SECRET")
 
 # ── Safety rails ────────────────────────────────────────────────
-HALT_PATH = os.path.join(os.path.dirname(__file__), ".cache", "HALT")
-DAILY_TRADE_LOG = os.path.join(os.path.dirname(__file__), ".cache", "daily_trade_log.json")
-PENDING_ORDERS_PATH = os.path.join(os.path.dirname(__file__), "pending_orders.json")
+HALT_PATH = os.path.join(paths.REPO_ROOT, ".cache", "HALT")
+DAILY_TRADE_LOG = os.path.join(paths.REPO_ROOT, ".cache", "daily_trade_log.json")
+PENDING_ORDERS_PATH = os.path.join(paths.REPO_ROOT, "pending_orders.json")
 
 DAILY_MAX_ORDERS = 40
 # Paper mode: no notional cap so full portfolio deploys in one session.
@@ -513,15 +514,15 @@ NEWS_SHOCK_KEYWORDS = [
 DEFENSIVE_SYMBOLS = {"BIL", "SHY", "IEF", "TLT"}
 
 # Pending plan persistence
-PENDING_PLAN_PATH = os.path.join(os.path.dirname(__file__), ".cache", "pending_plan.json")
-NEWS_SHOCK_LOG    = os.path.join(os.path.dirname(__file__), ".cache", "news_shock_log.csv")
-TELEGRAM_NOTIFY_PATH = os.path.join(os.path.dirname(__file__), ".cache",
+PENDING_PLAN_PATH = os.path.join(paths.REPO_ROOT, ".cache", "pending_plan.json")
+NEWS_SHOCK_LOG    = os.path.join(paths.REPO_ROOT, ".cache", "news_shock_log.csv")
+TELEGRAM_NOTIFY_PATH = os.path.join(paths.REPO_ROOT, ".cache",
                                     "telegram_notifications.json")
 
 # ── Strategy overrides (written by quant review subagent) ────────
 import logging as _logging
 
-_OVERRIDES_PATH = os.path.join(os.path.dirname(__file__), ".cache", "strategy_overrides.json")
+_OVERRIDES_PATH = os.path.join(paths.REPO_ROOT, ".cache", "strategy_overrides.json")
 
 # Allowlist: key → (expected_type, lower_bound, upper_bound).
 # For numeric types: lo/hi are value bounds.

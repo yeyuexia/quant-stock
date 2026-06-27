@@ -11,12 +11,13 @@ baseline.py and news_shock.py.
 from __future__ import annotations
 import datetime as dt
 import os
+from quant import paths
 from dataclasses import dataclass, field
 from typing import Optional
 
-import config
-from broker import Broker, BrokerError
-from pending_plan import PendingPlan, load_plan, write_plan, clear_plan
+import quant.config as config
+from quant.execution.broker import Broker, BrokerError
+from quant.execution.pending_plan import PendingPlan, load_plan, write_plan, clear_plan
 
 HALT_PATH = config.HALT_PATH
 
@@ -105,7 +106,7 @@ def _plan_fingerprint(plan: PendingPlan) -> str:
     """Stable hash of all PendingPlan fields the executor can mutate.
     Used by run_tick to skip write_plan when nothing changed this tick."""
     import hashlib
-    from pending_plan import _plan_to_dict
+    from quant.execution.pending_plan import _plan_to_dict
     import json as _json
     blob = _json.dumps(_plan_to_dict(plan), sort_keys=True, default=str)
     return hashlib.sha1(blob.encode()).hexdigest()
@@ -130,7 +131,7 @@ def _process_breakers(plan: PendingPlan, obs, result: TickResult):
       2. Evaluate only the breakers that haven't already tripped (E1) and
          apply their aborts on first trip.
     """
-    from breakers import (
+    from quant.execution.breakers import (
         check_spy_drop, check_vix_spike, check_single_name_shock,
         check_news_shock, check_macro_flip,
     )
@@ -168,7 +169,7 @@ def _process_breakers(plan: PendingPlan, obs, result: TickResult):
         # to live INSIDE check_news_shock — moved out so the breaker can
         # stay pure (no disk I/O) and tests can call it without fixtures.
         if obs.news_hits:
-            from news_shock import log_hit
+            from quant.signals.news_shock import log_hit
             for h in obs.news_hits:
                 try:
                     log_hit(h, corroborated=r.tripped)
@@ -285,8 +286,8 @@ def _fetch_current_observations(plan: PendingPlan, broker):
       - E6: news hits are deduped against plan.news_hits_seen (cross-tick state)
             so the audit log doesn't get the same headline 30 times.
     """
-    from baseline import _fetch_spy, _fetch_vix, _fetch_macro_score
-    from news_shock import (
+    from quant.signals.baseline import _fetch_spy, _fetch_vix, _fetch_macro_score
+    from quant.signals.news_shock import (
         fetch_recent_headlines, match_headlines, dedupe_by_title_hash, title_hash,
     )
 
@@ -380,7 +381,7 @@ def _now_et() -> dt.datetime:
     """US/Eastern wall clock. Monkeypatched in tests.
     Delegates to timeutils.now_et — see there for environment requirements.
     """
-    from timeutils import now_et
+    from quant.infra.timeutils import now_et
     return now_et()
 
 
@@ -429,7 +430,7 @@ def _process_slices(plan: PendingPlan, obs, result: TickResult, *, broker,
     Bails early at/after EXECUTOR_WINDOW_END so we don't submit slices that
     _process_eod would immediately cancel on the same tick.
     """
-    from orders import submit_limit_slice
+    from quant.execution.orders import submit_limit_slice
     from dataclasses import replace
     now = _now_et()
 
@@ -583,7 +584,7 @@ def _notify_breakers(result: TickResult, plan: PendingPlan):
     """Append one notification per tripped breaker to the Telegram notify file."""
     if not result.tripped_breakers:
         return
-    from notifications import append_notification
+    from quant.infra.notifications import append_notification
     for r in result.tripped_breakers:
         append_notification({
             "source": "executor.breaker",
@@ -599,7 +600,7 @@ def _notify_fill_to_telegram(intent, filled_delta: float, total_filled: float) -
     """Append a fill notification to TELEGRAM_NOTIFY_PATH. No-op if unset."""
     if filled_delta <= 0:
         return
-    from notifications import append_notification
+    from quant.infra.notifications import append_notification
 
     pct = (total_filled / intent.notional * 100) if intent.notional else 0.0
     message = "\n".join([
@@ -664,7 +665,7 @@ def _process_eod(plan: PendingPlan, result: TickResult, *, broker,
 def main():
     try:
         from dotenv import load_dotenv
-        load_dotenv(os.path.join(os.path.dirname(__file__), ".env"))
+        load_dotenv(os.path.join(paths.REPO_ROOT, ".env"))
     except ImportError:
         pass
     broker = Broker(env=config.ALPACA_ENV)

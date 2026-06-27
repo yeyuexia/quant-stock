@@ -10,8 +10,8 @@ from unittest.mock import patch, MagicMock
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 
-import run
-import config
+import quant.app.daily_report as run
+import quant.config as config
 
 
 # ── R8: argparse — --section / --skip / --backtest-years ─────────────
@@ -71,7 +71,7 @@ def test_screener_default_off_investor_review(monkeypatch):
     def fake_screen(with_review=False):
         called["with_review"] = with_review
         return pd.DataFrame()
-    monkeypatch.setattr("screener.screen_stocks", fake_screen)
+    monkeypatch.setattr("quant.signals.screener.screen_stocks", fake_screen)
 
     run.run_stock_screener()
     assert called["with_review"] is False
@@ -82,7 +82,7 @@ def test_screener_with_review_flag(monkeypatch):
     def fake_screen(with_review=False):
         called["with_review"] = with_review
         return (pd.DataFrame(), None)
-    monkeypatch.setattr("screener.screen_stocks", fake_screen)
+    monkeypatch.setattr("quant.signals.screener.screen_stocks", fake_screen)
 
     run.run_stock_screener(with_review=True)
     assert called["with_review"] is True
@@ -118,12 +118,12 @@ def test_run_risk_analysis_uses_signal_weights(monkeypatch, capsys):
             "max_drawdown": -0.10, "var_95_daily": -0.02, "cvar_95_daily": -0.03,
             "win_rate": 0.55, "best_day": 0.04, "worst_day": -0.05,
         }
-    monkeypatch.setattr("risk.portfolio_stats", fake_portfolio_stats)
-    monkeypatch.setattr("risk.correlation_matrix",
+    monkeypatch.setattr("quant.risk.risk.portfolio_stats", fake_portfolio_stats)
+    monkeypatch.setattr("quant.risk.risk.correlation_matrix",
                         lambda r: pd.DataFrame())
-    monkeypatch.setattr("risk.diversification_ratio",
+    monkeypatch.setattr("quant.risk.risk.diversification_ratio",
                         lambda r, w: 1.5)
-    monkeypatch.setattr("data.fetch_prices",
+    monkeypatch.setattr("quant.data.market.fetch_prices",
                         lambda t, period="1y": pd.DataFrame(
                             {x: [100, 101, 102] for x in t},
                             index=pd.date_range("2026-01-01", periods=3),
@@ -151,12 +151,12 @@ def test_run_risk_analysis_uses_config_safe_haven(monkeypatch):
             "max_drawdown": 0.0, "var_95_daily": 0.0, "cvar_95_daily": 0.0,
             "win_rate": 0.0, "best_day": 0.0, "worst_day": 0.0,
         }
-    monkeypatch.setattr("risk.portfolio_stats", fake_portfolio_stats)
-    monkeypatch.setattr("risk.correlation_matrix",
+    monkeypatch.setattr("quant.risk.risk.portfolio_stats", fake_portfolio_stats)
+    monkeypatch.setattr("quant.risk.risk.correlation_matrix",
                         lambda r: pd.DataFrame())
-    monkeypatch.setattr("risk.diversification_ratio",
+    monkeypatch.setattr("quant.risk.risk.diversification_ratio",
                         lambda r, w: 1.0)
-    monkeypatch.setattr("data.fetch_prices",
+    monkeypatch.setattr("quant.data.market.fetch_prices",
                         lambda t, period="1y": pd.DataFrame(
                             {x: [100, 101] for x in t},
                             index=pd.date_range("2026-01-01", periods=2),
@@ -200,7 +200,7 @@ def test_safe_section_swallows_runtime_errors():
 
 def test_screener_section_reads_rs_from_config(monkeypatch, capsys):
     monkeypatch.setattr(config, "SCREEN_RS_MIN", 88.0)  # arbitrary distinct value
-    monkeypatch.setattr("screener.screen_stocks",
+    monkeypatch.setattr("quant.signals.screener.screen_stocks",
                         lambda **kw: pd.DataFrame())
     run.run_stock_screener()
     out = capsys.readouterr().out
@@ -219,7 +219,7 @@ def test_now_et_str_includes_timezone_marker():
 
 def test_momentum_section_mentions_hysteresis(monkeypatch, capsys):
     monkeypatch.setattr(config, "MOMENTUM_HYSTERESIS_DEPTH", 2)
-    monkeypatch.setattr("momentum.generate_signals", lambda: {
+    monkeypatch.setattr("quant.signals.momentum.generate_signals", lambda: {
         "ranking": pd.DataFrame([{
             "rank": 1, "ticker": "SPY", "price": 100.0,
             "1m_ret": 0.01, "3m_ret": 0.05, "6m_ret": 0.10, "12m_ret": 0.20,

@@ -17,7 +17,7 @@ import json
 import os
 from typing import Optional
 
-import config
+import quant.config as config
 
 
 def _notify_path() -> Optional[str]:

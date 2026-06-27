@@ -1,8 +1,8 @@
 """Two-track selection rules + scoring over Fundamentals. Pure — no I/O.
 Track A = profitable 'mispriced bargains'; Track B = unprofitable growth.
 Thresholds come from config.VS_TRACK_A / VS_TRACK_B so they're tunable."""
-import config
-from value_fundamentals import Fundamentals
+import quant.config as config
+from quant.data.fundamentals import Fundamentals
 
 
 def classify(f: Fundamentals):

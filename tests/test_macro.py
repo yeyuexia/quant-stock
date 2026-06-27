@@ -7,7 +7,7 @@ import pandas as pd
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 
-import macro
+import quant.signals.macro as macro
 
 
 # ── M2: yield curve returns N/A on missing data, not magic 4.0 ────
@@ -218,7 +218,7 @@ def test_fed_funds_direction_uses_6m_horizon(monkeypatch):
 # ── atomic_write_csv basic shape ─────────────────────────────────
 
 def test_atomic_write_csv_creates_file_and_lock(tmp_path):
-    from fileio import atomic_write_csv
+    from quant.infra.fileio import atomic_write_csv
     df = pd.DataFrame({"x": [1, 2, 3]})
     target = tmp_path / "data.csv"
     atomic_write_csv(str(target), df)

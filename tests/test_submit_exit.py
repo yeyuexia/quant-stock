@@ -5,12 +5,12 @@ from tests.fakes import FakeBroker
 
 
 def test_submit_exit_writes_to_pending_plan(tmp_path, monkeypatch):
-    import orders, config as cfg
-    from pending_plan import load_plan
+    import quant.execution.orders as orders, quant.config as cfg
+    from quant.execution.pending_plan import load_plan
 
     monkeypatch.setattr(orders, "HALT_PATH", str(tmp_path / "no_halt"))
     monkeypatch.setattr(orders, "PORTFOLIO_PATH", str(tmp_path / "port.json"))
-    monkeypatch.setattr("pending_plan.PENDING_PLAN_PATH", str(tmp_path / "plan.json"))
+    monkeypatch.setattr("quant.execution.pending_plan.PENDING_PLAN_PATH", str(tmp_path / "plan.json"))
     monkeypatch.setattr(cfg, "MACRO_EXIT_TOLERANCE_BPS", 150)
 
     with open(orders.PORTFOLIO_PATH, "w") as f:
@@ -24,7 +24,7 @@ def test_submit_exit_writes_to_pending_plan(tmp_path, monkeypatch):
                          "aggressive": {"last_rebalance": None}},
         }, f)
 
-    import baseline as bl
+    import quant.signals.baseline as bl
     monkeypatch.setattr(bl, "_fetch_spy", lambda: 480.0)
     monkeypatch.setattr(bl, "_fetch_vix", lambda: 18.0)
     monkeypatch.setattr(bl, "_fetch_macro_score", lambda: -0.25)

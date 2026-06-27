@@ -1,4 +1,4 @@
-import config
+import quant.config as config
 
 
 def test_new_flags_have_expected_defaults():
@@ -8,7 +8,7 @@ def test_new_flags_have_expected_defaults():
 
 
 def test_ensemble_config_defaults():
-    import config
+    import quant.config as config
     assert config.VS_MIN_DOLLAR_VOLUME == 5_000_000
     assert config.VS_MIN_PRICE == 5.0
     assert config.VS_MIN_MARKET_CAP == 300_000_000

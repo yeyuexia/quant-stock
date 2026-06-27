@@ -17,19 +17,20 @@ Cron:
 """
 import sys
 import os
+from quant import paths
 import json
 import datetime as dt
 import numpy as np
 import pandas as pd
 
-from broker import Broker, BrokerError
-import orders
-import config
+from quant.execution.broker import Broker, BrokerError
+import quant.execution.orders as orders
+import quant.config as config
 
 # ── Portfolio state (via orders.sync_state) ─────────────────────
 
 
-_DEGRADED_SENTINEL_PATH = os.path.join(os.path.dirname(__file__), ".cache",
+_DEGRADED_SENTINEL_PATH = os.path.join(paths.REPO_ROOT, ".cache",
                                        "snapshot_degraded_since.json")
 
 
@@ -85,7 +86,7 @@ def snapshot(broker=None) -> orders.PortfolioSnapshot:
             was_degraded, minutes_down = _exit_degraded()
             if was_degraded:
                 try:
-                    from notifications import append_notification
+                    from quant.infra.notifications import append_notification
                     append_notification({
                         "source": "watchdog.snapshot",
                         "message": (f"✓ snapshot RECOVERED after "
@@ -107,7 +108,7 @@ def snapshot(broker=None) -> orders.PortfolioSnapshot:
     if _enter_degraded(reason):
         # State transition: healthy → degraded. One notification only.
         try:
-            from notifications import append_notification
+            from quant.infra.notifications import append_notification
             append_notification({
                 "source": "watchdog.snapshot",
                 "message": (f"⚠ CRITICAL: snapshot DEGRADED to portfolio.json "
@@ -184,7 +185,7 @@ def check_price_moves(portfolio, broker=None):
     (Alpaca real-time / IEX feed) so intraday triggers don't wait for the
     daily close. prev_close + peak still come from yfinance daily bars.
     """
-    from data import fetch_prices, fetch_info
+    from quant.data.market import fetch_prices, fetch_info
 
     alerts = []
     tickers = [p["ticker"] for p in portfolio["positions"]]
@@ -250,14 +251,14 @@ def check_price_moves(portfolio, broker=None):
         # Tranche-specific stops: aggressive tranche uses tighter levels
         tranche = pos.get("tranche", "core")
         if tranche == "aggressive":
-            from config import AGGRESSIVE_PARAMS as _AP
+            from quant.config import AGGRESSIVE_PARAMS as _AP
             stop_loss_pct  = _AP["stop_loss_pct"] * 100          # 10%
             stop_warn_pct  = stop_loss_pct * 0.7                  # 7%
             trail_stop_pct = _AP["trailing_stop_pct"] * 100       # 15%
             trail_warn_pct = trail_stop_pct * 0.67                # 10%
             tranche_label  = " [AGGRESSIVE]"
         else:
-            from config import STOP_LOSS_PCT, TRAILING_STOP_PCT
+            from quant.config import STOP_LOSS_PCT, TRAILING_STOP_PCT
             stop_loss_pct  = STOP_LOSS_PCT * 100                  # 8%
             stop_warn_pct  = stop_loss_pct * 0.625                # 5%
             trail_stop_pct = TRAILING_STOP_PCT * 100              # 12%
@@ -319,7 +320,7 @@ def check_portfolio_status(portfolio):
     'current'). The old per-ticker fetch_info loop spent ~0.5-1s per ticker on
     Ticker.info — wasteful for daily runs with 4-10 positions.
     """
-    from data import fetch_prices
+    from quant.data.market import fetch_prices
 
     rows = []
     total_value = 0
@@ -432,7 +433,7 @@ def _sepa_notify(message: str, lines: list) -> None:
     """Append a Telegram message; also push to the in-process `lines` list
     so the caller can include them in the watchdog alert summary."""
     lines.append(message)
-    from notifications import append_notification
+    from quant.infra.notifications import append_notification
     append_notification({"source": "watchdog.sepa", "message": message})
 
 
@@ -443,7 +444,7 @@ def _cancel_pending_partials(symbol: str) -> None:
     affect rebalance buys or non-SEPA exits. Idempotent: no plan or no
     matching intents → no-op.
     """
-    from pending_plan import load_plan, write_plan
+    from quant.execution.pending_plan import load_plan, write_plan
     plan = load_plan()
     if plan is None:
         return
@@ -511,8 +512,8 @@ def check_sepa_exits(snap: "orders.PortfolioSnapshot", broker,
     if not getattr(config, "SEPA_ENABLED", False):
         return notifications
 
-    import sepa_exits
-    import data
+    import quant.risk.sepa_exits as sepa_exits
+    import quant.data.market as data
 
     core_positions = [
         p for p in snap.positions
@@ -705,7 +706,7 @@ def check_sepa_exits(snap: "orders.PortfolioSnapshot", broker,
                         if f"{int(r)}R" in pos.get("r_tier_filled", []) or f"{int(r)}R" == action
                     )
                     new_qty = float(pos["initial_qty"]) * remaining_fraction
-                    from orders import _make_cid
+                    from quant.execution.orders import _make_cid
                     _, trail_pct = orders._tranche_stops("core")
                     cid = _make_cid("core", f"sepa-trail-{action}", symbol, dt.date.today())
                     try:
@@ -780,13 +781,13 @@ def act_on_macro_flip(snap: orders.PortfolioSnapshot, regime: str,
 
 # ── Check 4: Macro Shifts ─────────────────────────────────────
 
-_MACRO_SCORE_PATH = os.path.join(os.path.dirname(__file__), ".cache",
+_MACRO_SCORE_PATH = os.path.join(paths.REPO_ROOT, ".cache",
                                  "last_macro_score.json")
 
 
 def check_macro_shift(snap=None, broker=None):
     """Check if macro regime has changed since last check."""
-    from macro import macro_regime_score
+    from quant.signals.macro import macro_regime_score
 
     alerts = []
     result = macro_regime_score()
@@ -853,7 +854,7 @@ def check_macro_shift(snap=None, broker=None):
 
 def check_news(portfolio):
     """Check for breaking news on our holdings."""
-    from sentiment import get_market_hotspots
+    from quant.signals.sentiment import get_market_hotspots
 
     alerts = []
     try:
@@ -939,7 +940,7 @@ def log_daily(portfolio, total_value, total_pnl_pct):
     """
     import csv
     import fcntl
-    log_file = os.path.join(os.path.dirname(__file__), "daily_log.csv")
+    log_file = os.path.join(paths.REPO_ROOT, "daily_log.csv")
     today = str(dt.date.today())
     lock_path = log_file + ".lock"
 
@@ -986,7 +987,7 @@ def _run_daily_ensemble() -> None:
     intraday tick — so the slow/costly LLM call stays off the 5-minute loop.
     Fail-open: a generation failure must never break the watchdog run."""
     try:
-        import run_ensemble
+        import quant.app.ensemble as run_ensemble
         picks = run_ensemble.run()
         if picks:
             print("  Ensemble candidates: " +
@@ -1114,7 +1115,7 @@ def run_watchdog(quick=False):
 
 def show_history():
     """Show portfolio tracking history."""
-    log_file = os.path.join(os.path.dirname(__file__), "daily_log.csv")
+    log_file = os.path.join(paths.REPO_ROOT, "daily_log.csv")
     if not os.path.exists(log_file):
         print("  No history yet. Run watchdog first.")
         return
@@ -1132,7 +1133,7 @@ def show_history():
 
 # ── Intraday buy signals ─────────────────────────────────────────
 
-_SCREENER_CACHE_PATH = os.path.join(os.path.dirname(__file__), ".cache", "screener_result.json")
+_SCREENER_CACHE_PATH = os.path.join(paths.REPO_ROOT, ".cache", "screener_result.json")
 
 
 def _load_screener_cache() -> "pd.DataFrame | None":
@@ -1175,7 +1176,7 @@ def _get_screened_stocks() -> "pd.DataFrame":
     Note: per-candidate liquidity/price gating is enforced upstream by each
     strategy (value_screen gates; screener filters), not here in the buy path.
     """
-    import investor_agent
+    import quant.agent.investor as investor_agent
     try:
         if os.path.exists(investor_agent.BUY_CANDIDATES_PATH):
             age_hours = (
@@ -1195,7 +1196,7 @@ def _get_screened_stocks() -> "pd.DataFrame":
     cached = _load_screener_cache()
     if cached is not None and not cached.empty:
         return cached
-    from screener import screen_stocks
+    from quant.signals.screener import screen_stocks
     df = screen_stocks()
     if not df.empty:
         _save_screener_cache(df)
@@ -1234,7 +1235,7 @@ def _estimate_full_day_volume(ticker: str,
     `bars` lets callers pass a pre-fetched 1m frame (multi-ticker batch
     download) to avoid one yfinance round-trip per symbol — see check_buy_signals.
     """
-    from timeutils import now_et
+    from quant.infra.timeutils import now_et
     now = now_et()
     market_open = now.replace(hour=9, minute=30, second=0, microsecond=0)
     minutes_elapsed = (now - market_open).total_seconds() / 60
@@ -1262,7 +1263,7 @@ def _estimate_full_day_volume(ticker: str,
     return current_vol / fraction
 
 
-_BUY_SIGNALS_TODAY_PATH = os.path.join(os.path.dirname(__file__),
+_BUY_SIGNALS_TODAY_PATH = os.path.join(paths.REPO_ROOT,
                                         ".cache", "buy_signals_today.json")
 
 
@@ -1440,13 +1441,13 @@ def check_buy_signals(snap: "orders.PortfolioSnapshot", broker: "Broker") -> lis
 def _is_trading_hours() -> bool:
     """True if current wall-clock time falls within US market hours (9:30–16:00 ET, Mon–Fri).
     Thin wrapper for tests to monkeypatch; logic lives in timeutils."""
-    from timeutils import is_rth_now
+    from quant.infra.timeutils import is_rth_now
     return is_rth_now()
 
 
 def _notify_critical(message: str) -> None:
     """Write a CRITICAL alert to the Telegram notification queue."""
-    from notifications import append_notification
+    from quant.infra.notifications import append_notification
     append_notification({"source": "watchdog.intraday", "message": message})
 
 

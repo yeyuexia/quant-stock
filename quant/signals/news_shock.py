@@ -20,7 +20,7 @@ import re
 from dataclasses import dataclass
 from typing import Iterable
 
-import config
+import quant.config as config
 
 _log = logging.getLogger(__name__)
 

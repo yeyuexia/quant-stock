@@ -1,7 +1,7 @@
 # tests/test_executor_skeleton.py
 import datetime as dt
-from pending_plan import PendingPlan, IntentState, Baseline, write_plan, clear_plan
-from orders import OrderIntent
+from quant.execution.pending_plan import PendingPlan, IntentState, Baseline, write_plan, clear_plan
+from quant.execution.orders import OrderIntent
 from tests.fakes import FakeBroker
 
 
@@ -26,19 +26,19 @@ def _plan():
 
 
 def test_executor_exits_when_no_plan(tmp_path, monkeypatch):
-    import executor
-    monkeypatch.setattr("pending_plan.PENDING_PLAN_PATH", str(tmp_path / "none.json"))
+    import quant.execution.executor as executor
+    monkeypatch.setattr("quant.execution.pending_plan.PENDING_PLAN_PATH", str(tmp_path / "none.json"))
     ret = executor.run_tick(broker=FakeBroker())
     assert ret is None
 
 
 def test_executor_respects_halt(tmp_path, monkeypatch):
-    import executor, orders
+    import quant.execution.executor as executor, quant.execution.orders as orders
     halt = tmp_path / "HALT"
     halt.write_text("")
     monkeypatch.setattr(orders, "HALT_PATH", str(halt))
     monkeypatch.setattr(executor, "HALT_PATH", str(halt))
-    monkeypatch.setattr("pending_plan.PENDING_PLAN_PATH", str(tmp_path / "p.json"))
+    monkeypatch.setattr("quant.execution.pending_plan.PENDING_PLAN_PATH", str(tmp_path / "p.json"))
     write_plan(_plan())
     b = FakeBroker()
     result = executor.run_tick(broker=b)
@@ -48,10 +48,10 @@ def test_executor_respects_halt(tmp_path, monkeypatch):
 
 
 def test_executor_respects_market_closed(tmp_path, monkeypatch):
-    import executor, orders
+    import quant.execution.executor as executor, quant.execution.orders as orders
     monkeypatch.setattr(orders, "HALT_PATH", str(tmp_path / "no_halt"))
     monkeypatch.setattr(executor, "HALT_PATH", str(tmp_path / "no_halt"))
-    monkeypatch.setattr("pending_plan.PENDING_PLAN_PATH", str(tmp_path / "p.json"))
+    monkeypatch.setattr("quant.execution.pending_plan.PENDING_PLAN_PATH", str(tmp_path / "p.json"))
     # run_tick gates on the LOCAL clock via _is_rth_now() (not the broker), so
     # pin _now_et to a Saturday — otherwise this test only passes when the wall
     # clock happens to be outside RTH and fails (hitting the live data fetch)
@@ -66,10 +66,10 @@ def test_executor_respects_market_closed(tmp_path, monkeypatch):
 
 
 def test_executor_shadow_mode_logs_without_submitting(tmp_path, monkeypatch):
-    import executor, orders, config as cfg
+    import quant.execution.executor as executor, quant.execution.orders as orders, quant.config as cfg
     monkeypatch.setattr(orders, "HALT_PATH", str(tmp_path / "no_halt"))
     monkeypatch.setattr(executor, "HALT_PATH", str(tmp_path / "no_halt"))
-    monkeypatch.setattr("pending_plan.PENDING_PLAN_PATH", str(tmp_path / "p.json"))
+    monkeypatch.setattr("quant.execution.pending_plan.PENDING_PLAN_PATH", str(tmp_path / "p.json"))
     monkeypatch.setattr(cfg, "EXECUTOR_SHADOW_MODE", True)
     b = FakeBroker()
     b.set_latest_quote("SPY", bid=479.9, ask=480.1)

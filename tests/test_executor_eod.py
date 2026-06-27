@@ -1,7 +1,7 @@
 # tests/test_executor_eod.py
 import datetime as dt
-from pending_plan import PendingPlan, IntentState, Baseline, write_plan, load_plan
-from orders import OrderIntent
+from quant.execution.pending_plan import PendingPlan, IntentState, Baseline, write_plan, load_plan
+from quant.execution.orders import OrderIntent
 from tests.fakes import FakeBroker
 
 
@@ -16,10 +16,10 @@ def _plan(intent_kwargs):
 
 
 def test_eod_marks_unfilled_deferred(tmp_path, monkeypatch):
-    import executor, orders
+    import quant.execution.executor as executor, quant.execution.orders as orders
     monkeypatch.setattr(orders, "HALT_PATH", str(tmp_path / "no_halt"))
     monkeypatch.setattr(executor, "HALT_PATH", str(tmp_path / "no_halt"))
-    monkeypatch.setattr("pending_plan.PENDING_PLAN_PATH", str(tmp_path / "p.json"))
+    monkeypatch.setattr("quant.execution.pending_plan.PENDING_PLAN_PATH", str(tmp_path / "p.json"))
     monkeypatch.setattr(executor, "_now_et",
                         lambda: dt.datetime(2026, 4, 17, 15, 50))
 
@@ -32,7 +32,7 @@ def test_eod_marks_unfilled_deferred(tmp_path, monkeypatch):
                       notional_filled=250.0, last_client_order_id="cid-spy-s3"))
     write_plan(plan)
 
-    from broker import Order
+    from quant.execution.broker import Order
     b = FakeBroker()
     b.set_latest_quote("SPY", bid=479.9, ask=480.1)
     b.seed_open_order(Order(id="ord-pending", symbol="SPY", side="buy",
@@ -58,10 +58,10 @@ def test_eod_marks_unfilled_deferred(tmp_path, monkeypatch):
 
 
 def test_eod_marks_nearly_filled_done(tmp_path, monkeypatch):
-    import executor, orders
+    import quant.execution.executor as executor, quant.execution.orders as orders
     monkeypatch.setattr(orders, "HALT_PATH", str(tmp_path / "no_halt"))
     monkeypatch.setattr(executor, "HALT_PATH", str(tmp_path / "no_halt"))
-    monkeypatch.setattr("pending_plan.PENDING_PLAN_PATH", str(tmp_path / "p.json"))
+    monkeypatch.setattr("quant.execution.pending_plan.PENDING_PLAN_PATH", str(tmp_path / "p.json"))
     monkeypatch.setattr(executor, "_now_et",
                         lambda: dt.datetime(2026, 4, 17, 15, 50))
 

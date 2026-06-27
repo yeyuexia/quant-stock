@@ -1,10 +1,10 @@
 # tests/test_news_shock.py
 import datetime as dt
-from news_shock import (
+from quant.signals.news_shock import (
     match_headlines, NewsHit, dedupe_by_title_hash, log_hit,
 )
 import logging
-import news_shock
+import quant.signals.news_shock as news_shock
 import os
 import pytest
 import sys
@@ -58,7 +58,7 @@ def test_dedupe_removes_duplicate_title_hashes_within_window():
 
 def test_log_hit_appends_to_csv(tmp_path, monkeypatch):
     log_path = tmp_path / "news_log.csv"
-    monkeypatch.setattr("news_shock.NEWS_SHOCK_LOG", str(log_path))
+    monkeypatch.setattr("quant.signals.news_shock.NEWS_SHOCK_LOG", str(log_path))
     h = NewsHit(title="Fed announces rate cut", source="reuters",
                 ts=dt.datetime(2026, 4, 17, 14, 5, tzinfo=dt.timezone.utc),
                 matched="fed")
@@ -83,7 +83,7 @@ import pytest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 
-import news_shock
+import quant.signals.news_shock as news_shock
 
 
 def test_log_hit_creates_lock_sidecar(tmp_path, monkeypatch):

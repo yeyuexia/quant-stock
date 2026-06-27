@@ -13,7 +13,7 @@ import sys
 _HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.dirname(_HERE))
 
-import config
+import quant.config as config
 
 
 def main() -> int:
@@ -27,16 +27,16 @@ def main() -> int:
         import atexit
         import shutil
         import tempfile
-        import orders as _orders
+        import quant.execution.orders as _orders
         _fake_dir = tempfile.mkdtemp(prefix="quant_fetch_fake_")
         _orders.PORTFOLIO_PATH = os.path.join(_fake_dir, "portfolio.json")
         _orders.DAILY_LOG_PATH = os.path.join(_fake_dir, "daily_log.csv")
         atexit.register(shutil.rmtree, _fake_dir, ignore_errors=True)
     else:
-        from broker import Broker
+        from quant.execution.broker import Broker
         broker = Broker(env=config.ALPACA_ENV)
 
-    from orders import sync_state
+    from quant.execution.orders import sync_state
     snap = sync_state(broker, alerts=[])
 
     out = {

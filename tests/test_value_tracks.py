@@ -1,5 +1,5 @@
-import value_tracks as vt
-from value_fundamentals import Fundamentals
+import quant.strategies.value.tracks as vt
+from quant.data.fundamentals import Fundamentals
 
 
 def _A(**kw):

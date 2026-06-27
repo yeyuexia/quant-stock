@@ -1,7 +1,7 @@
 # tests/test_executor_submission.py
 import datetime as dt
-from pending_plan import PendingPlan, IntentState, Baseline, write_plan, load_plan
-from orders import OrderIntent
+from quant.execution.pending_plan import PendingPlan, IntentState, Baseline, write_plan, load_plan
+from quant.execution.orders import OrderIntent
 from tests.fakes import FakeBroker
 
 
@@ -38,19 +38,19 @@ class _Obs:
 
 
 def _setup(tmp_path, monkeypatch, now_et=(11, 0), shadow=False):
-    import executor, orders, config as cfg
+    import quant.execution.executor as executor, quant.execution.orders as orders, quant.config as cfg
     monkeypatch.setattr(orders, "HALT_PATH", str(tmp_path / "no_halt"))
     monkeypatch.setattr(executor, "HALT_PATH", str(tmp_path / "no_halt"))
     monkeypatch.setattr(orders, "DAILY_TRADE_LOG", str(tmp_path / "log.json"))
     monkeypatch.setattr(orders, "PENDING_ORDERS_PATH", str(tmp_path / "pend.json"))
-    monkeypatch.setattr("pending_plan.PENDING_PLAN_PATH", str(tmp_path / "p.json"))
+    monkeypatch.setattr("quant.execution.pending_plan.PENDING_PLAN_PATH", str(tmp_path / "p.json"))
     monkeypatch.setattr(cfg, "EXECUTOR_SHADOW_MODE", shadow)
     monkeypatch.setattr(executor, "_now_et",
                         lambda: dt.datetime(2026, 4, 17, *now_et))
 
 
 def test_submits_slice_when_window_passed(tmp_path, monkeypatch):
-    import executor
+    import quant.execution.executor as executor
     _setup(tmp_path, monkeypatch, now_et=(11, 0))
     write_plan(_plan(_base_intent()))
     b = FakeBroker()
@@ -65,7 +65,7 @@ def test_submits_slice_when_window_passed(tmp_path, monkeypatch):
 
 
 def test_skips_slice_when_ask_above_max_price(tmp_path, monkeypatch):
-    import executor
+    import quant.execution.executor as executor
     _setup(tmp_path, monkeypatch, now_et=(11, 0))
     write_plan(_plan(_base_intent(max_price=481.0)))
     b = FakeBroker()
@@ -83,8 +83,8 @@ def test_skips_slice_when_ask_above_max_price(tmp_path, monkeypatch):
 
 
 def test_cancels_prior_unfilled_before_new_slice(tmp_path, monkeypatch):
-    import executor
-    from broker import Order
+    import quant.execution.executor as executor
+    from quant.execution.broker import Order
     _setup(tmp_path, monkeypatch, now_et=(14, 30))
     intent = _base_intent(slice_count=2)
     plan = _plan(intent, slices_submitted=1, last_cid="prior-cid")
@@ -103,7 +103,7 @@ def test_cancels_prior_unfilled_before_new_slice(tmp_path, monkeypatch):
 
 
 def test_shadow_mode_does_not_submit(tmp_path, monkeypatch):
-    import executor
+    import quant.execution.executor as executor
     _setup(tmp_path, monkeypatch, now_et=(11, 0), shadow=True)
     write_plan(_plan(_base_intent()))
     b = FakeBroker()
@@ -118,7 +118,7 @@ def test_shadow_mode_does_not_submit(tmp_path, monkeypatch):
 
 
 def test_sell_side_uses_min_price_floor(tmp_path, monkeypatch):
-    import executor
+    import quant.execution.executor as executor
     _setup(tmp_path, monkeypatch, now_et=(11, 0))
     sell = OrderIntent(
         symbol="XLE", notional=1500.0, side="sell",
@@ -143,8 +143,8 @@ def test_sell_side_uses_min_price_floor(tmp_path, monkeypatch):
 def test_partial_fill_is_credited_before_cancel(tmp_path, monkeypatch):
     """If the prior slice partially filled, notional_filled must reflect it
     before the next slice is sized. Otherwise we over-buy."""
-    import executor
-    from broker import Order
+    import quant.execution.executor as executor
+    from quant.execution.broker import Order
     _setup(tmp_path, monkeypatch, now_et=(14, 30))  # past second window of a 2-slice plan
 
     intent = _base_intent(slice_count=2, notional=1000.0)
@@ -179,7 +179,7 @@ def test_process_slices_bails_past_eod(tmp_path, monkeypatch):
     """After EXECUTOR_WINDOW_END, _process_slices must not submit or populate
     would_submit — otherwise _process_eod on the same tick cancels the just-
     submitted slice, a wasted round-trip."""
-    import executor
+    import quant.execution.executor as executor
     _setup(tmp_path, monkeypatch, now_et=(15, 55), shadow=True)
     write_plan(_plan(_base_intent(slice_count=4)))
     b = FakeBroker()

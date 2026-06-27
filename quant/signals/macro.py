@@ -18,14 +18,15 @@ Each indicator produces a score from -1 (bearish) to +1 (bullish).
 The composite score drives portfolio risk adjustment.
 """
 import os
+from quant import paths
 import re
 import time
 import datetime as dt
 import pandas as pd
 
-from fileio import atomic_write_csv
+from quant.infra.fileio import atomic_write_csv
 
-CACHE_DIR = os.path.join(os.path.dirname(__file__), ".cache")
+CACHE_DIR = os.path.join(paths.REPO_ROOT, ".cache")
 os.makedirs(CACHE_DIR, exist_ok=True)
 
 # Load .env via python-dotenv (was a brittle hand-rolled parser before —
@@ -33,7 +34,7 @@ os.makedirs(CACHE_DIR, exist_ok=True)
 # rebalancer.py / executor.py which already used load_dotenv).
 try:
     from dotenv import load_dotenv
-    load_dotenv(os.path.join(os.path.dirname(__file__), ".env"))
+    load_dotenv(os.path.join(paths.REPO_ROOT, ".env"))
 except ImportError:
     pass  # python-dotenv not installed; rely on env vars already being set
 

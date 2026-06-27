@@ -6,19 +6,19 @@ import argparse
 import logging
 from concurrent.futures import ThreadPoolExecutor
 
-import config
-import discovery
-import strategies
-import value_tracks
-from value_fundamentals import from_info
-from value_prefilter import prefilter
+import quant.config as config
+import quant.data.universe as discovery
+import quant.strategies.contract as strategies
+import quant.strategies.value.tracks as value_tracks
+from quant.data.fundamentals import from_info
+from quant.strategies.value.prefilter import prefilter
 
 _log = logging.getLogger(__name__)
 
 
 def screen(universe, *, price_fn=None, info_fn=None):
     """Return ranked rows [{ticker, score, rank, factors}] (best first)."""
-    from data import fetch_info
+    from quant.data.market import fetch_info
     info_fn = info_fn or fetch_info
     survivors = prefilter(universe, price_fn=price_fn)
     if not survivors:

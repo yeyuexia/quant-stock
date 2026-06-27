@@ -9,8 +9,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Optional
 
-import config
-from pending_plan import Baseline
+import quant.config as config
+from quant.execution.pending_plan import Baseline
 
 
 @dataclass(frozen=True)

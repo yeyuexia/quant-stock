@@ -1,8 +1,8 @@
-import value_prefilter
+import quant.strategies.value.prefilter as value_prefilter
 
 
 def test_prefilter_drops_cheap_and_illiquid(monkeypatch):
-    import config
+    import quant.config as config
     monkeypatch.setattr(config, "VS_MIN_PRICE", 5.0)
     monkeypatch.setattr(config, "VS_MIN_DOLLAR_VOLUME", 5_000_000)
     data = {

@@ -2,17 +2,17 @@
 """Simulated trading day: plan → ticks 10:00…15:50 → verify end state."""
 import datetime as dt
 from tests.fakes import FakeBroker
-from pending_plan import PendingPlan, IntentState, Baseline, write_plan, load_plan
-from orders import OrderIntent
+from quant.execution.pending_plan import PendingPlan, IntentState, Baseline, write_plan, load_plan
+from quant.execution.orders import OrderIntent
 
 
 def _run_day(monkeypatch, tmp_path, *, obs_by_hour, shadow=False):
-    import executor, orders, config as cfg
+    import quant.execution.executor as executor, quant.execution.orders as orders, quant.config as cfg
     monkeypatch.setattr(orders, "HALT_PATH", str(tmp_path / "no_halt"))
     monkeypatch.setattr(executor, "HALT_PATH", str(tmp_path / "no_halt"))
     monkeypatch.setattr(orders, "DAILY_TRADE_LOG", str(tmp_path / "log.json"))
     monkeypatch.setattr(orders, "PENDING_ORDERS_PATH", str(tmp_path / "pend.json"))
-    monkeypatch.setattr("pending_plan.PENDING_PLAN_PATH", str(tmp_path / "plan.json"))
+    monkeypatch.setattr("quant.execution.pending_plan.PENDING_PLAN_PATH", str(tmp_path / "plan.json"))
     monkeypatch.setattr(cfg, "EXECUTOR_SHADOW_MODE", shadow)
     monkeypatch.setattr(cfg, "TELEGRAM_NOTIFY_PATH", str(tmp_path / "notif.json"))
 
@@ -158,7 +158,7 @@ def test_full_day_breaker_C_single_name_drop(tmp_path, monkeypatch):
 
 def test_full_day_breaker_D_news_shock_corroborated(tmp_path, monkeypatch):
     """News hit + SPY moves > 0.5% in the 15-min window → D trips."""
-    from news_shock import NewsHit
+    from quant.signals.news_shock import NewsHit
 
     def news_obs():
         hit = NewsHit(

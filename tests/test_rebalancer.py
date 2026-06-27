@@ -6,22 +6,22 @@ from tests.fakes import FakeBroker
 
 
 def _portfolio_cache(tmp_path, monkeypatch, data):
-    monkeypatch.setattr("orders.PORTFOLIO_PATH", str(tmp_path / "portfolio.json"))
-    monkeypatch.setattr("orders.DAILY_LOG_PATH", str(tmp_path / "daily_log.csv"))
+    monkeypatch.setattr("quant.execution.orders.PORTFOLIO_PATH", str(tmp_path / "portfolio.json"))
+    monkeypatch.setattr("quant.execution.orders.DAILY_LOG_PATH", str(tmp_path / "daily_log.csv"))
     if data is not None:
         (tmp_path / "portfolio.json").write_text(json.dumps(data))
 
 
 def _safety_paths(tmp_path, monkeypatch):
-    monkeypatch.setattr("orders.HALT_PATH", str(tmp_path / "HALT"))
-    monkeypatch.setattr("orders.DAILY_TRADE_LOG", str(tmp_path / "daily_trade_log.json"))
-    monkeypatch.setattr("orders.PENDING_ORDERS_PATH", str(tmp_path / "pending_orders.json"))
+    monkeypatch.setattr("quant.execution.orders.HALT_PATH", str(tmp_path / "HALT"))
+    monkeypatch.setattr("quant.execution.orders.DAILY_TRADE_LOG", str(tmp_path / "daily_trade_log.json"))
+    monkeypatch.setattr("quant.execution.orders.PENDING_ORDERS_PATH", str(tmp_path / "pending_orders.json"))
 
 
 def test_rebalancer_dry_run_no_submits(tmp_path, monkeypatch, capsys):
     _portfolio_cache(tmp_path, monkeypatch, None)
     _safety_paths(tmp_path, monkeypatch)
-    from rebalancer import run
+    from quant.execution.rebalancer import run
 
     fb = FakeBroker()
     run(tranche="core", dry_run=True, force=True, broker=fb,
@@ -39,7 +39,7 @@ def test_rebalancer_skips_when_not_due(tmp_path, monkeypatch):
                      "aggressive": {"last_rebalance": None}},
     })
     _safety_paths(tmp_path, monkeypatch)
-    from rebalancer import run
+    from quant.execution.rebalancer import run
 
     fb = FakeBroker()
     submitted = run(tranche="core", dry_run=False, force=False, broker=fb,
@@ -49,15 +49,15 @@ def test_rebalancer_skips_when_not_due(tmp_path, monkeypatch):
 
 def test_rebalancer_submits_when_forced(tmp_path, monkeypatch):
     """Large orders (>= $500 threshold) now go to pending_plan, not direct-submit."""
-    from rebalancer import run
+    from quant.execution.rebalancer import run
     _portfolio_cache(tmp_path, monkeypatch, None)
     _safety_paths(tmp_path, monkeypatch)
-    monkeypatch.setattr("orders.LARGE_ORDER_THRESHOLD", 100_000)
-    monkeypatch.setattr("pending_plan.PENDING_PLAN_PATH", str(tmp_path / "plan.json"))
-    import config as cfg
+    monkeypatch.setattr("quant.execution.orders.LARGE_ORDER_THRESHOLD", 100_000)
+    monkeypatch.setattr("quant.execution.pending_plan.PENDING_PLAN_PATH", str(tmp_path / "plan.json"))
+    import quant.config as cfg
     monkeypatch.setattr(cfg, "EXECUTOR_SHADOW_MODE", False)
 
-    import baseline as bl
+    import quant.signals.baseline as bl
     monkeypatch.setattr(bl, "_fetch_spy", lambda: 480.0)
     monkeypatch.setattr(bl, "_fetch_vix", lambda: 14.0)
     monkeypatch.setattr(bl, "_fetch_macro_score", lambda: 0.0)
@@ -68,22 +68,22 @@ def test_rebalancer_submits_when_forced(tmp_path, monkeypatch):
                   target_builder=lambda: ({"SPY": 1.0}, 10_000))
     # $10k SPY order >= $500 threshold → goes to pending_plan, not direct-submit
     assert len(result.submitted) == 0
-    from pending_plan import load_plan
+    from quant.execution.pending_plan import load_plan
     plan = load_plan()
     assert plan is not None
     assert any(s.intent.symbol == "SPY" for s in plan.intents)
 
 
 def test_rebalancer_writes_pending_plan_for_large_orders(tmp_path, monkeypatch):
-    import rebalancer, orders, config as cfg
-    from pending_plan import load_plan
+    import quant.execution.rebalancer as rebalancer, quant.execution.orders as orders, quant.config as cfg
+    from quant.execution.pending_plan import load_plan
     from tests.fakes import FakeBroker
 
     monkeypatch.setattr(orders, "HALT_PATH", str(tmp_path / "no_halt"))
     monkeypatch.setattr(orders, "DAILY_TRADE_LOG", str(tmp_path / "log.json"))
     monkeypatch.setattr(orders, "PENDING_ORDERS_PATH", str(tmp_path / "pend.json"))
     monkeypatch.setattr(orders, "PORTFOLIO_PATH", str(tmp_path / "port.json"))
-    monkeypatch.setattr("pending_plan.PENDING_PLAN_PATH", str(tmp_path / "plan.json"))
+    monkeypatch.setattr("quant.execution.pending_plan.PENDING_PLAN_PATH", str(tmp_path / "plan.json"))
     monkeypatch.setattr(cfg, "EXECUTOR_SHADOW_MODE", False)
 
     b = FakeBroker(cash=50_000.0, equity=100_000.0)
@@ -92,7 +92,7 @@ def test_rebalancer_writes_pending_plan_for_large_orders(tmp_path, monkeypatch):
     def fake_target_builder():
         return {"SPY": 0.20}, 90_000.0
 
-    import baseline as bl
+    import quant.signals.baseline as bl
     monkeypatch.setattr(bl, "_fetch_spy", lambda: 480.0)
     monkeypatch.setattr(bl, "_fetch_vix", lambda: 14.0)
     monkeypatch.setattr(bl, "_fetch_macro_score", lambda: 0.12)
@@ -109,14 +109,14 @@ def test_rebalancer_writes_pending_plan_for_large_orders(tmp_path, monkeypatch):
 
 
 def test_rebalancer_direct_submits_tiny_orders(tmp_path, monkeypatch):
-    import rebalancer, orders, config as cfg
+    import quant.execution.rebalancer as rebalancer, quant.execution.orders as orders, quant.config as cfg
     from tests.fakes import FakeBroker
 
     monkeypatch.setattr(orders, "HALT_PATH", str(tmp_path / "no_halt"))
     monkeypatch.setattr(orders, "DAILY_TRADE_LOG", str(tmp_path / "log.json"))
     monkeypatch.setattr(orders, "PENDING_ORDERS_PATH", str(tmp_path / "pend.json"))
     monkeypatch.setattr(orders, "PORTFOLIO_PATH", str(tmp_path / "port.json"))
-    monkeypatch.setattr("pending_plan.PENDING_PLAN_PATH", str(tmp_path / "plan.json"))
+    monkeypatch.setattr("quant.execution.pending_plan.PENDING_PLAN_PATH", str(tmp_path / "plan.json"))
 
     b = FakeBroker()
     b.set_latest_price("SPY", 480.0)
@@ -124,7 +124,7 @@ def test_rebalancer_direct_submits_tiny_orders(tmp_path, monkeypatch):
     def fake_target_builder():
         return {"SPY": 0.003}, 100_000.0   # 0.3% × 100k = $300, below $500 threshold
 
-    import baseline as bl
+    import quant.signals.baseline as bl
     monkeypatch.setattr(bl, "_fetch_spy", lambda: 480.0)
     monkeypatch.setattr(bl, "_fetch_vix", lambda: 14.0)
     monkeypatch.setattr(bl, "_fetch_macro_score", lambda: 0.0)
@@ -140,14 +140,14 @@ def test_rebalancer_writes_tg_notification_on_plan_write(tmp_path, monkeypatch):
     """After pending_plan.json is written, a Telegram notification with
     source='rebalancer' is appended to TELEGRAM_NOTIFY_PATH, summarising
     the tranche, capital, and buy/sell intents."""
-    import rebalancer, orders, config as cfg
+    import quant.execution.rebalancer as rebalancer, quant.execution.orders as orders, quant.config as cfg
     from tests.fakes import FakeBroker
 
     monkeypatch.setattr(orders, "HALT_PATH", str(tmp_path / "no_halt"))
     monkeypatch.setattr(orders, "DAILY_TRADE_LOG", str(tmp_path / "log.json"))
     monkeypatch.setattr(orders, "PENDING_ORDERS_PATH", str(tmp_path / "pend.json"))
     monkeypatch.setattr(orders, "PORTFOLIO_PATH", str(tmp_path / "port.json"))
-    monkeypatch.setattr("pending_plan.PENDING_PLAN_PATH", str(tmp_path / "plan.json"))
+    monkeypatch.setattr("quant.execution.pending_plan.PENDING_PLAN_PATH", str(tmp_path / "plan.json"))
     notify_path = tmp_path / "telegram_notifications.json"
     monkeypatch.setattr(cfg, "TELEGRAM_NOTIFY_PATH", str(notify_path))
     monkeypatch.setattr(cfg, "EXECUTOR_SHADOW_MODE", False)
@@ -155,7 +155,7 @@ def test_rebalancer_writes_tg_notification_on_plan_write(tmp_path, monkeypatch):
     b = FakeBroker(cash=50_000.0, equity=100_000.0)
     b.set_latest_price("SPY", 480.0)
 
-    import baseline as bl
+    import quant.signals.baseline as bl
     monkeypatch.setattr(bl, "_fetch_spy", lambda: 480.0)
     monkeypatch.setattr(bl, "_fetch_vix", lambda: 14.0)
     monkeypatch.setattr(bl, "_fetch_macro_score", lambda: 0.12)
@@ -177,7 +177,7 @@ def test_rebalancer_writes_tg_notification_on_plan_write(tmp_path, monkeypatch):
 
 def test_rebalancer_skips_tg_notification_on_dry_run(tmp_path, monkeypatch):
     """Dry-run must not write a TG notification (no plan file is written)."""
-    import rebalancer, orders, config as cfg
+    import quant.execution.rebalancer as rebalancer, quant.execution.orders as orders, quant.config as cfg
     from tests.fakes import FakeBroker
 
     _portfolio_cache(tmp_path, monkeypatch, None)
@@ -195,18 +195,18 @@ def test_rebalancer_skips_tg_notification_on_dry_run(tmp_path, monkeypatch):
 def test_rebalancer_drops_symbol_with_missing_decision_price(tmp_path, monkeypatch, capsys):
     """If _latest_price raises, the symbol should be dropped from the pending plan
     with a warning, not silently included with decision_price=0.0."""
-    import rebalancer, orders, config as cfg
-    from pending_plan import load_plan
+    import quant.execution.rebalancer as rebalancer, quant.execution.orders as orders, quant.config as cfg
+    from quant.execution.pending_plan import load_plan
     from tests.fakes import FakeBroker
 
     monkeypatch.setattr(orders, "HALT_PATH", str(tmp_path / "no_halt"))
     monkeypatch.setattr(orders, "DAILY_TRADE_LOG", str(tmp_path / "log.json"))
     monkeypatch.setattr(orders, "PENDING_ORDERS_PATH", str(tmp_path / "pend.json"))
     monkeypatch.setattr(orders, "PORTFOLIO_PATH", str(tmp_path / "port.json"))
-    monkeypatch.setattr("pending_plan.PENDING_PLAN_PATH", str(tmp_path / "plan.json"))
+    monkeypatch.setattr("quant.execution.pending_plan.PENDING_PLAN_PATH", str(tmp_path / "plan.json"))
     monkeypatch.setattr(cfg, "EXECUTOR_SHADOW_MODE", False)
 
-    import baseline as bl
+    import quant.signals.baseline as bl
     monkeypatch.setattr(bl, "_fetch_spy", lambda: 480.0)
     monkeypatch.setattr(bl, "_fetch_vix", lambda: 14.0)
     monkeypatch.setattr(bl, "_fetch_macro_score", lambda: 0.0)
@@ -240,18 +240,18 @@ def test_rebalancer_drops_symbol_with_missing_decision_price(tmp_path, monkeypat
 def test_rebalancer_core_then_aggressive_preserves_both(tmp_path, monkeypatch):
     """Running --tranche core then --tranche aggressive should leave BOTH
     tranches' intents in pending_plan.json, not clobber the first."""
-    import rebalancer, orders, config as cfg
-    from pending_plan import load_plan
+    import quant.execution.rebalancer as rebalancer, quant.execution.orders as orders, quant.config as cfg
+    from quant.execution.pending_plan import load_plan
     from tests.fakes import FakeBroker
 
     monkeypatch.setattr(orders, "HALT_PATH", str(tmp_path / "no_halt"))
     monkeypatch.setattr(orders, "DAILY_TRADE_LOG", str(tmp_path / "log.json"))
     monkeypatch.setattr(orders, "PENDING_ORDERS_PATH", str(tmp_path / "pend.json"))
     monkeypatch.setattr(orders, "PORTFOLIO_PATH", str(tmp_path / "port.json"))
-    monkeypatch.setattr("pending_plan.PENDING_PLAN_PATH", str(tmp_path / "plan.json"))
+    monkeypatch.setattr("quant.execution.pending_plan.PENDING_PLAN_PATH", str(tmp_path / "plan.json"))
     monkeypatch.setattr(cfg, "EXECUTOR_SHADOW_MODE", False)
 
-    import baseline as bl
+    import quant.signals.baseline as bl
     monkeypatch.setattr(bl, "_fetch_spy", lambda: 480.0)
     monkeypatch.setattr(bl, "_fetch_vix", lambda: 14.0)
     monkeypatch.setattr(bl, "_fetch_macro_score", lambda: 0.0)
@@ -279,18 +279,18 @@ def test_rebalancer_core_then_aggressive_preserves_both(tmp_path, monkeypatch):
 
 def test_rebalancer_same_tranche_rerun_replaces_not_duplicates(tmp_path, monkeypatch):
     """Running --tranche core twice should replace core's intents, not duplicate them."""
-    import rebalancer, orders, config as cfg
-    from pending_plan import load_plan
+    import quant.execution.rebalancer as rebalancer, quant.execution.orders as orders, quant.config as cfg
+    from quant.execution.pending_plan import load_plan
     from tests.fakes import FakeBroker
 
     monkeypatch.setattr(orders, "HALT_PATH", str(tmp_path / "no_halt"))
     monkeypatch.setattr(orders, "DAILY_TRADE_LOG", str(tmp_path / "log.json"))
     monkeypatch.setattr(orders, "PENDING_ORDERS_PATH", str(tmp_path / "pend.json"))
     monkeypatch.setattr(orders, "PORTFOLIO_PATH", str(tmp_path / "port.json"))
-    monkeypatch.setattr("pending_plan.PENDING_PLAN_PATH", str(tmp_path / "plan.json"))
+    monkeypatch.setattr("quant.execution.pending_plan.PENDING_PLAN_PATH", str(tmp_path / "plan.json"))
     monkeypatch.setattr(cfg, "EXECUTOR_SHADOW_MODE", False)
 
-    import baseline as bl
+    import quant.signals.baseline as bl
     monkeypatch.setattr(bl, "_fetch_spy", lambda: 480.0)
     monkeypatch.setattr(bl, "_fetch_vix", lambda: 14.0)
     monkeypatch.setattr(bl, "_fetch_macro_score", lambda: 0.0)
@@ -321,18 +321,18 @@ def test_aggressive_tranche_picks_get_high_tier(tmp_path, monkeypatch):
     """Aggressive-tranche picks (leveraged ETFs) should be HIGH tier with
     wider tolerance, not default MED. They aren't in momentum.generate_signals'
     holdings_ranked, so _write_pending_plan must assign rank=1 directly."""
-    import rebalancer, orders, config as cfg
-    from pending_plan import load_plan
+    import quant.execution.rebalancer as rebalancer, quant.execution.orders as orders, quant.config as cfg
+    from quant.execution.pending_plan import load_plan
     from tests.fakes import FakeBroker
 
     monkeypatch.setattr(orders, "HALT_PATH", str(tmp_path / "no_halt"))
     monkeypatch.setattr(orders, "DAILY_TRADE_LOG", str(tmp_path / "log.json"))
     monkeypatch.setattr(orders, "PENDING_ORDERS_PATH", str(tmp_path / "pend.json"))
     monkeypatch.setattr(orders, "PORTFOLIO_PATH", str(tmp_path / "port.json"))
-    monkeypatch.setattr("pending_plan.PENDING_PLAN_PATH", str(tmp_path / "plan.json"))
+    monkeypatch.setattr("quant.execution.pending_plan.PENDING_PLAN_PATH", str(tmp_path / "plan.json"))
     monkeypatch.setattr(cfg, "EXECUTOR_SHADOW_MODE", False)
 
-    import baseline as bl
+    import quant.signals.baseline as bl
     monkeypatch.setattr(bl, "_fetch_spy", lambda: 480.0)
     monkeypatch.setattr(bl, "_fetch_vix", lambda: 14.0)
     monkeypatch.setattr(bl, "_fetch_macro_score", lambda: 0.0)
@@ -354,7 +354,7 @@ def test_aggressive_tranche_picks_get_high_tier(tmp_path, monkeypatch):
 
 def test_rebalancer_writes_entry_pivots_for_screener_picks(tmp_path, monkeypatch):
     """A screener pick that isn't currently held should get an entry_pivots record."""
-    import rebalancer, orders, config as cfg
+    import quant.execution.rebalancer as rebalancer, quant.execution.orders as orders, quant.config as cfg
     import datetime as dt
     import pandas as pd
 
@@ -369,10 +369,10 @@ def test_rebalancer_writes_entry_pivots_for_screener_picks(tmp_path, monkeypatch
         "in_base": True, "base_weeks": 8, "base_depth": 0.10,
         "base_tightness": 0.03, "base_hi": 148.0,
     }])
-    monkeypatch.setattr("screener.screen_stocks", lambda: df)
+    monkeypatch.setattr("quant.signals.screener.screen_stocks", lambda: df)
     # Stub momentum + macro so they don't fetch network data.
-    monkeypatch.setattr("momentum.generate_signals", lambda **kw: {"holdings": [], "holdings_ranked": []})
-    monkeypatch.setattr("macro.macro_risk_adjustment", lambda x: 1.0)
+    monkeypatch.setattr("quant.signals.momentum.generate_signals", lambda **kw: {"holdings": [], "holdings_ranked": []})
+    monkeypatch.setattr("quant.signals.macro.macro_risk_adjustment", lambda x: 1.0)
 
     rebalancer._build_core_targets(90_000)
 
@@ -385,7 +385,7 @@ def test_rebalancer_writes_entry_pivots_for_screener_picks(tmp_path, monkeypatch
 
 def test_rebalancer_skips_entry_pivots_for_already_held_screener_picks(tmp_path, monkeypatch):
     """If the symbol is already in the portfolio cache, don't refresh its pivot."""
-    import rebalancer, orders, config as cfg
+    import quant.execution.rebalancer as rebalancer, quant.execution.orders as orders, quant.config as cfg
     import json
     import pandas as pd
 
@@ -414,9 +414,9 @@ def test_rebalancer_skips_entry_pivots_for_already_held_screener_picks(tmp_path,
         "in_base": True, "base_weeks": 8, "base_depth": 0.10,
         "base_tightness": 0.03, "base_hi": 148.0,
     }])
-    monkeypatch.setattr("screener.screen_stocks", lambda: df)
-    monkeypatch.setattr("momentum.generate_signals", lambda **kw: {"holdings": [], "holdings_ranked": []})
-    monkeypatch.setattr("macro.macro_risk_adjustment", lambda x: 1.0)
+    monkeypatch.setattr("quant.signals.screener.screen_stocks", lambda: df)
+    monkeypatch.setattr("quant.signals.momentum.generate_signals", lambda **kw: {"holdings": [], "holdings_ranked": []})
+    monkeypatch.setattr("quant.signals.macro.macro_risk_adjustment", lambda x: 1.0)
 
     rebalancer._build_core_targets(90_000)
 
@@ -428,17 +428,17 @@ def test_rebalancer_skips_entry_pivots_for_already_held_screener_picks(tmp_path,
 
 def test_rebalancer_skips_entry_pivots_for_etf_targets(tmp_path, monkeypatch):
     """ETF entries from momentum (no screener row) get no pivot record."""
-    import rebalancer, orders, config as cfg
+    import quant.execution.rebalancer as rebalancer, quant.execution.orders as orders, quant.config as cfg
     import pandas as pd
 
     monkeypatch.setattr(orders, "PORTFOLIO_PATH", str(tmp_path / "port.json"))
     monkeypatch.setattr(orders, "ENTRY_PIVOTS_PATH", str(tmp_path / "pivots.json"))
     monkeypatch.setattr(cfg, "ENTRY_PIVOTS_PATH", str(tmp_path / "pivots.json"))
 
-    monkeypatch.setattr("screener.screen_stocks", lambda: pd.DataFrame())  # empty
-    monkeypatch.setattr("momentum.generate_signals",
+    monkeypatch.setattr("quant.signals.screener.screen_stocks", lambda: pd.DataFrame())  # empty
+    monkeypatch.setattr("quant.signals.momentum.generate_signals",
                         lambda **kw: {"holdings": [("SPY", 1.0)], "holdings_ranked": [("SPY", 1.0, 1)]})
-    monkeypatch.setattr("macro.macro_risk_adjustment", lambda x: 1.0)
+    monkeypatch.setattr("quant.signals.macro.macro_risk_adjustment", lambda x: 1.0)
 
     rebalancer._build_core_targets(90_000)
     pivots = orders._load_entry_pivots()
@@ -454,18 +454,18 @@ def _stub_core_inputs(monkeypatch, *, screener_df=None,
     import pandas as pd
     if screener_df is None:
         screener_df = pd.DataFrame()
-    monkeypatch.setattr("screener.screen_stocks", lambda: screener_df)
-    monkeypatch.setattr("momentum.generate_signals", lambda **kw: {
+    monkeypatch.setattr("quant.signals.screener.screen_stocks", lambda: screener_df)
+    monkeypatch.setattr("quant.signals.momentum.generate_signals", lambda **kw: {
         "holdings": list(etf_holdings),
         "holdings_ranked": [(s, w, i + 1) for i, (s, w) in enumerate(etf_holdings)],
     })
-    monkeypatch.setattr("macro.macro_risk_adjustment", lambda x: macro_adj)
+    monkeypatch.setattr("quant.signals.macro.macro_risk_adjustment", lambda x: macro_adj)
 
 
 def test_empty_screener_rolls_stock_pct_to_bil(tmp_path, monkeypatch):
     """When screener returns no picks, the stock_pct allocation must flow to BIL,
     not silently sit in cash for 30 days."""
-    import rebalancer, orders, config as cfg
+    import quant.execution.rebalancer as rebalancer, quant.execution.orders as orders, quant.config as cfg
     monkeypatch.setattr(orders, "PORTFOLIO_PATH", str(tmp_path / "port.json"))
     monkeypatch.setattr(orders, "ENTRY_PIVOTS_PATH", str(tmp_path / "pivots.json"))
     monkeypatch.setattr(cfg, "ENTRY_PIVOTS_PATH", str(tmp_path / "pivots.json"))
@@ -485,7 +485,7 @@ def test_empty_screener_rolls_stock_pct_to_bil(tmp_path, monkeypatch):
 def test_sparse_screener_caps_per_stock_at_max_position_pct(tmp_path, monkeypatch):
     """When screener returns only 1 stock, that stock must not get the whole
     stock_pct — cap at MAX_POSITION_PCT and roll the rest to BIL."""
-    import rebalancer, orders, config as cfg
+    import quant.execution.rebalancer as rebalancer, quant.execution.orders as orders, quant.config as cfg
     import pandas as pd
     monkeypatch.setattr(orders, "PORTFOLIO_PATH", str(tmp_path / "port.json"))
     monkeypatch.setattr(orders, "ENTRY_PIVOTS_PATH", str(tmp_path / "pivots.json"))
@@ -511,7 +511,7 @@ def test_sparse_screener_caps_per_stock_at_max_position_pct(tmp_path, monkeypatc
 def test_pivot_fallback_to_price_when_base_hi_missing(tmp_path, monkeypatch):
     """When a screener pick has no VCP base_hi, use the screening price as
     the pivot so SEPA failed-breakout always has a reference."""
-    import rebalancer, orders, config as cfg
+    import quant.execution.rebalancer as rebalancer, quant.execution.orders as orders, quant.config as cfg
     import pandas as pd
     import numpy as np
     monkeypatch.setattr(orders, "PORTFOLIO_PATH", str(tmp_path / "port.json"))
@@ -532,7 +532,7 @@ def test_pivot_fallback_to_price_when_base_hi_missing(tmp_path, monkeypatch):
 
 def test_pivot_prefers_base_hi_over_price_when_available(tmp_path, monkeypatch):
     """base_hi takes precedence over price when both are present."""
-    import rebalancer, orders, config as cfg
+    import quant.execution.rebalancer as rebalancer, quant.execution.orders as orders, quant.config as cfg
     import pandas as pd
     monkeypatch.setattr(orders, "PORTFOLIO_PATH", str(tmp_path / "port.json"))
     monkeypatch.setattr(orders, "ENTRY_PIVOTS_PATH", str(tmp_path / "pivots.json"))
@@ -551,7 +551,7 @@ def test_pivot_prefers_base_hi_over_price_when_available(tmp_path, monkeypatch):
 def test_held_filter_only_considers_core_tranche(tmp_path, monkeypatch):
     """A symbol held in OTHER tranches should still get a fresh pivot when
     selected by core's screener — only core-held symbols are skipped."""
-    import rebalancer, orders, config as cfg
+    import quant.execution.rebalancer as rebalancer, quant.execution.orders as orders, quant.config as cfg
     import json
     import pandas as pd
     monkeypatch.setattr(orders, "PORTFOLIO_PATH", str(tmp_path / "port.json"))
@@ -581,7 +581,7 @@ def test_held_filter_only_considers_core_tranche(tmp_path, monkeypatch):
 def test_run_uses_dynamic_tranche_capital_from_snap(tmp_path, monkeypatch):
     """When account equity = $150K, core tranche_capital should be ~$135K
     (90% of system equity), not the static $90K from INITIAL_CAPITAL."""
-    import rebalancer, orders, config as cfg
+    import quant.execution.rebalancer as rebalancer, quant.execution.orders as orders, quant.config as cfg
     monkeypatch.setattr(orders, "PORTFOLIO_PATH", str(tmp_path / "port.json"))
     monkeypatch.setattr(orders, "DAILY_LOG_PATH", str(tmp_path / "daily_log.csv"))
     monkeypatch.setattr(orders, "HALT_PATH", str(tmp_path / "HALT"))
@@ -594,7 +594,7 @@ def test_run_uses_dynamic_tranche_capital_from_snap(tmp_path, monkeypatch):
 
     class CapturingBuilder:
         def build(self, *, tranche, broker, tranche_capital):
-            from planning import TargetBuilderOutput
+            from quant.execution.planning import TargetBuilderOutput
             captured["capital"] = tranche_capital
             return TargetBuilderOutput(
                 targets={"BIL": 0.50}, capital=tranche_capital,
@@ -611,7 +611,7 @@ def test_run_uses_dynamic_tranche_capital_from_snap(tmp_path, monkeypatch):
 def test_run_subtracts_unknown_tranche_from_system_equity(tmp_path, monkeypatch):
     """Unknown-tranche positions don't count toward the budget core/aggressive
     allocate against — they're held outside the system's control."""
-    import rebalancer, orders, config as cfg
+    import quant.execution.rebalancer as rebalancer, quant.execution.orders as orders, quant.config as cfg
     import json
     monkeypatch.setattr(orders, "PORTFOLIO_PATH", str(tmp_path / "port.json"))
     monkeypatch.setattr(orders, "DAILY_LOG_PATH", str(tmp_path / "daily_log.csv"))
@@ -638,7 +638,7 @@ def test_run_subtracts_unknown_tranche_from_system_equity(tmp_path, monkeypatch)
 
     class CapturingBuilder:
         def build(self, *, tranche, broker, tranche_capital):
-            from planning import TargetBuilderOutput
+            from quant.execution.planning import TargetBuilderOutput
             captured["capital"] = tranche_capital
             return TargetBuilderOutput(
                 targets={}, capital=tranche_capital,
@@ -658,7 +658,7 @@ def test_run_subtracts_unknown_tranche_from_system_equity(tmp_path, monkeypatch)
 
 def test_daily_cadence_lets_run_proceed_one_day_after_last(tmp_path, monkeypatch):
     """REBALANCE_DAYS=1 means yesterday's rebalance does NOT block today's."""
-    import rebalancer, orders, config as cfg
+    import quant.execution.rebalancer as rebalancer, quant.execution.orders as orders, quant.config as cfg
     import json
     import datetime as _dt
     monkeypatch.setattr(orders, "PORTFOLIO_PATH", str(tmp_path / "port.json"))
@@ -685,7 +685,7 @@ def test_daily_cadence_lets_run_proceed_one_day_after_last(tmp_path, monkeypatch
 def test_aggressive_hysteresis_keeps_held_etf_on_one_rank_slip(tmp_path, monkeypatch):
     """Aggressive: a held leveraged ETF slipped from rank 2 to rank 3 is
     kept (hysteresis_depth=1)."""
-    import rebalancer, orders, config as cfg
+    import quant.execution.rebalancer as rebalancer, quant.execution.orders as orders, quant.config as cfg
     import json
     import pandas as pd
 
@@ -719,7 +719,7 @@ def test_aggressive_hysteresis_keeps_held_etf_on_one_rank_slip(tmp_path, monkeyp
         "SOXL": 100 * np.cumprod(1 + np.full(300, 0.0015)),  # +0.15%/day → slowest
         "BIL":  100 * np.cumprod(1 + np.full(300, 0.0001)),  # ~flat (safe haven)
     }, index=idx)
-    monkeypatch.setattr("data.fetch_prices", lambda *a, **kw: prices)
+    monkeypatch.setattr("quant.data.market.fetch_prices", lambda *a, **kw: prices)
 
     targets, _ = rebalancer._build_aggressive_targets(10_000)
     # Top-2 = {TQQQ, UPRO}; SOXL is rank 3 but held → sticky → included.
@@ -729,7 +729,7 @@ def test_aggressive_hysteresis_keeps_held_etf_on_one_rank_slip(tmp_path, monkeyp
 
 def test_aggressive_hysteresis_drops_unheld_at_rank_three(tmp_path, monkeypatch):
     """Aggressive: an UNHELD leveraged ETF at rank 3 is NOT sticky."""
-    import rebalancer, orders, config as cfg
+    import quant.execution.rebalancer as rebalancer, quant.execution.orders as orders, quant.config as cfg
     import json
     import pandas as pd
     import numpy as np
@@ -758,7 +758,7 @@ def test_aggressive_hysteresis_drops_unheld_at_rank_three(tmp_path, monkeypatch)
         "SOXL": 100 * np.cumprod(1 + np.full(300, 0.0015)),
         "BIL":  100 * np.cumprod(1 + np.full(300, 0.0001)),
     }, index=idx)
-    monkeypatch.setattr("data.fetch_prices", lambda *a, **kw: prices)
+    monkeypatch.setattr("quant.data.market.fetch_prices", lambda *a, **kw: prices)
 
     targets, _ = rebalancer._build_aggressive_targets(10_000)
     leveraged_in_targets = {sym for sym in targets if sym in ("TQQQ", "UPRO", "SOXL")}
@@ -768,7 +768,7 @@ def test_aggressive_hysteresis_drops_unheld_at_rank_three(tmp_path, monkeypatch)
 
 def test_daily_cadence_still_blocks_same_day_rerun(tmp_path, monkeypatch):
     """Even with daily cadence, running twice on the same day is blocked."""
-    import rebalancer, orders, config as cfg
+    import quant.execution.rebalancer as rebalancer, quant.execution.orders as orders, quant.config as cfg
     import json
     import datetime as _dt
     monkeypatch.setattr(orders, "PORTFOLIO_PATH", str(tmp_path / "port.json"))

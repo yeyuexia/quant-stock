@@ -7,8 +7,8 @@ from unittest.mock import patch
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 
-import momentum
-import config
+import quant.signals.momentum as momentum
+import quant.config as config
 
 
 def _ranking_df(rows):
@@ -186,7 +186,7 @@ import pandas as pd
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 
-import momentum
+import quant.signals.momentum as momentum
 
 
 def test_momentum_score_returns_none_on_short_history():

@@ -11,7 +11,7 @@ import os
 import time
 from typing import Optional
 
-from pending_plan import Baseline
+from quant.execution.pending_plan import Baseline
 
 _log = logging.getLogger(__name__)
 
@@ -112,5 +112,5 @@ def _fetch_vix() -> float:
 
 
 def _fetch_macro_score() -> float:
-    from macro import macro_composite_score
+    from quant.signals.macro import macro_composite_score
     return float(macro_composite_score())

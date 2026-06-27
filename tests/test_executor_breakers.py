@@ -1,7 +1,7 @@
 # tests/test_executor_breakers.py
 import datetime as dt
-from pending_plan import PendingPlan, IntentState, Baseline, write_plan, load_plan
-from orders import OrderIntent
+from quant.execution.pending_plan import PendingPlan, IntentState, Baseline, write_plan, load_plan
+from quant.execution.orders import OrderIntent
 from tests.fakes import FakeBroker
 
 
@@ -24,10 +24,10 @@ def _intent(symbol, side="buy"):
 
 
 def test_breaker_a_aborts_all_buys_not_sells(tmp_path, monkeypatch):
-    import executor, orders
+    import quant.execution.executor as executor, quant.execution.orders as orders
     monkeypatch.setattr(orders, "HALT_PATH", str(tmp_path / "no_halt"))
     monkeypatch.setattr(executor, "HALT_PATH", str(tmp_path / "no_halt"))
-    monkeypatch.setattr("pending_plan.PENDING_PLAN_PATH", str(tmp_path / "p.json"))
+    monkeypatch.setattr("quant.execution.pending_plan.PENDING_PLAN_PATH", str(tmp_path / "p.json"))
     monkeypatch.setattr(executor, "_now_et",
                         lambda: dt.datetime(2026, 4, 17, 11, 0))
 
@@ -56,10 +56,10 @@ def test_breaker_a_aborts_all_buys_not_sells(tmp_path, monkeypatch):
 
 
 def test_breaker_e_spares_defensive_buys(tmp_path, monkeypatch):
-    import executor, orders
+    import quant.execution.executor as executor, quant.execution.orders as orders
     monkeypatch.setattr(orders, "HALT_PATH", str(tmp_path / "no_halt"))
     monkeypatch.setattr(executor, "HALT_PATH", str(tmp_path / "no_halt"))
-    monkeypatch.setattr("pending_plan.PENDING_PLAN_PATH", str(tmp_path / "p.json"))
+    monkeypatch.setattr("quant.execution.pending_plan.PENDING_PLAN_PATH", str(tmp_path / "p.json"))
     monkeypatch.setattr(executor, "_now_et",
                         lambda: dt.datetime(2026, 4, 17, 11, 0))
 
@@ -87,10 +87,10 @@ def test_breaker_e_spares_defensive_buys(tmp_path, monkeypatch):
 
 
 def test_breaker_c_aborts_only_one_symbol(tmp_path, monkeypatch):
-    import executor, orders
+    import quant.execution.executor as executor, quant.execution.orders as orders
     monkeypatch.setattr(orders, "HALT_PATH", str(tmp_path / "no_halt"))
     monkeypatch.setattr(executor, "HALT_PATH", str(tmp_path / "no_halt"))
-    monkeypatch.setattr("pending_plan.PENDING_PLAN_PATH", str(tmp_path / "p.json"))
+    monkeypatch.setattr("quant.execution.pending_plan.PENDING_PLAN_PATH", str(tmp_path / "p.json"))
     monkeypatch.setattr(executor, "_now_et",
                         lambda: dt.datetime(2026, 4, 17, 11, 0))
 
@@ -117,10 +117,10 @@ def test_breaker_c_aborts_only_one_symbol(tmp_path, monkeypatch):
 
 
 def test_sticky_breaker_stays_tripped_on_next_tick(tmp_path, monkeypatch):
-    import executor, orders
+    import quant.execution.executor as executor, quant.execution.orders as orders
     monkeypatch.setattr(orders, "HALT_PATH", str(tmp_path / "no_halt"))
     monkeypatch.setattr(executor, "HALT_PATH", str(tmp_path / "no_halt"))
-    monkeypatch.setattr("pending_plan.PENDING_PLAN_PATH", str(tmp_path / "p.json"))
+    monkeypatch.setattr("quant.execution.pending_plan.PENDING_PLAN_PATH", str(tmp_path / "p.json"))
     monkeypatch.setattr(executor, "_now_et",
                         lambda: dt.datetime(2026, 4, 17, 11, 0))
 
@@ -154,10 +154,10 @@ def test_sticky_breaker_stays_tripped_on_next_tick(tmp_path, monkeypatch):
 
 def test_per_symbol_sticky_allows_new_c_trips_on_different_symbols(tmp_path, monkeypatch):
     """Breaker C on NVDA should not silence a subsequent C on a different symbol."""
-    import executor, orders
+    import quant.execution.executor as executor, quant.execution.orders as orders
     monkeypatch.setattr(orders, "HALT_PATH", str(tmp_path / "no_halt"))
     monkeypatch.setattr(executor, "HALT_PATH", str(tmp_path / "no_halt"))
-    monkeypatch.setattr("pending_plan.PENDING_PLAN_PATH", str(tmp_path / "p.json"))
+    monkeypatch.setattr("quant.execution.pending_plan.PENDING_PLAN_PATH", str(tmp_path / "p.json"))
     monkeypatch.setattr(executor, "_now_et",
                         lambda: dt.datetime(2026, 4, 17, 11, 0))
 

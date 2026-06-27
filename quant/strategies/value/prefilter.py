@@ -2,14 +2,14 @@
 using only price + volume (no per-ticker .info), cutting the Russell 3000 to a
 few hundred survivors before the expensive fundamentals fetch."""
 import logging
-import config
+import quant.config as config
 
 _log = logging.getLogger(__name__)
 
 
 def _default_price_fn(tickers):
     """{ticker: (last_price, avg_dollar_volume)} via one batched OHLCV pull."""
-    from data import fetch_ohlcv
+    from quant.data.market import fetch_ohlcv
     out = {}
     try:
         df = fetch_ohlcv(tickers, period="3mo")

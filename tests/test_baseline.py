@@ -1,17 +1,17 @@
 # tests/test_baseline.py
 import datetime as dt
 from unittest.mock import patch
-import baseline
+import quant.signals.baseline as baseline
 import os
 import pytest
 import sys
 
 
 def test_capture_baseline_calls_all_sources():
-    from baseline import capture_baseline
-    with patch("baseline._fetch_spy", return_value=480.0), \
-         patch("baseline._fetch_vix", return_value=14.1), \
-         patch("baseline._fetch_macro_score", return_value=0.12):
+    from quant.signals.baseline import capture_baseline
+    with patch("quant.signals.baseline._fetch_spy", return_value=480.0), \
+         patch("quant.signals.baseline._fetch_vix", return_value=14.1), \
+         patch("quant.signals.baseline._fetch_macro_score", return_value=0.12):
         bl = capture_baseline()
     assert bl.spy == 480.0
     assert bl.vix == 14.1
@@ -20,17 +20,17 @@ def test_capture_baseline_calls_all_sources():
 
 
 def test_capture_baseline_returns_utc_cursor():
-    from baseline import capture_baseline
-    with patch("baseline._fetch_spy", return_value=480.0), \
-         patch("baseline._fetch_vix", return_value=14.0), \
-         patch("baseline._fetch_macro_score", return_value=0.0):
+    from quant.signals.baseline import capture_baseline
+    with patch("quant.signals.baseline._fetch_spy", return_value=480.0), \
+         patch("quant.signals.baseline._fetch_vix", return_value=14.0), \
+         patch("quant.signals.baseline._fetch_macro_score", return_value=0.0):
         bl = capture_baseline()
     assert bl.news_cursor_at.tzinfo == dt.timezone.utc
 
 
 def test_fetch_vix_prefers_intraday_bars(monkeypatch):
     """_fetch_vix should use 5-min bars first; fall back to daily if empty."""
-    import baseline
+    import quant.signals.baseline as baseline
     from unittest.mock import MagicMock, patch
 
     intraday_hist = MagicMock()
@@ -60,7 +60,7 @@ def test_fetch_vix_prefers_intraday_bars(monkeypatch):
 
 
 def test_fetch_vix_falls_back_to_daily_when_intraday_empty(monkeypatch):
-    import baseline
+    import quant.signals.baseline as baseline
     from unittest.mock import MagicMock, patch
 
     intraday_hist = MagicMock()
@@ -116,7 +116,7 @@ from unittest.mock import patch
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 
-import baseline
+import quant.signals.baseline as baseline
 
 
 def test_capture_baseline_rejects_zero_spy(monkeypatch):

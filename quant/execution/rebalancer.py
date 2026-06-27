@@ -12,12 +12,13 @@ from __future__ import annotations
 import argparse
 import datetime as dt
 import os
+from quant import paths
 import sys
 from typing import Callable, Optional
 
-import config
-import orders
-from broker import Broker
+import quant.config as config
+import quant.execution.orders as orders
+from quant.execution.broker import Broker
 
 
 # ── Target builders ─────────────────────────────────────────────
@@ -44,8 +45,8 @@ def _build_core_targets(tranche_capital: float) -> tuple[dict[str, float], float
     in cash. The macro-shrunk equity portion has a hard BIL floor so we never
     silently drop the stock sleeve into cash when the screener returns nothing.
     """
-    from momentum import generate_signals
-    from macro import macro_risk_adjustment
+    from quant.signals.momentum import generate_signals
+    from quant.signals.macro import macro_risk_adjustment
 
     macro_adj = macro_risk_adjustment(1.0)
     etf_pct = config.ETF_ALLOCATION_PCT * macro_adj
@@ -67,7 +68,7 @@ def _build_core_targets(tranche_capital: float) -> tuple[dict[str, float], float
         targets[sym] = targets.get(sym, 0.0) + w * etf_pct
 
     # ── Stock sleeve (with empty/sparse → BIL fallback) ────────
-    from screener import screen_stocks
+    from quant.signals.screener import screen_stocks
     df = screen_stocks()
     stock_allocated = 0.0
     if df is not None and not df.empty:
@@ -128,8 +129,8 @@ def _build_aggressive_targets(tranche_capital: float) -> tuple[dict[str, float],
     kept as long as it stays within top-(N + hysteresis_depth) AND still
     above its 200-day SMA. Prevents whipsaw when rank flickers.
     """
-    from data import fetch_prices
-    from momentum import _momentum_score
+    from quant.data.market import fetch_prices
+    from quant.signals.momentum import _momentum_score
 
     top_n = config.AGGRESSIVE_PARAMS["momentum_top_n"]
     cash_buf = config.AGGRESSIVE_PARAMS["cash_buffer_pct"]
@@ -185,7 +186,7 @@ class RuleBasedCoreTargetBuilder:
     the system can compound — capital is no longer pinned to INITIAL_CAPITAL."""
 
     def build(self, *, tranche, broker, tranche_capital):
-        from planning import TargetBuilderOutput
+        from quant.execution.planning import TargetBuilderOutput
         targets, capital = _build_core_targets(tranche_capital)
         return TargetBuilderOutput(
             targets=targets,
@@ -203,7 +204,7 @@ class RuleBasedAggressiveTargetBuilder:
     the system can compound — capital is no longer pinned to INITIAL_CAPITAL."""
 
     def build(self, *, tranche, broker, tranche_capital):
-        from planning import TargetBuilderOutput
+        from quant.execution.planning import TargetBuilderOutput
         targets, capital = _build_aggressive_targets(tranche_capital)
         return TargetBuilderOutput(
             targets=targets,
@@ -354,9 +355,9 @@ def _write_pending_plan(tranche, intents, *, broker):
     re-run is idempotent: the current tranche's intents are replaced, not
     duplicated.  The baseline and created_at are kept from the first writer.
     """
-    from baseline import capture_baseline
-    from planner import build_priced_intents, PricingContext
-    from pending_plan import PendingPlan, IntentState, load_plan, write_plan
+    from quant.signals.baseline import capture_baseline
+    from quant.execution.planner import build_priced_intents, PricingContext
+    from quant.execution.pending_plan import PendingPlan, IntentState, load_plan, write_plan
 
     # Only capture baseline when we're creating a brand-new plan; reuse the
     # existing baseline on merge (first-writer wins — that's the day's reference).
@@ -381,7 +382,7 @@ def _write_pending_plan(tranche, intents, *, broker):
     symbols = [i.symbol for i in intents]
 
     try:
-        from momentum import generate_signals
+        from quant.signals.momentum import generate_signals
         cache = orders._load_portfolio_cache()
         held_core = {
             p["symbol"] for p in cache.get("positions", [])
@@ -396,7 +397,7 @@ def _write_pending_plan(tranche, intents, *, broker):
         pass
 
     try:
-        from screener import screen_stocks
+        from quant.signals.screener import screen_stocks
         df = screen_stocks()
         if df is not None and not df.empty:
             for _, row in df.iterrows():
@@ -478,7 +479,7 @@ def _notify_plan_to_telegram(tranche: str, intents: list, baseline) -> None:
     """Append a new-plan summary to TELEGRAM_NOTIFY_PATH. No-op if unset."""
     if not intents:
         return
-    from notifications import append_notification
+    from quant.infra.notifications import append_notification
 
     lines = [f"📋 New Plan — {tranche} tranche"]
     lines.append(
@@ -508,7 +509,7 @@ def main():
     # launched by launchd (which doesn't inherit the user's shell environment).
     try:
         from dotenv import load_dotenv
-        load_dotenv(os.path.join(os.path.dirname(__file__), ".env"))
+        load_dotenv(os.path.join(paths.REPO_ROOT, ".env"))
     except ImportError:
         pass  # python-dotenv not installed; rely on env vars already being set
 

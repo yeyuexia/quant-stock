@@ -4,8 +4,8 @@ pick the top-N buy candidates. Run before market open; the intraday watchdog
 reads .cache/buy_candidates.json and decides entries.
 """
 import logging
-import strategies
-import investor_agent
+import quant.strategies.contract as strategies
+import quant.agent.investor as investor_agent
 
 
 def run():

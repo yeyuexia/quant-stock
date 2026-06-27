@@ -1,8 +1,8 @@
 """Broker construction + live-confirm guard."""
 import os
 import pytest
-from broker import Broker, ConfigError
-from broker import Broker, BrokerError, ConfigError, AccountSnapshot
+from quant.execution.broker import Broker, ConfigError
+from quant.execution.broker import Broker, BrokerError, ConfigError, AccountSnapshot
 from unittest.mock import MagicMock, patch
 import sys
 import time
@@ -48,7 +48,7 @@ def test_bad_env_raises():
 
 def test_submit_limit_constructs_limit_order_request(monkeypatch):
     """broker.submit_limit passes limit_price into LimitOrderRequest."""
-    import broker as broker_mod
+    import quant.execution.broker as broker_mod
     captured = {}
 
     class FakeTradingClient:
@@ -76,7 +76,7 @@ def test_submit_limit_constructs_limit_order_request(monkeypatch):
 
 def test_order_dataclass_has_stop_price_field():
     """broker.Order exposes stop_price for stop orders."""
-    from broker import Order
+    from quant.execution.broker import Order
     o = Order(
         id="ord_1", symbol="AAPL", side="sell", type="stop",
         qty=30.0, notional=None, status="accepted",
@@ -88,7 +88,7 @@ def test_order_dataclass_has_stop_price_field():
 
 def test_order_stop_price_defaults_to_none():
     """stop_price is optional with None default for non-stop orders."""
-    from broker import Order
+    from quant.execution.broker import Order
     o = Order(
         id="ord_2", symbol="AAPL", side="buy", type="market",
         qty=None, notional=1000.0, status="accepted",
@@ -112,7 +112,7 @@ from unittest.mock import MagicMock, patch
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 
-from broker import Broker, BrokerError, ConfigError, AccountSnapshot
+from quant.execution.broker import Broker, BrokerError, ConfigError, AccountSnapshot
 
 
 def _make_broker(monkeypatch, env="paper"):
@@ -123,7 +123,7 @@ def _make_broker(monkeypatch, env="paper"):
         monkeypatch.setenv("ALPACA_LIVE_CONFIRM", "yes")
     fake_trading = MagicMock()
     fake_md = MagicMock()
-    with patch("broker.TradingClient", return_value=fake_trading), \
+    with patch("quant.execution.broker.TradingClient", return_value=fake_trading), \
          patch("alpaca.data.historical.StockHistoricalDataClient",
                return_value=fake_md):
         b = Broker(env=env)
@@ -290,8 +290,8 @@ def test_is_market_open_refreshes_after_ttl(monkeypatch):
 def test_orders_submit_intent_fetches_price_and_passes_stop_price(tmp_path, monkeypatch):
     """Verify the policy↔IO contract: orders.py fetches latest_price and
     computes stop_price in dollars, broker.submit_bracket just submits."""
-    import orders
-    from orders import OrderIntent, ExecutionResult
+    import quant.execution.orders as orders
+    from quant.execution.orders import OrderIntent, ExecutionResult
     from tests.fakes import FakeBroker
 
     monkeypatch.setattr(orders, "HALT_PATH", str(tmp_path / "no_halt"))

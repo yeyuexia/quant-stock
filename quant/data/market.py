@@ -12,6 +12,7 @@ so concurrent cron jobs hitting the same key never clobber each other or
 read a half-flushed file.
 """
 import os
+from quant import paths
 import json
 import time
 import hashlib
@@ -21,11 +22,11 @@ import yfinance as yf
 import pandas as pd
 import numpy as np
 
-from fileio import atomic_write_csv, atomic_write_parquet, atomic_write_json
+from quant.infra.fileio import atomic_write_csv, atomic_write_parquet, atomic_write_json
 
 _log = logging.getLogger(__name__)
 
-CACHE_DIR = os.path.join(os.path.dirname(__file__), ".cache")
+CACHE_DIR = os.path.join(paths.REPO_ROOT, ".cache")
 os.makedirs(CACHE_DIR, exist_ok=True)
 
 CACHE_TTL_HOURS = 4              # prices / ohlcv / info

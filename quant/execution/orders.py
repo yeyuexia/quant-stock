@@ -12,14 +12,15 @@ import datetime as dt
 import hashlib
 import json
 import os
+from quant import paths
 from dataclasses import dataclass, field, asdict
 from typing import Optional
 
-import config
-from broker import (
+import quant.config as config
+from quant.execution.broker import (
     Broker, BrokerError, AccountSnapshot, Position, Order,
 )
-from fileio import atomic_write_json, atomic_append_text
+from quant.infra.fileio import atomic_write_json, atomic_append_text
 
 # ── Types ───────────────────────────────────────────────────────
 
@@ -79,12 +80,12 @@ def _make_cid(tranche: str, reason: str, symbol: str, today: dt.date) -> str:
 
 # ── Paths (overridable for tests) ───────────────────────────────
 
-PORTFOLIO_PATH = os.path.join(os.path.dirname(__file__), "portfolio.json")
+PORTFOLIO_PATH = os.path.join(paths.REPO_ROOT, "portfolio.json")
 # orders-side event log: equity snapshots + closed-position events. Distinct
 # from watchdog's daily_log.csv (which is a per-day portfolio summary with a
 # completely different schema). Previously these shared `daily_log.csv` →
 # silent schema collision broke show_history / pandas reads.
-DAILY_LOG_PATH = os.path.join(os.path.dirname(__file__), ".cache", "orders_events.csv")
+DAILY_LOG_PATH = os.path.join(paths.REPO_ROOT, ".cache", "orders_events.csv")
 
 # ── Safety-rail paths (overridable for tests) ───────────────────
 
@@ -385,8 +386,8 @@ def _effective_stop_pct(symbol: str, tranche: str) -> float:
     if symbol in getattr(config, "DEFENSIVE_SYMBOLS", ()):
         return base
     try:
-        import data
-        import indicators
+        import quant.data.market as data
+        import quant.signals.indicators as indicators
         ohlcv = data.fetch_ohlcv([symbol], period="1y")
         high  = ohlcv["High"][symbol].dropna()
         low   = ohlcv["Low"][symbol].dropna()
@@ -940,8 +941,8 @@ def submit_exit(symbol: str, *, reason: str, broker,
     redundant broker round-trip. None falls back to broker._latest_price.
     """
     from dataclasses import replace as _replace
-    from pending_plan import load_plan, write_plan, IntentState, PendingPlan
-    from baseline import capture_baseline
+    from quant.execution.pending_plan import load_plan, write_plan, IntentState, PendingPlan
+    from quant.signals.baseline import capture_baseline
 
     cache = _load_portfolio_cache()
     meta = next((p for p in cache.get("positions", []) if p["symbol"] == symbol), None)
@@ -1023,8 +1024,8 @@ def submit_partial_exit(symbol: str, *, fraction_of_initial: float,
       - initial_qty missing (legacy / unsnapshotted)
     """
     from dataclasses import replace as _replace
-    from pending_plan import load_plan, write_plan, IntentState, PendingPlan
-    from baseline import capture_baseline
+    from quant.execution.pending_plan import load_plan, write_plan, IntentState, PendingPlan
+    from quant.signals.baseline import capture_baseline
 
     result = ExecutionResult()
     if os.path.exists(HALT_PATH):
@@ -1132,7 +1133,7 @@ def tag_position(symbol: str, tranche: str, entry_reason: str = "manual") -> Non
     if tranche not in ("core", "aggressive"):
         raise ValueError(f"tranche must be 'core' or 'aggressive', got {tranche!r}")
 
-    from fileio import read_modify_write_json
+    from quant.infra.fileio import read_modify_write_json
 
     sentinel = {"_not_found": True}
 

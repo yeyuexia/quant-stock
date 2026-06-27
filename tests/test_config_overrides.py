@@ -5,7 +5,7 @@ import os
 
 def _reload_config(tmp_path, monkeypatch, overrides=None):
     """Helper: point config's override path at tmp and reload the module."""
-    import config
+    import quant.config as config
     override_path = tmp_path / "strategy_overrides.json"
     if overrides is not None:
         override_path.write_text(json.dumps(overrides))
@@ -15,7 +15,7 @@ def _reload_config(tmp_path, monkeypatch, overrides=None):
 
 
 def test_valid_stop_loss_override_applies(tmp_path, monkeypatch):
-    import config
+    import quant.config as config
     original = config.STOP_LOSS_PCT
     cfg = _reload_config(tmp_path, monkeypatch, {"STOP_LOSS_PCT": 0.075})
     assert cfg.STOP_LOSS_PCT == 0.075
@@ -23,28 +23,28 @@ def test_valid_stop_loss_override_applies(tmp_path, monkeypatch):
 
 
 def test_unknown_key_is_ignored(tmp_path, monkeypatch):
-    import config
+    import quant.config as config
     original_max_orders = config.DAILY_MAX_ORDERS
     _reload_config(tmp_path, monkeypatch, {"DAILY_MAX_ORDERS": 999999})
     assert config.DAILY_MAX_ORDERS == original_max_orders
 
 
 def test_type_mismatch_is_ignored(tmp_path, monkeypatch):
-    import config
+    import quant.config as config
     original = config.STOP_LOSS_PCT
     _reload_config(tmp_path, monkeypatch, {"STOP_LOSS_PCT": "not a float"})
     assert config.STOP_LOSS_PCT == original
 
 
 def test_out_of_bounds_is_ignored(tmp_path, monkeypatch):
-    import config
+    import quant.config as config
     original = config.STOP_LOSS_PCT
     _reload_config(tmp_path, monkeypatch, {"STOP_LOSS_PCT": 0.99})
     assert config.STOP_LOSS_PCT == original
 
 
 def test_missing_file_leaves_defaults_intact(tmp_path, monkeypatch):
-    import config
+    import quant.config as config
     original = config.STOP_LOSS_PCT
     monkeypatch.setattr(config, "_OVERRIDES_PATH", str(tmp_path / "nope.json"))
     config._apply_overrides()
@@ -52,7 +52,7 @@ def test_missing_file_leaves_defaults_intact(tmp_path, monkeypatch):
 
 
 def test_corrupt_json_leaves_defaults_intact(tmp_path, monkeypatch):
-    import config
+    import quant.config as config
     original = config.STOP_LOSS_PCT
     p = tmp_path / "bad.json"
     p.write_text("{not valid json")
@@ -62,7 +62,7 @@ def test_corrupt_json_leaves_defaults_intact(tmp_path, monkeypatch):
 
 
 def test_watchlist_and_keywords_lists_apply(tmp_path, monkeypatch):
-    import config
+    import quant.config as config
     _reload_config(tmp_path, monkeypatch, {
         "WATCHLIST": config.WATCHLIST + ["PLTR", "SMCI"],
         "NEWS_SHOCK_KEYWORDS": config.NEWS_SHOCK_KEYWORDS + ["nvda"],
@@ -74,7 +74,7 @@ def test_watchlist_and_keywords_lists_apply(tmp_path, monkeypatch):
 
 def test_momentum_top_n_override_applies(tmp_path, monkeypatch):
     """High-risk keys must be accepted by config.py once written to overrides."""
-    import config
+    import quant.config as config
     original = config.MOMENTUM_TOP_N
     _reload_config(tmp_path, monkeypatch, {"MOMENTUM_TOP_N": 3})
     assert config.MOMENTUM_TOP_N == 3
@@ -82,14 +82,14 @@ def test_momentum_top_n_override_applies(tmp_path, monkeypatch):
 
 
 def test_momentum_top_n_out_of_bounds_ignored(tmp_path, monkeypatch):
-    import config
+    import quant.config as config
     original = config.MOMENTUM_TOP_N
     _reload_config(tmp_path, monkeypatch, {"MOMENTUM_TOP_N": 99})  # way too high
     assert config.MOMENTUM_TOP_N == original
 
 
 def test_etf_allocation_pct_override_applies(tmp_path, monkeypatch):
-    import config
+    import quant.config as config
     original = config.ETF_ALLOCATION_PCT
     _reload_config(tmp_path, monkeypatch, {"ETF_ALLOCATION_PCT": 0.75})
     assert config.ETF_ALLOCATION_PCT == 0.75
@@ -97,7 +97,7 @@ def test_etf_allocation_pct_override_applies(tmp_path, monkeypatch):
 
 
 def test_safe_haven_override_applies(tmp_path, monkeypatch):
-    import config
+    import quant.config as config
     original = config.SAFE_HAVEN
     _reload_config(tmp_path, monkeypatch, {"SAFE_HAVEN": "SHY"})
     assert config.SAFE_HAVEN == "SHY"
@@ -105,7 +105,7 @@ def test_safe_haven_override_applies(tmp_path, monkeypatch):
 
 
 def test_safe_haven_wrong_type_ignored(tmp_path, monkeypatch):
-    import config
+    import quant.config as config
     original = config.SAFE_HAVEN
     _reload_config(tmp_path, monkeypatch, {"SAFE_HAVEN": 42})
     assert config.SAFE_HAVEN == original

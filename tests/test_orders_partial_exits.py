@@ -6,7 +6,7 @@ since they are smaller surfaces."""
 import datetime as dt
 import json
 
-from orders import OrderIntent
+from quant.execution.orders import OrderIntent
 from tests.fakes import FakeBroker
 
 
@@ -16,8 +16,8 @@ def _portfolio_cache(tmp_path, monkeypatch, data):
     Duplicate of the helper in test_orders.py — kept local so this file is
     self-contained (the helper is trivial enough that a shared helpers
     module would be more friction than the duplication)."""
-    monkeypatch.setattr("orders.PORTFOLIO_PATH", str(tmp_path / "portfolio.json"))
-    monkeypatch.setattr("orders.DAILY_LOG_PATH", str(tmp_path / "daily_log.csv"))
+    monkeypatch.setattr("quant.execution.orders.PORTFOLIO_PATH", str(tmp_path / "portfolio.json"))
+    monkeypatch.setattr("quant.execution.orders.DAILY_LOG_PATH", str(tmp_path / "daily_log.csv"))
     if data is not None:
         (tmp_path / "portfolio.json").write_text(json.dumps(data))
 
@@ -47,18 +47,18 @@ def _seed_cache_position(tmp_path, monkeypatch, symbol="AAPL", initial_qty=30,
 
 
 def test_submit_partial_exit_writes_to_pending_plan(tmp_path, monkeypatch):
-    from orders import submit_partial_exit
-    from pending_plan import load_plan
+    from quant.execution.orders import submit_partial_exit
+    from quant.execution.pending_plan import load_plan
 
-    monkeypatch.setattr("pending_plan.PENDING_PLAN_PATH", str(tmp_path / "pending_plan.json"))
-    monkeypatch.setattr("orders.HALT_PATH", str(tmp_path / "no_halt"))
+    monkeypatch.setattr("quant.execution.pending_plan.PENDING_PLAN_PATH", str(tmp_path / "pending_plan.json"))
+    monkeypatch.setattr("quant.execution.orders.HALT_PATH", str(tmp_path / "no_halt"))
     _seed_cache_position(tmp_path, monkeypatch)
 
     fb = FakeBroker()
     fb.set_latest_price("AAPL", 116.0)
     # Stub baseline.capture_baseline so we don't fetch live market data.
-    from pending_plan import Baseline
-    monkeypatch.setattr("baseline.capture_baseline",
+    from quant.execution.pending_plan import Baseline
+    monkeypatch.setattr("quant.signals.baseline.capture_baseline",
                         lambda: Baseline(spy=450.0, vix=14.0, macro_score=0.2,
                                          news_cursor_at=dt.datetime(2026, 5, 10, 14, 0, 0, tzinfo=dt.timezone.utc)))
 
@@ -83,12 +83,12 @@ def test_submit_partial_exit_writes_to_pending_plan(tmp_path, monkeypatch):
 def test_submit_partial_exit_conflict_falls_back_to_direct(tmp_path, monkeypatch):
     """If pending_plan already has an AAPL intent, submit_partial_exit
     routes through execute_plan (the same pattern as submit_exit)."""
-    from orders import submit_partial_exit
-    from pending_plan import PendingPlan, IntentState, write_plan, Baseline
+    from quant.execution.orders import submit_partial_exit
+    from quant.execution.pending_plan import PendingPlan, IntentState, write_plan, Baseline
 
-    monkeypatch.setattr("pending_plan.PENDING_PLAN_PATH", str(tmp_path / "pending_plan.json"))
-    monkeypatch.setattr("orders.HALT_PATH", str(tmp_path / "no_halt"))
-    monkeypatch.setattr("orders.DAILY_TRADE_LOG", str(tmp_path / "daily.json"))
+    monkeypatch.setattr("quant.execution.pending_plan.PENDING_PLAN_PATH", str(tmp_path / "pending_plan.json"))
+    monkeypatch.setattr("quant.execution.orders.HALT_PATH", str(tmp_path / "no_halt"))
+    monkeypatch.setattr("quant.execution.orders.DAILY_TRADE_LOG", str(tmp_path / "daily.json"))
     _seed_cache_position(tmp_path, monkeypatch)
 
     # Pre-seed pending_plan with a conflicting AAPL intent.
@@ -117,9 +117,9 @@ def test_submit_partial_exit_conflict_falls_back_to_direct(tmp_path, monkeypatch
 
 
 def test_submit_partial_exit_skips_when_initial_qty_missing(tmp_path, monkeypatch):
-    from orders import submit_partial_exit
-    monkeypatch.setattr("orders.HALT_PATH", str(tmp_path / "no_halt"))
-    monkeypatch.setattr("pending_plan.PENDING_PLAN_PATH", str(tmp_path / "pending_plan.json"))
+    from quant.execution.orders import submit_partial_exit
+    monkeypatch.setattr("quant.execution.orders.HALT_PATH", str(tmp_path / "no_halt"))
+    monkeypatch.setattr("quant.execution.pending_plan.PENDING_PLAN_PATH", str(tmp_path / "pending_plan.json"))
     _seed_cache_position(tmp_path, monkeypatch, initial_qty=None)
 
     fb = FakeBroker()
@@ -132,12 +132,12 @@ def test_submit_partial_exit_skips_when_initial_qty_missing(tmp_path, monkeypatc
 
 
 def test_submit_partial_exit_respects_halt(tmp_path, monkeypatch):
-    from orders import submit_partial_exit
+    from quant.execution.orders import submit_partial_exit
 
     halt = tmp_path / "HALT"
     halt.write_text("paused")
-    monkeypatch.setattr("orders.HALT_PATH", str(halt))
-    monkeypatch.setattr("pending_plan.PENDING_PLAN_PATH", str(tmp_path / "pending_plan.json"))
+    monkeypatch.setattr("quant.execution.orders.HALT_PATH", str(halt))
+    monkeypatch.setattr("quant.execution.pending_plan.PENDING_PLAN_PATH", str(tmp_path / "pending_plan.json"))
     _seed_cache_position(tmp_path, monkeypatch)
 
     fb = FakeBroker()

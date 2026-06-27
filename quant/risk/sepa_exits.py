@@ -10,7 +10,7 @@ import logging as _logging
 from typing import Optional
 import pandas as pd
 
-import config
+import quant.config as config
 
 _log = _logging.getLogger(__name__)
 

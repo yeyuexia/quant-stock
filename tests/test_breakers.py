@@ -1,7 +1,7 @@
 # tests/test_breakers.py
 import datetime as dt
-from pending_plan import Baseline
-from breakers import check_spy_drop, BreakerResult
+from quant.execution.pending_plan import Baseline
+from quant.execution.breakers import check_spy_drop, BreakerResult
 
 
 def _baseline(spy=480.0):
@@ -39,7 +39,7 @@ def test_breaker_result_has_scope():
     assert result.affected_symbols is None
 
 
-from breakers import check_vix_spike, check_single_name_shock
+from quant.execution.breakers import check_vix_spike, check_single_name_shock
 
 
 def test_vix_spike_trips_on_multiplier():
@@ -88,8 +88,8 @@ def test_single_name_shock_no_trip_if_all_above_threshold():
     assert all(not r.tripped for r in results)
 
 
-from breakers import check_news_shock
-from news_shock import NewsHit
+from quant.execution.breakers import check_news_shock
+from quant.signals.news_shock import NewsHit
 
 
 def test_news_shock_requires_corroboration():
@@ -127,8 +127,8 @@ def test_news_shock_no_hits_never_trips():
     assert result.tripped is False
 
 
-from breakers import check_macro_flip
-from breakers import (
+from quant.execution.breakers import check_macro_flip
+from quant.execution.breakers import (
     check_spy_drop, check_vix_spike, check_news_shock,
 )
 import os
@@ -164,7 +164,7 @@ def test_news_shock_does_not_log_inside_breaker(tmp_path, monkeypatch):
     """check_news_shock is now pure — audit logging was moved to the
     executor caller. This test confirms the breaker never touches disk
     (the executor-side test covers that the log still happens)."""
-    import news_shock
+    import quant.signals.news_shock as news_shock
     log_path = tmp_path / "news_log.csv"
     monkeypatch.setattr(news_shock, "NEWS_SHOCK_LOG", str(log_path))
 
@@ -198,10 +198,10 @@ import pytest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 
-from breakers import (
+from quant.execution.breakers import (
     check_spy_drop, check_vix_spike, check_news_shock,
 )
-from pending_plan import Baseline
+from quant.execution.pending_plan import Baseline
 
 
 def _baseline_opt(spy=480.0, vix=14.0, macro=0.20):
@@ -240,7 +240,7 @@ def test_check_vix_spike_handles_zero_baseline():
 def test_check_news_shock_does_not_write_disk(monkeypatch, tmp_path):
     """The audit log used to be written inside check_news_shock — moved to
     executor. Verify the breaker itself never touches the log file."""
-    import news_shock
+    import quant.signals.news_shock as news_shock
     log_path = tmp_path / "news_shock_log.csv"
     monkeypatch.setattr(news_shock, "NEWS_SHOCK_LOG", str(log_path))
 
@@ -265,7 +265,7 @@ def test_check_news_shock_does_not_write_disk(monkeypatch, tmp_path):
 
 def test_check_news_shock_still_returns_correct_signal_when_tripped():
     """Functional check: corroborated news shock trips even without log_hit."""
-    import news_shock
+    import quant.signals.news_shock as news_shock
     hit = news_shock.NewsHit(
         title="Fed emergency rate cut",
         source="yahoo",

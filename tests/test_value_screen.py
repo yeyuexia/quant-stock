@@ -1,4 +1,4 @@
-import value_screen
+import quant.strategies.value.screen as value_screen
 
 
 def _info(profitable=True, **kw):
@@ -30,7 +30,7 @@ def test_screen_empty_universe_returns_empty():
 
 
 def test_run_writes_strategy_result(tmp_path, monkeypatch):
-    import strategies
+    import quant.strategies.contract as strategies
     monkeypatch.setattr(strategies, "STRATEGIES_DIR", str(tmp_path / "strat"))
     monkeypatch.setattr(value_screen.discovery, "get_russell3000_tickers", lambda: ["AAA"])
     monkeypatch.setattr(value_screen, "screen", lambda u, **k: [

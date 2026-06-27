@@ -12,8 +12,8 @@ from unittest.mock import patch, MagicMock
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 
-import discovery
-import config
+import quant.data.universe as discovery
+import quant.config as config
 
 
 # ── merge_candidates: determinism + priority order ────────────────
@@ -490,7 +490,7 @@ def test_prune_main_confirm_skips_never_seen(monkeypatch, tmp_path):
 def test_screener_invokes_record_screener_pass(monkeypatch):
     """screen_stocks() must stamp every ticker that passed the technical hard
     gates (ADR + EMA + RS) — not just the final top-N."""
-    import screener as sc
+    import quant.signals.screener as sc
     import pandas as pd
 
     # Build a fake post-filter df via the screener internals: easiest is to
@@ -538,7 +538,7 @@ def test_screener_invokes_record_screener_pass(monkeypatch):
 
 def test_screener_hook_swallows_exception(monkeypatch):
     """If record_screener_pass raises, screen_stocks must still complete."""
-    import screener as sc
+    import quant.signals.screener as sc
     def _boom(_):
         raise RuntimeError("disk full")
     monkeypatch.setattr(sc, "record_screener_pass", _boom)
@@ -588,7 +588,7 @@ def test_log_run_appends_jsonl(monkeypatch, tmp_path):
 # ── New-universe / two-stage / ranking config ─────────────────────
 
 def test_discovery_universe_config_present_and_sane():
-    import config
+    import quant.config as config
     assert isinstance(config.DISCOVERY_UNIVERSE_INDICES, (tuple, list)) and config.DISCOVERY_UNIVERSE_INDICES
     # every entry is a known index key with a Wikipedia URL
     assert all(k in discovery.WIKI_INDEX_URLS for k in config.DISCOVERY_UNIVERSE_INDICES)

@@ -25,12 +25,12 @@ import numpy as np
 import pandas as pd
 from tabulate import tabulate
 
-import config
+import quant.config as config
 
 # Light-weight imports OK at module level; anything that imports yfinance /
 # external APIs / large deps is lazy-imported inside its section function
 # so a single broken dependency doesn't kill the whole report.
-from config import (
+from quant.config import (
     MAX_POSITION_PCT, CASH_BUFFER_PCT, MOMENTUM_TOP_N,
     PORTFOLIO_MODE, ETF_ALLOCATION_PCT, STOCK_ALLOCATION_PCT,
     USE_LEVERAGED_ETFS, STOP_LOSS_PCT,
@@ -92,7 +92,7 @@ def safe_section(name: str, fn, *args, **kwargs):
 # ── Section: Macro Regime ───────────────────────────────────────────
 
 def run_macro_regime():
-    from macro import macro_regime_score, macro_risk_adjustment
+    from quant.signals.macro import macro_regime_score, macro_risk_adjustment
 
     section("MACRO REGIME ANALYSIS (FRED)")
     result = macro_regime_score()
@@ -120,8 +120,8 @@ def run_macro_regime():
 # ── Section: Momentum ETF Rotation ──────────────────────────────────
 
 def run_momentum_strategy():
-    from momentum import generate_signals
-    from config import ETF_UNIVERSE
+    from quant.signals.momentum import generate_signals
+    from quant.config import ETF_UNIVERSE
 
     section("STRATEGY 1: DUAL MOMENTUM ETF ROTATION")
     base_n = config.REBALANCE_DAYS["core"]
@@ -160,7 +160,7 @@ def run_momentum_strategy():
 # ── Section: CANSLIM Stock Screener ─────────────────────────────────
 
 def run_stock_screener(with_review: bool = False):
-    from screener import screen_stocks
+    from quant.signals.screener import screen_stocks
 
     section("STRATEGY 2: CANSLIM C+A+T SCREEN")
     print(f"  Fundamental pre-filter: "
@@ -223,7 +223,7 @@ def run_alpaca_holdings():
     """Read-only snapshot of current Alpaca positions."""
     # Lazy import: broker.py construction can fail if env keys missing or
     # SDK unavailable — keep that contained to this section.
-    from broker import Broker, BrokerError
+    from quant.execution.broker import Broker, BrokerError
 
     section("CURRENT ALPACA HOLDINGS")
     try:
@@ -248,8 +248,8 @@ def run_alpaca_holdings():
 # ── Section: Risk Analysis ──────────────────────────────────────────
 
 def run_risk_analysis(signals):
-    from risk import portfolio_stats, correlation_matrix, diversification_ratio
-    from data import fetch_prices, compute_returns
+    from quant.risk.risk import portfolio_stats, correlation_matrix, diversification_ratio
+    from quant.data.market import fetch_prices, compute_returns
 
     section("RISK ANALYSIS")
 
@@ -306,7 +306,7 @@ def run_risk_analysis(signals):
 # ── Section: News & Sentiment ───────────────────────────────────────
 
 def run_sentiment():
-    from sentiment import get_market_hotspots
+    from quant.signals.sentiment import get_market_hotspots
 
     section("NEWS & SOCIAL SENTIMENT")
     try:
@@ -385,7 +385,7 @@ def run_sentiment():
 # ── Section: Backtest ───────────────────────────────────────────────
 
 def run_backtest(years: int = 5):
-    from backtest import backtest_momentum
+    from quant.app.backtest import backtest_momentum
 
     section(f"BACKTEST: DUAL MOMENTUM ({years}Y)")
     try:
@@ -446,7 +446,7 @@ def _now_et_str() -> str:
     isn't available — pinned via timeutils.now_et which raises in that case,
     so any failure here is informative."""
     try:
-        from timeutils import now_et
+        from quant.infra.timeutils import now_et
         return now_et().strftime("%Y-%m-%d %H:%M ET")
     except Exception:
         return pd.Timestamp.now().strftime("%Y-%m-%d %H:%M (local)")

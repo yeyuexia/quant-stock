@@ -17,9 +17,9 @@ import os
 from dataclasses import dataclass, field, asdict
 from typing import Optional
 
-import config
-from fileio import atomic_write_json
-from orders import OrderIntent
+import quant.config as config
+from quant.infra.fileio import atomic_write_json
+from quant.execution.orders import OrderIntent
 
 _log = logging.getLogger(__name__)
 

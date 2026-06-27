@@ -4,8 +4,8 @@ import json
 import pandas as pd
 import pytest
 
-import config
-from broker import Order
+import quant.config as config
+from quant.execution.broker import Order
 from tests.fakes import FakeBroker
 from unittest.mock import MagicMock, patch
 import os
@@ -13,8 +13,8 @@ import sys
 
 
 def _portfolio_cache(tmp_path, monkeypatch, data):
-    monkeypatch.setattr("orders.PORTFOLIO_PATH", str(tmp_path / "portfolio.json"))
-    monkeypatch.setattr("orders.DAILY_LOG_PATH", str(tmp_path / "daily_log.csv"))
+    monkeypatch.setattr("quant.execution.orders.PORTFOLIO_PATH", str(tmp_path / "portfolio.json"))
+    monkeypatch.setattr("quant.execution.orders.DAILY_LOG_PATH", str(tmp_path / "daily_log.csv"))
     if data is not None:
         (tmp_path / "portfolio.json").write_text(json.dumps(data))
 
@@ -40,7 +40,7 @@ def _seed_core_position(tmp_path, monkeypatch, **overrides):
 
 
 def _make_snap(positions, cash=5000.0, equity=50_000.0):
-    from orders import PortfolioSnapshot
+    from quant.execution.orders import PortfolioSnapshot
     return PortfolioSnapshot(
         synced_at="2026-05-10T14:00:00+00:00",
         alpaca_env="paper", cash=cash, equity=equity,
@@ -51,8 +51,8 @@ def _make_snap(positions, cash=5000.0, equity=50_000.0):
 
 
 def _stub_baseline(monkeypatch):
-    from pending_plan import Baseline
-    monkeypatch.setattr("baseline.capture_baseline",
+    from quant.execution.pending_plan import Baseline
+    monkeypatch.setattr("quant.signals.baseline.capture_baseline",
                         lambda: Baseline(spy=450.0, vix=14.0, macro_score=0.2,
                                          news_cursor_at=dt.datetime(2026, 5, 10, 14, 0, 0, tzinfo=dt.timezone.utc)))
 
@@ -61,7 +61,7 @@ def _stub_fetch_prices(monkeypatch, symbol: str, closes_values: list):
     import pandas as pd
     idx = pd.date_range("2026-01-01", periods=len(closes_values), freq="B")
     df = pd.DataFrame({symbol: closes_values}, index=idx)
-    monkeypatch.setattr("data.fetch_prices",
+    monkeypatch.setattr("quant.data.market.fetch_prices",
                         lambda tickers, period="2y": df)
 
 
@@ -69,11 +69,11 @@ def _stub_fetch_prices(monkeypatch, symbol: str, closes_values: list):
 
 def test_check_sepa_exits_2r_path(tmp_path, monkeypatch):
     """At 2R, partial-sell 1/3, cancel trailing, re-trail at 2/3 qty."""
-    from watchdog import check_sepa_exits
+    from quant.monitor.watchdog import check_sepa_exits
 
-    monkeypatch.setattr("pending_plan.PENDING_PLAN_PATH", str(tmp_path / "pending_plan.json"))
-    monkeypatch.setattr("orders.HALT_PATH", str(tmp_path / "no_halt"))
-    monkeypatch.setattr("config.TELEGRAM_NOTIFY_PATH",
+    monkeypatch.setattr("quant.execution.pending_plan.PENDING_PLAN_PATH", str(tmp_path / "pending_plan.json"))
+    monkeypatch.setattr("quant.execution.orders.HALT_PATH", str(tmp_path / "no_halt"))
+    monkeypatch.setattr("quant.config.TELEGRAM_NOTIFY_PATH",
                         str(tmp_path / "telegram.json"))
     _seed_core_position(tmp_path, monkeypatch)
     _stub_baseline(monkeypatch)
@@ -104,7 +104,7 @@ def test_check_sepa_exits_2r_path(tmp_path, monkeypatch):
     assert len(new_trails) == 1
     assert new_trails[0].qty == pytest.approx(20.0, abs=0.01)
     # Partial sell queued to pending_plan
-    from pending_plan import load_plan
+    from quant.execution.pending_plan import load_plan
     plan = load_plan()
     assert plan is not None
     assert any(s.intent.symbol == "AAPL" and "sepa-2R" in s.intent.reason
@@ -117,11 +117,11 @@ def test_check_sepa_exits_2r_path(tmp_path, monkeypatch):
 
 def test_check_sepa_exits_3r_path(tmp_path, monkeypatch):
     """At 3R with 2R already filled, partial-sell 1/3, cancel trailing, NO re-trail."""
-    from watchdog import check_sepa_exits
+    from quant.monitor.watchdog import check_sepa_exits
 
-    monkeypatch.setattr("pending_plan.PENDING_PLAN_PATH", str(tmp_path / "pending_plan.json"))
-    monkeypatch.setattr("orders.HALT_PATH", str(tmp_path / "no_halt"))
-    monkeypatch.setattr("config.TELEGRAM_NOTIFY_PATH",
+    monkeypatch.setattr("quant.execution.pending_plan.PENDING_PLAN_PATH", str(tmp_path / "pending_plan.json"))
+    monkeypatch.setattr("quant.execution.orders.HALT_PATH", str(tmp_path / "no_halt"))
+    monkeypatch.setattr("quant.config.TELEGRAM_NOTIFY_PATH",
                         str(tmp_path / "telegram.json"))
     _seed_core_position(tmp_path, monkeypatch, shares=20.0,
                         market_value=2480.0, r_tier_filled=["2R"])
@@ -149,7 +149,7 @@ def test_check_sepa_exits_3r_path(tmp_path, monkeypatch):
     assert "trail_2" in fb._canceled
     new_trails = [o for o in fb._submitted if o.type == "trailing_stop"]
     assert new_trails == []  # NO re-trail at 3R
-    from pending_plan import load_plan
+    from quant.execution.pending_plan import load_plan
     plan = load_plan()
     assert plan is not None
     assert any(s.intent.symbol == "AAPL" and "sepa-3R" in s.intent.reason
@@ -161,11 +161,11 @@ def test_check_sepa_exits_3r_path(tmp_path, monkeypatch):
 
 def test_check_sepa_exits_ma_break_path(tmp_path, monkeypatch):
     """With r_tier_filled=['2R','3R'] and close < 21EMA, submit full exit."""
-    from watchdog import check_sepa_exits
+    from quant.monitor.watchdog import check_sepa_exits
 
-    monkeypatch.setattr("pending_plan.PENDING_PLAN_PATH", str(tmp_path / "pending_plan.json"))
-    monkeypatch.setattr("orders.HALT_PATH", str(tmp_path / "no_halt"))
-    monkeypatch.setattr("config.TELEGRAM_NOTIFY_PATH",
+    monkeypatch.setattr("quant.execution.pending_plan.PENDING_PLAN_PATH", str(tmp_path / "pending_plan.json"))
+    monkeypatch.setattr("quant.execution.orders.HALT_PATH", str(tmp_path / "no_halt"))
+    monkeypatch.setattr("quant.config.TELEGRAM_NOTIFY_PATH",
                         str(tmp_path / "telegram.json"))
     _seed_core_position(tmp_path, monkeypatch, shares=10.0,
                         market_value=1100.0, r_tier_filled=["2R", "3R"])
@@ -189,7 +189,7 @@ def test_check_sepa_exits_ma_break_path(tmp_path, monkeypatch):
     }])
 
     notifications = check_sepa_exits(snap, fb)
-    from pending_plan import load_plan
+    from quant.execution.pending_plan import load_plan
     plan = load_plan()
     assert plan is not None
     assert any(s.intent.symbol == "AAPL"
@@ -202,7 +202,7 @@ def test_check_sepa_exits_ma_break_path(tmp_path, monkeypatch):
 
 def test_check_sepa_exits_skips_aggressive_tranche(tmp_path, monkeypatch):
     """Aggressive positions are bypassed entirely."""
-    from watchdog import check_sepa_exits
+    from quant.monitor.watchdog import check_sepa_exits
 
     fb = FakeBroker()
     snap = _make_snap([{
@@ -218,7 +218,7 @@ def test_check_sepa_exits_skips_aggressive_tranche(tmp_path, monkeypatch):
 
 
 def test_check_sepa_exits_skips_when_initial_stop_none(tmp_path, monkeypatch):
-    from watchdog import check_sepa_exits
+    from quant.monitor.watchdog import check_sepa_exits
 
     fb = FakeBroker()
     fb.set_latest_price("AAPL", 200.0)
@@ -235,8 +235,8 @@ def test_check_sepa_exits_skips_when_initial_stop_none(tmp_path, monkeypatch):
 
 
 def test_check_sepa_exits_disabled_when_config_off(tmp_path, monkeypatch):
-    from watchdog import check_sepa_exits
-    monkeypatch.setattr("config.SEPA_ENABLED", False)
+    from quant.monitor.watchdog import check_sepa_exits
+    monkeypatch.setattr("quant.config.SEPA_ENABLED", False)
 
     fb = FakeBroker()
     fb.set_latest_price("AAPL", 116.0)
@@ -255,14 +255,14 @@ def test_check_sepa_exits_disabled_when_config_off(tmp_path, monkeypatch):
 # ── Phase 2 watchdog helpers ─────────────────────────────────────
 
 def test_cancel_pending_partials_removes_sepa_sell_intents(tmp_path, monkeypatch):
-    from watchdog import _cancel_pending_partials
-    from pending_plan import (PENDING_PLAN_PATH as _, PendingPlan, IntentState, write_plan)
-    from pending_plan import Baseline
-    from orders import OrderIntent
+    from quant.monitor.watchdog import _cancel_pending_partials
+    from quant.execution.pending_plan import (PENDING_PLAN_PATH as _, PendingPlan, IntentState, write_plan)
+    from quant.execution.pending_plan import Baseline
+    from quant.execution.orders import OrderIntent
     import datetime as dt
 
-    monkeypatch.setattr("pending_plan.PENDING_PLAN_PATH", str(tmp_path / "plan.json"))
-    monkeypatch.setattr("config.PENDING_PLAN_PATH", str(tmp_path / "plan.json"))
+    monkeypatch.setattr("quant.execution.pending_plan.PENDING_PLAN_PATH", str(tmp_path / "plan.json"))
+    monkeypatch.setattr("quant.config.PENDING_PLAN_PATH", str(tmp_path / "plan.json"))
 
     write_plan(PendingPlan(
         plan_id="p-1", tranche="core",
@@ -288,7 +288,7 @@ def test_cancel_pending_partials_removes_sepa_sell_intents(tmp_path, monkeypatch
 
     _cancel_pending_partials("AAPL")
 
-    from pending_plan import load_plan
+    from quant.execution.pending_plan import load_plan
     plan = load_plan()
     syms_reasons = [(s.intent.symbol, s.intent.reason) for s in plan.intents]
     # AAPL sepa-2R removed; AAPL buy preserved (different side); NVDA sepa-3R preserved.
@@ -298,17 +298,17 @@ def test_cancel_pending_partials_removes_sepa_sell_intents(tmp_path, monkeypatch
 
 
 def test_cancel_pending_partials_noop_when_no_plan(tmp_path, monkeypatch):
-    from watchdog import _cancel_pending_partials
-    monkeypatch.setattr("pending_plan.PENDING_PLAN_PATH", str(tmp_path / "plan.json"))
-    monkeypatch.setattr("config.PENDING_PLAN_PATH", str(tmp_path / "plan.json"))
+    from quant.monitor.watchdog import _cancel_pending_partials
+    monkeypatch.setattr("quant.execution.pending_plan.PENDING_PLAN_PATH", str(tmp_path / "plan.json"))
+    monkeypatch.setattr("quant.config.PENDING_PLAN_PATH", str(tmp_path / "plan.json"))
     _cancel_pending_partials("AAPL")  # must not raise
 
 
 def test_set_climax_fired_updates_portfolio_cache(tmp_path, monkeypatch):
-    from watchdog import _set_climax_fired
+    from quant.monitor.watchdog import _set_climax_fired
     import json
 
-    monkeypatch.setattr("orders.PORTFOLIO_PATH", str(tmp_path / "port.json"))
+    monkeypatch.setattr("quant.execution.orders.PORTFOLIO_PATH", str(tmp_path / "port.json"))
     (tmp_path / "port.json").write_text(json.dumps({
         "synced_at": "2026-05-18T14:00:00+00:00", "alpaca_env": "paper",
         "cash": 0, "equity": 0,
@@ -342,8 +342,8 @@ def _seed_entry_pivot(tmp_path, monkeypatch, symbol, pivot, entry_date):
         existing = json.loads(path.read_text())
     existing[symbol] = {"pivot": pivot, "entry_date": entry_date}
     path.write_text(json.dumps(existing))
-    monkeypatch.setattr("orders.ENTRY_PIVOTS_PATH", str(path))
-    monkeypatch.setattr("config.ENTRY_PIVOTS_PATH", str(path))
+    monkeypatch.setattr("quant.execution.orders.ENTRY_PIVOTS_PATH", str(path))
+    monkeypatch.setattr("quant.config.ENTRY_PIVOTS_PATH", str(path))
 
 
 def _stub_fetch_ohlcv_closes(monkeypatch, symbol, closes_values, start="2026-05-15"):
@@ -358,20 +358,20 @@ def _stub_fetch_ohlcv_closes(monkeypatch, symbol, closes_values, start="2026-05-
         ("Volume", symbol): [1_000_000] * n,
     }, index=idx)
     df.columns = pd.MultiIndex.from_tuples(df.columns)
-    monkeypatch.setattr("data.fetch_ohlcv",
+    monkeypatch.setattr("quant.data.market.fetch_ohlcv",
                         lambda tickers, period="1y": df)
 
 
 def test_check_sepa_exits_failed_breakout_full_exit_path(tmp_path, monkeypatch):
     """Day 2 close < pivot within window → cancel partial + submit_exit."""
-    from watchdog import check_sepa_exits
+    from quant.monitor.watchdog import check_sepa_exits
     import datetime as dt
 
-    monkeypatch.setattr("pending_plan.PENDING_PLAN_PATH", str(tmp_path / "plan.json"))
-    monkeypatch.setattr("config.PENDING_PLAN_PATH", str(tmp_path / "plan.json"))
-    monkeypatch.setattr("orders.PORTFOLIO_PATH", str(tmp_path / "port.json"))
-    monkeypatch.setattr("orders.HALT_PATH", str(tmp_path / "no_halt"))
-    monkeypatch.setattr("config.TELEGRAM_NOTIFY_PATH", str(tmp_path / "tg.json"))
+    monkeypatch.setattr("quant.execution.pending_plan.PENDING_PLAN_PATH", str(tmp_path / "plan.json"))
+    monkeypatch.setattr("quant.config.PENDING_PLAN_PATH", str(tmp_path / "plan.json"))
+    monkeypatch.setattr("quant.execution.orders.PORTFOLIO_PATH", str(tmp_path / "port.json"))
+    monkeypatch.setattr("quant.execution.orders.HALT_PATH", str(tmp_path / "no_halt"))
+    monkeypatch.setattr("quant.config.TELEGRAM_NOTIFY_PATH", str(tmp_path / "tg.json"))
 
     _seed_core_position(tmp_path, monkeypatch)  # AAPL entry@100, qty=30
     _seed_entry_pivot(tmp_path, monkeypatch, "AAPL", pivot=99.0,
@@ -386,7 +386,7 @@ def test_check_sepa_exits_failed_breakout_full_exit_path(tmp_path, monkeypatch):
     class _FakeNowMod(_real_datetime):
         @classmethod
         def now(cls, tz=None): return _real_datetime(2026, 5, 18, 14, 0, 0, tzinfo=tz)
-    monkeypatch.setattr("watchdog.dt.datetime", _FakeNowMod)
+    monkeypatch.setattr("quant.monitor.watchdog.dt.datetime", _FakeNowMod)
 
     fb = FakeBroker()
     fb.set_latest_price("AAPL", 98.0)
@@ -401,7 +401,7 @@ def test_check_sepa_exits_failed_breakout_full_exit_path(tmp_path, monkeypatch):
     }])
     notifications = check_sepa_exits(snap, fb)
 
-    from pending_plan import load_plan
+    from quant.execution.pending_plan import load_plan
     plan = load_plan()
     assert plan is not None
     # The full exit landed in pending_plan with reason "sepa-failed-breakout".
@@ -412,17 +412,17 @@ def test_check_sepa_exits_failed_breakout_full_exit_path(tmp_path, monkeypatch):
 
 def test_check_sepa_exits_failed_breakout_cancels_pending_phase1_partial(tmp_path, monkeypatch):
     """Existing sepa-2R intent on AAPL is removed when failed-breakout fires."""
-    from watchdog import check_sepa_exits
-    from pending_plan import (PENDING_PLAN_PATH as _, PendingPlan, IntentState,
+    from quant.monitor.watchdog import check_sepa_exits
+    from quant.execution.pending_plan import (PENDING_PLAN_PATH as _, PendingPlan, IntentState,
                               write_plan, load_plan, Baseline)
-    from orders import OrderIntent
+    from quant.execution.orders import OrderIntent
     import datetime as dt
 
-    monkeypatch.setattr("pending_plan.PENDING_PLAN_PATH", str(tmp_path / "plan.json"))
-    monkeypatch.setattr("config.PENDING_PLAN_PATH", str(tmp_path / "plan.json"))
-    monkeypatch.setattr("orders.PORTFOLIO_PATH", str(tmp_path / "port.json"))
-    monkeypatch.setattr("orders.HALT_PATH", str(tmp_path / "no_halt"))
-    monkeypatch.setattr("config.TELEGRAM_NOTIFY_PATH", str(tmp_path / "tg.json"))
+    monkeypatch.setattr("quant.execution.pending_plan.PENDING_PLAN_PATH", str(tmp_path / "plan.json"))
+    monkeypatch.setattr("quant.config.PENDING_PLAN_PATH", str(tmp_path / "plan.json"))
+    monkeypatch.setattr("quant.execution.orders.PORTFOLIO_PATH", str(tmp_path / "port.json"))
+    monkeypatch.setattr("quant.execution.orders.HALT_PATH", str(tmp_path / "no_halt"))
+    monkeypatch.setattr("quant.config.TELEGRAM_NOTIFY_PATH", str(tmp_path / "tg.json"))
 
     _seed_core_position(tmp_path, monkeypatch)
     _seed_entry_pivot(tmp_path, monkeypatch, "AAPL", pivot=99.0,
@@ -447,7 +447,7 @@ def test_check_sepa_exits_failed_breakout_cancels_pending_phase1_partial(tmp_pat
     class _FakeNowMod(_real_datetime):
         @classmethod
         def now(cls, tz=None): return _real_datetime(2026, 5, 18, 14, 0, 0, tzinfo=tz)
-    monkeypatch.setattr("watchdog.dt.datetime", _FakeNowMod)
+    monkeypatch.setattr("quant.monitor.watchdog.dt.datetime", _FakeNowMod)
 
     fb = FakeBroker()
     fb.set_latest_price("AAPL", 98.0)
@@ -470,14 +470,14 @@ def test_check_sepa_exits_failed_breakout_cancels_pending_phase1_partial(tmp_pat
 
 def test_check_sepa_exits_failed_breakout_window_expired_skipped(tmp_path, monkeypatch):
     """Day 5 close below pivot → outside 3-day window → no failed-breakout."""
-    from watchdog import check_sepa_exits
+    from quant.monitor.watchdog import check_sepa_exits
     import datetime as dt
 
-    monkeypatch.setattr("pending_plan.PENDING_PLAN_PATH", str(tmp_path / "plan.json"))
-    monkeypatch.setattr("config.PENDING_PLAN_PATH", str(tmp_path / "plan.json"))
-    monkeypatch.setattr("orders.PORTFOLIO_PATH", str(tmp_path / "port.json"))
-    monkeypatch.setattr("orders.HALT_PATH", str(tmp_path / "no_halt"))
-    monkeypatch.setattr("config.TELEGRAM_NOTIFY_PATH", str(tmp_path / "tg.json"))
+    monkeypatch.setattr("quant.execution.pending_plan.PENDING_PLAN_PATH", str(tmp_path / "plan.json"))
+    monkeypatch.setattr("quant.config.PENDING_PLAN_PATH", str(tmp_path / "plan.json"))
+    monkeypatch.setattr("quant.execution.orders.PORTFOLIO_PATH", str(tmp_path / "port.json"))
+    monkeypatch.setattr("quant.execution.orders.HALT_PATH", str(tmp_path / "no_halt"))
+    monkeypatch.setattr("quant.config.TELEGRAM_NOTIFY_PATH", str(tmp_path / "tg.json"))
 
     _seed_core_position(tmp_path, monkeypatch)
     _seed_entry_pivot(tmp_path, monkeypatch, "AAPL", pivot=99.0,
@@ -491,7 +491,7 @@ def test_check_sepa_exits_failed_breakout_window_expired_skipped(tmp_path, monke
     class _FakeNowMod(_real_datetime):
         @classmethod
         def now(cls, tz=None): return _real_datetime(2026, 5, 18, 14, 0, 0, tzinfo=tz)
-    monkeypatch.setattr("watchdog.dt.datetime", _FakeNowMod)
+    monkeypatch.setattr("quant.monitor.watchdog.dt.datetime", _FakeNowMod)
 
     fb = FakeBroker()
     fb.set_latest_price("AAPL", 95.0)
@@ -510,16 +510,16 @@ def test_check_sepa_exits_failed_breakout_window_expired_skipped(tmp_path, monke
 
 def test_check_sepa_exits_gc_removes_exited_pivot_entries(tmp_path, monkeypatch):
     """A pivot for a symbol no longer in the portfolio is GC'd at end of pass."""
-    from watchdog import check_sepa_exits
+    from quant.monitor.watchdog import check_sepa_exits
     import json
 
-    monkeypatch.setattr("pending_plan.PENDING_PLAN_PATH", str(tmp_path / "plan.json"))
-    monkeypatch.setattr("config.PENDING_PLAN_PATH", str(tmp_path / "plan.json"))
-    monkeypatch.setattr("orders.PORTFOLIO_PATH", str(tmp_path / "port.json"))
-    monkeypatch.setattr("orders.HALT_PATH", str(tmp_path / "no_halt"))
-    monkeypatch.setattr("config.TELEGRAM_NOTIFY_PATH", str(tmp_path / "tg.json"))
-    monkeypatch.setattr("orders.ENTRY_PIVOTS_PATH", str(tmp_path / "pivots.json"))
-    monkeypatch.setattr("config.ENTRY_PIVOTS_PATH", str(tmp_path / "pivots.json"))
+    monkeypatch.setattr("quant.execution.pending_plan.PENDING_PLAN_PATH", str(tmp_path / "plan.json"))
+    monkeypatch.setattr("quant.config.PENDING_PLAN_PATH", str(tmp_path / "plan.json"))
+    monkeypatch.setattr("quant.execution.orders.PORTFOLIO_PATH", str(tmp_path / "port.json"))
+    monkeypatch.setattr("quant.execution.orders.HALT_PATH", str(tmp_path / "no_halt"))
+    monkeypatch.setattr("quant.config.TELEGRAM_NOTIFY_PATH", str(tmp_path / "tg.json"))
+    monkeypatch.setattr("quant.execution.orders.ENTRY_PIVOTS_PATH", str(tmp_path / "pivots.json"))
+    monkeypatch.setattr("quant.config.ENTRY_PIVOTS_PATH", str(tmp_path / "pivots.json"))
 
     # Two pivot records — one for held AAPL, one for exited NVDA.
     (tmp_path / "pivots.json").write_text(json.dumps({
@@ -562,7 +562,7 @@ def _stub_fetch_ohlcv_full(monkeypatch, symbol, *,
         ("Volume", symbol): volume or [1_000_000] * n,
     }, index=idx)
     df.columns = pd.MultiIndex.from_tuples(df.columns)
-    monkeypatch.setattr("data.fetch_ohlcv",
+    monkeypatch.setattr("quant.data.market.fetch_ohlcv",
                         lambda tickers, period="1y": df)
 
 
@@ -585,17 +585,17 @@ def _climax_ohlcv(symbol):
 
 def test_check_sepa_exits_climax_sells_half_and_tightens_trail(tmp_path, monkeypatch):
     """All three climax conditions → sell 50% MV + submit tighter trailing."""
-    from watchdog import check_sepa_exits
-    from broker import Order
+    from quant.monitor.watchdog import check_sepa_exits
+    from quant.execution.broker import Order
 
-    monkeypatch.setattr("pending_plan.PENDING_PLAN_PATH", str(tmp_path / "plan.json"))
-    monkeypatch.setattr("config.PENDING_PLAN_PATH", str(tmp_path / "plan.json"))
-    monkeypatch.setattr("orders.PORTFOLIO_PATH", str(tmp_path / "port.json"))
-    monkeypatch.setattr("orders.HALT_PATH", str(tmp_path / "no_halt"))
-    monkeypatch.setattr("orders.DAILY_TRADE_LOG", str(tmp_path / "daily.json"))
-    monkeypatch.setattr("config.TELEGRAM_NOTIFY_PATH", str(tmp_path / "tg.json"))
-    monkeypatch.setattr("orders.ENTRY_PIVOTS_PATH", str(tmp_path / "pivots.json"))
-    monkeypatch.setattr("config.ENTRY_PIVOTS_PATH", str(tmp_path / "pivots.json"))
+    monkeypatch.setattr("quant.execution.pending_plan.PENDING_PLAN_PATH", str(tmp_path / "plan.json"))
+    monkeypatch.setattr("quant.config.PENDING_PLAN_PATH", str(tmp_path / "plan.json"))
+    monkeypatch.setattr("quant.execution.orders.PORTFOLIO_PATH", str(tmp_path / "port.json"))
+    monkeypatch.setattr("quant.execution.orders.HALT_PATH", str(tmp_path / "no_halt"))
+    monkeypatch.setattr("quant.execution.orders.DAILY_TRADE_LOG", str(tmp_path / "daily.json"))
+    monkeypatch.setattr("quant.config.TELEGRAM_NOTIFY_PATH", str(tmp_path / "tg.json"))
+    monkeypatch.setattr("quant.execution.orders.ENTRY_PIVOTS_PATH", str(tmp_path / "pivots.json"))
+    monkeypatch.setattr("quant.config.ENTRY_PIVOTS_PATH", str(tmp_path / "pivots.json"))
 
     _seed_core_position(tmp_path, monkeypatch, shares=30.0,
                         market_value=3900.0,  # MV after run-up
@@ -634,17 +634,17 @@ def test_check_sepa_exits_climax_sells_half_and_tightens_trail(tmp_path, monkeyp
 
 def test_check_sepa_exits_climax_sets_climax_fired_true(tmp_path, monkeypatch):
     """After climax, portfolio.json position has climax_fired=True."""
-    from watchdog import check_sepa_exits
+    from quant.monitor.watchdog import check_sepa_exits
     import json
 
-    monkeypatch.setattr("pending_plan.PENDING_PLAN_PATH", str(tmp_path / "plan.json"))
-    monkeypatch.setattr("config.PENDING_PLAN_PATH", str(tmp_path / "plan.json"))
-    monkeypatch.setattr("orders.PORTFOLIO_PATH", str(tmp_path / "port.json"))
-    monkeypatch.setattr("orders.HALT_PATH", str(tmp_path / "no_halt"))
-    monkeypatch.setattr("orders.DAILY_TRADE_LOG", str(tmp_path / "daily.json"))
-    monkeypatch.setattr("config.TELEGRAM_NOTIFY_PATH", str(tmp_path / "tg.json"))
-    monkeypatch.setattr("orders.ENTRY_PIVOTS_PATH", str(tmp_path / "pivots.json"))
-    monkeypatch.setattr("config.ENTRY_PIVOTS_PATH", str(tmp_path / "pivots.json"))
+    monkeypatch.setattr("quant.execution.pending_plan.PENDING_PLAN_PATH", str(tmp_path / "plan.json"))
+    monkeypatch.setattr("quant.config.PENDING_PLAN_PATH", str(tmp_path / "plan.json"))
+    monkeypatch.setattr("quant.execution.orders.PORTFOLIO_PATH", str(tmp_path / "port.json"))
+    monkeypatch.setattr("quant.execution.orders.HALT_PATH", str(tmp_path / "no_halt"))
+    monkeypatch.setattr("quant.execution.orders.DAILY_TRADE_LOG", str(tmp_path / "daily.json"))
+    monkeypatch.setattr("quant.config.TELEGRAM_NOTIFY_PATH", str(tmp_path / "tg.json"))
+    monkeypatch.setattr("quant.execution.orders.ENTRY_PIVOTS_PATH", str(tmp_path / "pivots.json"))
+    monkeypatch.setattr("quant.config.ENTRY_PIVOTS_PATH", str(tmp_path / "pivots.json"))
 
     _seed_core_position(tmp_path, monkeypatch, shares=30.0, market_value=3900.0)
     _stub_fetch_ohlcv_full(monkeypatch, "AAPL", **_climax_ohlcv("AAPL"))
@@ -670,16 +670,16 @@ def test_check_sepa_exits_climax_sets_climax_fired_true(tmp_path, monkeypatch):
 
 def test_check_sepa_exits_climax_disables_r_multiple_on_next_run(tmp_path, monkeypatch):
     """With climax_fired=True, R-multiple is gated off even at >2R price."""
-    from watchdog import check_sepa_exits
+    from quant.monitor.watchdog import check_sepa_exits
 
-    monkeypatch.setattr("pending_plan.PENDING_PLAN_PATH", str(tmp_path / "plan.json"))
-    monkeypatch.setattr("config.PENDING_PLAN_PATH", str(tmp_path / "plan.json"))
-    monkeypatch.setattr("orders.PORTFOLIO_PATH", str(tmp_path / "port.json"))
-    monkeypatch.setattr("orders.HALT_PATH", str(tmp_path / "no_halt"))
-    monkeypatch.setattr("orders.DAILY_TRADE_LOG", str(tmp_path / "daily.json"))
-    monkeypatch.setattr("config.TELEGRAM_NOTIFY_PATH", str(tmp_path / "tg.json"))
-    monkeypatch.setattr("orders.ENTRY_PIVOTS_PATH", str(tmp_path / "pivots.json"))
-    monkeypatch.setattr("config.ENTRY_PIVOTS_PATH", str(tmp_path / "pivots.json"))
+    monkeypatch.setattr("quant.execution.pending_plan.PENDING_PLAN_PATH", str(tmp_path / "plan.json"))
+    monkeypatch.setattr("quant.config.PENDING_PLAN_PATH", str(tmp_path / "plan.json"))
+    monkeypatch.setattr("quant.execution.orders.PORTFOLIO_PATH", str(tmp_path / "port.json"))
+    monkeypatch.setattr("quant.execution.orders.HALT_PATH", str(tmp_path / "no_halt"))
+    monkeypatch.setattr("quant.execution.orders.DAILY_TRADE_LOG", str(tmp_path / "daily.json"))
+    monkeypatch.setattr("quant.config.TELEGRAM_NOTIFY_PATH", str(tmp_path / "tg.json"))
+    monkeypatch.setattr("quant.execution.orders.ENTRY_PIVOTS_PATH", str(tmp_path / "pivots.json"))
+    monkeypatch.setattr("quant.config.ENTRY_PIVOTS_PATH", str(tmp_path / "pivots.json"))
 
     # Use OHLCV that does NOT satisfy climax (return only, no range/vol).
     closes = [100.0] * 50 + [102, 105, 108, 112, 116, 121, 126, 130.0]
@@ -704,16 +704,16 @@ def test_check_sepa_exits_climax_disables_r_multiple_on_next_run(tmp_path, monke
 
 def test_check_sepa_exits_climax_allows_ma_trail_after_fired(tmp_path, monkeypatch):
     """With climax_fired=True and close < 21EMA, full exit fires via MA-trail."""
-    from watchdog import check_sepa_exits
+    from quant.monitor.watchdog import check_sepa_exits
 
-    monkeypatch.setattr("pending_plan.PENDING_PLAN_PATH", str(tmp_path / "plan.json"))
-    monkeypatch.setattr("config.PENDING_PLAN_PATH", str(tmp_path / "plan.json"))
-    monkeypatch.setattr("orders.PORTFOLIO_PATH", str(tmp_path / "port.json"))
-    monkeypatch.setattr("orders.HALT_PATH", str(tmp_path / "no_halt"))
-    monkeypatch.setattr("orders.DAILY_TRADE_LOG", str(tmp_path / "daily.json"))
-    monkeypatch.setattr("config.TELEGRAM_NOTIFY_PATH", str(tmp_path / "tg.json"))
-    monkeypatch.setattr("orders.ENTRY_PIVOTS_PATH", str(tmp_path / "pivots.json"))
-    monkeypatch.setattr("config.ENTRY_PIVOTS_PATH", str(tmp_path / "pivots.json"))
+    monkeypatch.setattr("quant.execution.pending_plan.PENDING_PLAN_PATH", str(tmp_path / "plan.json"))
+    monkeypatch.setattr("quant.config.PENDING_PLAN_PATH", str(tmp_path / "plan.json"))
+    monkeypatch.setattr("quant.execution.orders.PORTFOLIO_PATH", str(tmp_path / "port.json"))
+    monkeypatch.setattr("quant.execution.orders.HALT_PATH", str(tmp_path / "no_halt"))
+    monkeypatch.setattr("quant.execution.orders.DAILY_TRADE_LOG", str(tmp_path / "daily.json"))
+    monkeypatch.setattr("quant.config.TELEGRAM_NOTIFY_PATH", str(tmp_path / "tg.json"))
+    monkeypatch.setattr("quant.execution.orders.ENTRY_PIVOTS_PATH", str(tmp_path / "pivots.json"))
+    monkeypatch.setattr("quant.config.ENTRY_PIVOTS_PATH", str(tmp_path / "pivots.json"))
 
     # OHLCV: rise then crash → climax_check False but ma_trail_should_exit True.
     closes = list(range(89, 111)) + [80.0]
@@ -724,7 +724,7 @@ def test_check_sepa_exits_climax_allows_ma_trail_after_fired(tmp_path, monkeypat
     # Phase 1's MA-trail reads via data.fetch_prices too — stub it equivalently.
     import pandas as pd
     idx = pd.date_range("2026-01-01", periods=len(closes), freq="B")
-    monkeypatch.setattr("data.fetch_prices",
+    monkeypatch.setattr("quant.data.market.fetch_prices",
                         lambda tickers, period="2y":
                             pd.DataFrame({"AAPL": closes}, index=idx))
     _stub_baseline(monkeypatch)
@@ -741,7 +741,7 @@ def test_check_sepa_exits_climax_allows_ma_trail_after_fired(tmp_path, monkeypat
         "climax_fired": True,
     }])
     notifications = check_sepa_exits(snap, fb)
-    from pending_plan import load_plan
+    from quant.execution.pending_plan import load_plan
     plan = load_plan()
     assert plan is not None
     assert any(s.intent.symbol == "AAPL"
@@ -751,18 +751,18 @@ def test_check_sepa_exits_climax_allows_ma_trail_after_fired(tmp_path, monkeypat
 
 
 def test_check_price_moves_enforces_stop_with_market_sell(tmp_path, monkeypatch):
-    import watchdog
+    import quant.monitor.watchdog as watchdog
     import pandas as pd
     from tests.fakes import FakeBroker
 
-    monkeypatch.setattr("config.ENFORCE_STOPS", True)
+    monkeypatch.setattr("quant.config.ENFORCE_STOPS", True)
     # No HALT file: point HALT_PATH at a non-existent tmp path.
-    monkeypatch.setattr("config.HALT_PATH", str(tmp_path / "HALT"))
+    monkeypatch.setattr("quant.config.HALT_PATH", str(tmp_path / "HALT"))
 
     # Price series ending well below entry → from_entry breaches core stop (-8%).
     idx = pd.date_range(end=dt.date.today(), periods=5, freq="B")
     df = pd.DataFrame({"AAPL": [100.0, 100.0, 100.0, 100.0, 80.0]}, index=idx)
-    monkeypatch.setattr("data.fetch_prices", lambda tickers, period="6mo": df)
+    monkeypatch.setattr("quant.data.market.fetch_prices", lambda tickers, period="6mo": df)
 
     portfolio = {"positions": [{
         "ticker": "AAPL", "shares": 3.5, "entry_price": 100.0,
@@ -783,18 +783,18 @@ def test_check_price_moves_enforces_stop_with_market_sell(tmp_path, monkeypatch)
 
 def test_check_price_moves_no_enforce_when_halted(tmp_path, monkeypatch):
     """HALT file present → breach is detected but no sell is submitted."""
-    import watchdog
+    import quant.monitor.watchdog as watchdog
     import pandas as pd
     from tests.fakes import FakeBroker
 
-    monkeypatch.setattr("config.ENFORCE_STOPS", True)
+    monkeypatch.setattr("quant.config.ENFORCE_STOPS", True)
     halt = tmp_path / "HALT"
     halt.write_text("paused")  # HALT present
-    monkeypatch.setattr("config.HALT_PATH", str(halt))
+    monkeypatch.setattr("quant.config.HALT_PATH", str(halt))
 
     idx = pd.date_range(end=dt.date.today(), periods=5, freq="B")
     df = pd.DataFrame({"AAPL": [100.0, 100.0, 100.0, 100.0, 80.0]}, index=idx)
-    monkeypatch.setattr("data.fetch_prices", lambda tickers, period="6mo": df)
+    monkeypatch.setattr("quant.data.market.fetch_prices", lambda tickers, period="6mo": df)
 
     portfolio = {"positions": [{
         "ticker": "AAPL", "shares": 3.5, "entry_price": 100.0,
@@ -811,16 +811,16 @@ def test_check_price_moves_no_enforce_when_halted(tmp_path, monkeypatch):
 
 
 def test_check_price_moves_alert_only_when_enforce_disabled(tmp_path, monkeypatch):
-    import watchdog
+    import quant.monitor.watchdog as watchdog
     import pandas as pd
     from tests.fakes import FakeBroker
 
-    monkeypatch.setattr("config.ENFORCE_STOPS", False)
-    monkeypatch.setattr("config.HALT_PATH", str(tmp_path / "HALT"))
+    monkeypatch.setattr("quant.config.ENFORCE_STOPS", False)
+    monkeypatch.setattr("quant.config.HALT_PATH", str(tmp_path / "HALT"))
 
     idx = pd.date_range(end=dt.date.today(), periods=5, freq="B")
     df = pd.DataFrame({"AAPL": [100.0, 100.0, 100.0, 100.0, 80.0]}, index=idx)
-    monkeypatch.setattr("data.fetch_prices", lambda tickers, period="6mo": df)
+    monkeypatch.setattr("quant.data.market.fetch_prices", lambda tickers, period="6mo": df)
 
     portfolio = {"positions": [{
         "ticker": "AAPL", "shares": 3.5, "entry_price": 100.0,
@@ -839,7 +839,7 @@ def test_check_price_moves_alert_only_when_enforce_disabled(tmp_path, monkeypatc
 # ── I1: entry_date threaded into legacy positions for peak clamping ──
 
 def test_as_legacy_positions_passes_entry_date_through():
-    import watchdog, orders
+    import quant.monitor.watchdog as watchdog, quant.execution.orders as orders
     snap = orders.PortfolioSnapshot(
         synced_at="2026-06-24T00:00:00+00:00", alpaca_env="paper",
         cash=0.0, equity=1000.0,
@@ -856,16 +856,16 @@ def test_as_legacy_positions_passes_entry_date_through():
 # ── I2: stop-enforce prunes the queued SEPA sell to avoid double-sell ──
 
 def test_stop_enforce_cancels_pending_sepa_intent(tmp_path, monkeypatch):
-    import watchdog, datetime as dt
+    import quant.monitor.watchdog as watchdog, datetime as dt
     import pandas as pd
     from tests.fakes import FakeBroker
-    from pending_plan import PendingPlan, IntentState, Baseline, write_plan, load_plan
-    from orders import OrderIntent
+    from quant.execution.pending_plan import PendingPlan, IntentState, Baseline, write_plan, load_plan
+    from quant.execution.orders import OrderIntent
 
-    monkeypatch.setattr("config.ENFORCE_STOPS", True)
-    monkeypatch.setattr("config.HALT_PATH", str(tmp_path / "HALT"))
-    monkeypatch.setattr("pending_plan.PENDING_PLAN_PATH", str(tmp_path / "plan.json"))
-    monkeypatch.setattr("config.PENDING_PLAN_PATH", str(tmp_path / "plan.json"))
+    monkeypatch.setattr("quant.config.ENFORCE_STOPS", True)
+    monkeypatch.setattr("quant.config.HALT_PATH", str(tmp_path / "HALT"))
+    monkeypatch.setattr("quant.execution.pending_plan.PENDING_PLAN_PATH", str(tmp_path / "plan.json"))
+    monkeypatch.setattr("quant.config.PENDING_PLAN_PATH", str(tmp_path / "plan.json"))
 
     write_plan(PendingPlan(
         plan_id="p-1", tranche="core",
@@ -880,7 +880,7 @@ def test_stop_enforce_cancels_pending_sepa_intent(tmp_path, monkeypatch):
 
     idx = pd.date_range(end=dt.date.today(), periods=5, freq="B")
     df = pd.DataFrame({"AAPL": [100.0, 100.0, 100.0, 100.0, 80.0]}, index=idx)
-    monkeypatch.setattr("data.fetch_prices", lambda tickers, period="6mo": df)
+    monkeypatch.setattr("quant.data.market.fetch_prices", lambda tickers, period="6mo": df)
 
     portfolio = {"positions": [{
         "ticker": "AAPL", "shares": 3.5, "entry_price": 100.0,
@@ -914,7 +914,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 
 
 def _make_snap_opt(positions, cash=5000.0, equity=50_000.0):
-    from orders import PortfolioSnapshot
+    from quant.execution.orders import PortfolioSnapshot
     return PortfolioSnapshot(
         synced_at="2026-05-10T14:00:00+00:00",
         alpaca_env="paper", cash=cash, equity=equity,
@@ -926,7 +926,7 @@ def _make_snap_opt(positions, cash=5000.0, equity=50_000.0):
 
 def test_rebalance_check_silent_when_recent(monkeypatch):
     """With daily cadence + today's bump, check_rebalance must emit zero alerts."""
-    from watchdog import check_rebalance
+    from quant.monitor.watchdog import check_rebalance
     today = dt.date.today().isoformat()
     portfolio = {"positions": [], "last_rebalance": today}
     alerts = check_rebalance(portfolio)
@@ -935,7 +935,7 @@ def test_rebalance_check_silent_when_recent(monkeypatch):
 
 def test_rebalance_check_silent_within_grace_window(monkeypatch):
     """3 days ago is still inside the 7-day staleness window — no alert."""
-    from watchdog import check_rebalance
+    from quant.monitor.watchdog import check_rebalance
     three_days = (dt.date.today() - dt.timedelta(days=3)).isoformat()
     portfolio = {"positions": [], "last_rebalance": three_days}
     alerts = check_rebalance(portfolio)
@@ -944,7 +944,7 @@ def test_rebalance_check_silent_within_grace_window(monkeypatch):
 
 def test_rebalance_check_fires_when_truly_stale(monkeypatch):
     """> 7 days since rebalance → ONE critical alert about cron health."""
-    from watchdog import check_rebalance
+    from quant.monitor.watchdog import check_rebalance
     stale = (dt.date.today() - dt.timedelta(days=10)).isoformat()
     portfolio = {"positions": [], "last_rebalance": stale}
     alerts = check_rebalance(portfolio)
@@ -957,7 +957,7 @@ def test_rebalance_check_fires_when_truly_stale(monkeypatch):
 
 def test_check_buy_signals_uses_core_tranche(tmp_path, monkeypatch):
     """Submitted intent must carry tranche='core' so sync_state preserves it."""
-    import watchdog, orders, config
+    import quant.monitor.watchdog as watchdog, quant.execution.orders as orders, quant.config as config
     import pandas as pd
 
     monkeypatch.setattr(orders, "PORTFOLIO_PATH", str(tmp_path / "p.json"))
@@ -1016,7 +1016,7 @@ def test_check_buy_signals_uses_core_tranche(tmp_path, monkeypatch):
 def test_snapshot_falls_back_to_cache_on_broker_failure(tmp_path, monkeypatch):
     """If sync_state raises twice, snapshot returns a cache-backed snapshot
     instead of crashing — so SEPA / stop-loss checks can still run."""
-    import watchdog, orders, config
+    import quant.monitor.watchdog as watchdog, quant.execution.orders as orders, quant.config as config
     monkeypatch.setattr(orders, "PORTFOLIO_PATH", str(tmp_path / "p.json"))
     monkeypatch.setattr(config, "TELEGRAM_NOTIFY_PATH",
                         str(tmp_path / "tg.json"))
@@ -1053,14 +1053,14 @@ def test_snapshot_falls_back_to_cache_on_broker_failure(tmp_path, monkeypatch):
 def test_check_macro_shift_skips_score_persist_when_act_fails(tmp_path, monkeypatch):
     """If act_on_macro_flip raises, the new score must NOT be written.
     Otherwise tomorrow's run sees prev_regime=new and never retries the exit."""
-    import watchdog
+    import quant.monitor.watchdog as watchdog
     score_file = tmp_path / "last_macro_score.json"
     monkeypatch.setattr(watchdog, "_MACRO_SCORE_PATH", str(score_file))
 
     # Pre-seed prev score
     score_file.write_text(json.dumps({"score": 0.5, "regime": "expansion"}))
 
-    monkeypatch.setattr("macro.macro_regime_score", lambda: {
+    monkeypatch.setattr("quant.signals.macro.macro_regime_score", lambda: {
         "score": -0.5, "regime": "contraction",
         "indicators": {},
     })
@@ -1087,7 +1087,7 @@ def test_check_price_moves_peak_excludes_pre_entry_history(tmp_path, monkeypatch
 
     Setup: AAPL spiked to $200 last month, then dropped to $100 entry, now at $150.
     The "from peak" warning should reference the post-entry peak ($150), not $200."""
-    import watchdog
+    import quant.monitor.watchdog as watchdog
     import pandas as pd
 
     entry_date = (dt.date.today() - dt.timedelta(days=14)).isoformat()
@@ -1113,7 +1113,7 @@ def test_check_price_moves_peak_excludes_pre_entry_history(tmp_path, monkeypatch
     while len(values) < n:
         values.append(values[-1])
     df = pd.DataFrame({"AAPL": values}, index=idx)
-    monkeypatch.setattr("data.fetch_prices",
+    monkeypatch.setattr("quant.data.market.fetch_prices",
                         lambda tickers, period="6mo": df)
 
     alerts = watchdog.check_price_moves(portfolio)
@@ -1125,31 +1125,31 @@ def test_check_price_moves_peak_excludes_pre_entry_history(tmp_path, monkeypatch
 # ── W49: U-shape volume projection ────────────────────────────────
 
 def test_intraday_volume_fraction_open_burst():
-    from watchdog import _intraday_volume_fraction
+    from quant.monitor.watchdog import _intraday_volume_fraction
     # 30 min in → halfway through the opening 25% block → ~12.5%
     assert abs(_intraday_volume_fraction(30) - 0.125) < 0.001
 
 
 def test_intraday_volume_fraction_midday_trough():
-    from watchdog import _intraday_volume_fraction
+    from quant.monitor.watchdog import _intraday_volume_fraction
     # 195 min in (~12:45) → 25% + (135/270) × 50% = 25% + 25% = 50%
     assert abs(_intraday_volume_fraction(195) - 0.50) < 0.001
 
 
 def test_intraday_volume_fraction_closing_burst():
-    from watchdog import _intraday_volume_fraction
+    from quant.monitor.watchdog import _intraday_volume_fraction
     # 360 min in (~15:30) → 75% + (30/60) × 25% = 87.5%
     assert abs(_intraday_volume_fraction(360) - 0.875) < 0.001
 
 
 def test_intraday_volume_fraction_after_close():
-    from watchdog import _intraday_volume_fraction
+    from quant.monitor.watchdog import _intraday_volume_fraction
     # 400 min — past 16:00, caps at 1.0
     assert _intraday_volume_fraction(400) == 1.0
 
 
 def test_intraday_volume_fraction_zero_at_open():
-    from watchdog import _intraday_volume_fraction
+    from quant.monitor.watchdog import _intraday_volume_fraction
     assert _intraday_volume_fraction(0) == 0.0
     assert _intraday_volume_fraction(-5) == 0.0
 
@@ -1158,7 +1158,7 @@ def test_intraday_volume_fraction_zero_at_open():
 
 def test_buy_signals_today_dedup(tmp_path, monkeypatch):
     """Once a ticker fires today, _load_today_buy_signals returns it."""
-    import watchdog
+    import quant.monitor.watchdog as watchdog
     monkeypatch.setattr(watchdog, "_BUY_SIGNALS_TODAY_PATH",
                         str(tmp_path / "bs.json"))
     assert watchdog._load_today_buy_signals() == set()
@@ -1169,7 +1169,7 @@ def test_buy_signals_today_dedup(tmp_path, monkeypatch):
 
 def test_buy_signals_resets_on_date_change(tmp_path, monkeypatch):
     """Yesterday's entries don't count for today's dedup."""
-    import watchdog
+    import quant.monitor.watchdog as watchdog
     monkeypatch.setattr(watchdog, "_BUY_SIGNALS_TODAY_PATH",
                         str(tmp_path / "bs.json"))
     yesterday = (dt.date.today() - dt.timedelta(days=1)).isoformat()
@@ -1183,7 +1183,7 @@ def test_buy_signals_resets_on_date_change(tmp_path, monkeypatch):
 
 def test_timeutils_is_rth_now_weekend():
     """Weekend should always return False regardless of time."""
-    import timeutils
+    import quant.infra.timeutils as timeutils
     saturday_noon = dt.datetime(2026, 4, 18, 12, 0)   # Sat
     sunday_noon = dt.datetime(2026, 4, 19, 12, 0)     # Sun
     with patch.object(timeutils, "now_et", return_value=saturday_noon):
@@ -1193,14 +1193,14 @@ def test_timeutils_is_rth_now_weekend():
 
 
 def test_timeutils_is_rth_now_weekday_in_session():
-    import timeutils
+    import quant.infra.timeutils as timeutils
     weekday_noon = dt.datetime(2026, 4, 17, 12, 0)   # Fri
     with patch.object(timeutils, "now_et", return_value=weekday_noon):
         assert timeutils.is_rth_now() is True
 
 
 def test_timeutils_is_rth_now_weekday_after_close():
-    import timeutils
+    import quant.infra.timeutils as timeutils
     weekday_evening = dt.datetime(2026, 4, 17, 18, 0)
     with patch.object(timeutils, "now_et", return_value=weekday_evening):
         assert timeutils.is_rth_now() is False
@@ -1209,7 +1209,7 @@ def test_timeutils_is_rth_now_weekday_after_close():
 # ── W17: _set_climax_fired writes atomically ──────────────────────
 
 def test_set_climax_fired_locks_and_writes(tmp_path, monkeypatch):
-    import watchdog, orders
+    import quant.monitor.watchdog as watchdog, quant.execution.orders as orders
     portfolio_path = tmp_path / "p.json"
     cache = {
         "positions": [
@@ -1229,7 +1229,7 @@ def test_set_climax_fired_locks_and_writes(tmp_path, monkeypatch):
 
 def test_set_climax_fired_noop_on_missing_file(tmp_path, monkeypatch):
     """No portfolio.json → no error, just return silently."""
-    import watchdog, orders
+    import quant.monitor.watchdog as watchdog, quant.execution.orders as orders
     monkeypatch.setattr(orders, "PORTFOLIO_PATH", str(tmp_path / "no_such.json"))
     watchdog._set_climax_fired("AAPL")   # must not raise
 
@@ -1239,7 +1239,7 @@ def test_set_climax_fired_noop_on_missing_file(tmp_path, monkeypatch):
 def test_buy_signal_not_stamped_when_submit_skipped(tmp_path, monkeypatch):
     """If execute_plan returns skipped (HALT, cash gate), don't stamp dedup —
     a later tick on the same day should still get a chance to fire."""
-    import watchdog, orders, config
+    import quant.monitor.watchdog as watchdog, quant.execution.orders as orders, quant.config as config
     import pandas as pd
     monkeypatch.setattr(orders, "PORTFOLIO_PATH", str(tmp_path / "p.json"))
     monkeypatch.setattr(orders, "HALT_PATH", str(tmp_path / "HALT"))
@@ -1282,7 +1282,7 @@ def test_buy_signal_not_stamped_when_submit_skipped(tmp_path, monkeypatch):
 
 def test_snapshot_degraded_notifies_only_on_transition(tmp_path, monkeypatch):
     """5 consecutive degraded snapshots → ONE TG notification, not 5."""
-    import watchdog, orders, config
+    import quant.monitor.watchdog as watchdog, quant.execution.orders as orders, quant.config as config
     monkeypatch.setattr(orders, "PORTFOLIO_PATH", str(tmp_path / "p.json"))
     monkeypatch.setattr(config, "TELEGRAM_NOTIFY_PATH",
                         str(tmp_path / "tg.json"))
@@ -1313,7 +1313,7 @@ def test_snapshot_degraded_notifies_only_on_transition(tmp_path, monkeypatch):
 
 def test_snapshot_recovery_notifies_once(tmp_path, monkeypatch):
     """degraded → healthy transition emits one RECOVERED notification."""
-    import watchdog, orders, config
+    import quant.monitor.watchdog as watchdog, quant.execution.orders as orders, quant.config as config
     monkeypatch.setattr(orders, "PORTFOLIO_PATH", str(tmp_path / "p.json"))
     monkeypatch.setattr(config, "TELEGRAM_NOTIFY_PATH",
                         str(tmp_path / "tg.json"))
@@ -1354,7 +1354,7 @@ def test_snapshot_recovery_notifies_once(tmp_path, monkeypatch):
 def test_check_sepa_exits_live_prices_calls_latest_quote(tmp_path, monkeypatch):
     """When live_prices=True, current_price comes from broker.latest_quote
     (mid), NOT from snap.market_value/shares."""
-    import watchdog, orders, config, sepa_exits
+    import quant.monitor.watchdog as watchdog, quant.execution.orders as orders, quant.config as config, quant.risk.sepa_exits as sepa_exits
     import pandas as pd
     monkeypatch.setattr(orders, "PORTFOLIO_PATH", str(tmp_path / "p.json"))
     monkeypatch.setattr(orders, "HALT_PATH", str(tmp_path / "no_halt"))
@@ -1369,7 +1369,7 @@ def test_check_sepa_exits_live_prices_calls_latest_quote(tmp_path, monkeypatch):
         ("Volume", "AAPL"): [1_000_000] * 30,
     }, index=idx)
     df.columns = pd.MultiIndex.from_tuples(df.columns)
-    monkeypatch.setattr("data.fetch_ohlcv", lambda *a, **kw: df)
+    monkeypatch.setattr("quant.data.market.fetch_ohlcv", lambda *a, **kw: df)
 
     # Make next_r_tier_action fire so we observe current_price was used
     captured = {}
@@ -1400,7 +1400,7 @@ def test_check_sepa_exits_live_prices_calls_latest_quote(tmp_path, monkeypatch):
 
 def test_check_sepa_exits_default_uses_snap_price(tmp_path, monkeypatch):
     """Without live_prices, current_price falls back to snap-derived."""
-    import watchdog, orders, config, sepa_exits
+    import quant.monitor.watchdog as watchdog, quant.execution.orders as orders, quant.config as config, quant.risk.sepa_exits as sepa_exits
     import pandas as pd
     monkeypatch.setattr(orders, "PORTFOLIO_PATH", str(tmp_path / "p.json"))
     monkeypatch.setattr(orders, "HALT_PATH", str(tmp_path / "no_halt"))
@@ -1414,7 +1414,7 @@ def test_check_sepa_exits_default_uses_snap_price(tmp_path, monkeypatch):
         ("Volume", "AAPL"): [1_000_000] * 30,
     }, index=idx)
     df.columns = pd.MultiIndex.from_tuples(df.columns)
-    monkeypatch.setattr("data.fetch_ohlcv", lambda *a, **kw: df)
+    monkeypatch.setattr("quant.data.market.fetch_ohlcv", lambda *a, **kw: df)
 
     captured = {}
     def spy(pos, current_price):
@@ -1444,10 +1444,9 @@ def test_check_sepa_exits_default_uses_snap_price(tmp_path, monkeypatch):
 
 def test_log_daily_appends_one_row_only(tmp_path, monkeypatch):
     """Daily call writes exactly one CSV row; second same-day call no-ops."""
-    import watchdog
+    import quant.monitor.watchdog as watchdog
     log_path = tmp_path / "daily_log.csv"
-    monkeypatch.setattr("watchdog.os.path.dirname",
-                        lambda _p: str(tmp_path))
+    monkeypatch.setattr("quant.paths.REPO_ROOT", str(tmp_path))
 
     portfolio = {"positions": [{"ticker": "X"}], "cash": 100.0}
     watchdog.log_daily(portfolio, total_value=1100.0, total_pnl_pct=10.0)
@@ -1460,7 +1459,7 @@ def test_log_daily_appends_one_row_only(tmp_path, monkeypatch):
 
 
 def test_get_screened_stocks_prefers_buy_candidates(tmp_path, monkeypatch):
-    import json, watchdog, investor_agent
+    import json, quant.monitor.watchdog as watchdog, quant.agent.investor as investor_agent
     path = tmp_path / "buy_candidates.json"
     path.write_text(json.dumps({"generated_at": "x", "picks": [
         {"ticker": "AAA", "rationale": "r", "strategies": ["value"]},
@@ -1473,19 +1472,19 @@ def test_get_screened_stocks_prefers_buy_candidates(tmp_path, monkeypatch):
 
 
 def test_get_screened_stocks_falls_back_to_screener(tmp_path, monkeypatch):
-    import investor_agent, watchdog
+    import quant.agent.investor as investor_agent, quant.monitor.watchdog as watchdog
     import pandas as pd
     monkeypatch.setattr(investor_agent, "BUY_CANDIDATES_PATH",
                         str(tmp_path / "missing.json"))
     monkeypatch.setattr(watchdog, "_load_screener_cache", lambda: None)
-    monkeypatch.setattr("screener.screen_stocks", lambda: pd.DataFrame([{"ticker": "ZZZ"}]))
+    monkeypatch.setattr("quant.signals.screener.screen_stocks", lambda: pd.DataFrame([{"ticker": "ZZZ"}]))
     df = watchdog._get_screened_stocks()
     assert list(df["ticker"]) == ["ZZZ"]
 
 
 def test_get_screened_stocks_stale_candidates_falls_back_to_screener(tmp_path, monkeypatch):
     """buy_candidates.json older than ENSEMBLE_CANDIDATES_MAX_AGE_HOURS is ignored."""
-    import json, os, watchdog, investor_agent, config
+    import json, os, quant.monitor.watchdog as watchdog, quant.agent.investor as investor_agent, quant.config as config
     import pandas as pd
 
     path = tmp_path / "buy_candidates.json"
@@ -1507,7 +1506,7 @@ def test_get_screened_stocks_stale_candidates_falls_back_to_screener(tmp_path, m
 
 def test_get_screened_stocks_fresh_candidates_preferred(tmp_path, monkeypatch):
     """A FRESH buy_candidates.json (within threshold) is still preferred over screener."""
-    import json, os, watchdog, investor_agent, config
+    import json, os, quant.monitor.watchdog as watchdog, quant.agent.investor as investor_agent, quant.config as config
     import pandas as pd
 
     path = tmp_path / "buy_candidates.json"
@@ -1530,7 +1529,7 @@ def test_get_screened_stocks_fresh_candidates_preferred(tmp_path, monkeypatch):
 # ── daily ensemble trigger (option C: run_ensemble once from daily watchdog) ──
 
 def test_run_daily_ensemble_failopen(monkeypatch):
-    import watchdog, run_ensemble
+    import quant.monitor.watchdog as watchdog, quant.app.ensemble as run_ensemble
     def boom():
         raise RuntimeError("ensemble blew up")
     monkeypatch.setattr(run_ensemble, "run", boom)
@@ -1538,7 +1537,7 @@ def test_run_daily_ensemble_failopen(monkeypatch):
 
 
 def test_run_daily_ensemble_invokes_run(monkeypatch):
-    import watchdog, run_ensemble
+    import quant.monitor.watchdog as watchdog, quant.app.ensemble as run_ensemble
     called = []
     monkeypatch.setattr(run_ensemble, "run",
                         lambda: called.append(True) or [{"ticker": "AAA"}])

@@ -12,6 +12,7 @@ Produces:
   - Hotspot alerts that may impact our portfolio
 """
 import os
+from quant import paths
 import json
 import logging
 import time
@@ -22,11 +23,11 @@ from typing import Dict, List, Tuple
 
 import pandas as pd
 
-from fileio import atomic_write_json
+from quant.infra.fileio import atomic_write_json
 
 _log = logging.getLogger(__name__)
 
-CACHE_DIR = os.path.join(os.path.dirname(__file__), ".cache")
+CACHE_DIR = os.path.join(paths.REPO_ROOT, ".cache")
 os.makedirs(CACHE_DIR, exist_ok=True)
 
 # ── Sentiment keywords ──────────────────────────────────────────
@@ -51,7 +52,7 @@ TICKER_PATTERN = re.compile(r'\$([A-Z]{1,5})\b')
 TICKER_MENTION = re.compile(r'\b([A-Z]{2,5})\b')
 
 # Tickers we care about (from our universe)
-from config import ETF_UNIVERSE, WATCHLIST, SAFE_HAVEN
+from quant.config import ETF_UNIVERSE, WATCHLIST, SAFE_HAVEN
 OUR_TICKERS = set(ETF_UNIVERSE + WATCHLIST + [SAFE_HAVEN])
 
 # Common words to exclude from ticker detection

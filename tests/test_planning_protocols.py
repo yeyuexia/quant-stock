@@ -1,11 +1,11 @@
 """Verify the planning-layer Protocols + rule-based implementations."""
-from planning import TargetBuilder, TargetBuilderOutput, IntentPricer, IntentPricerOutput
-from orders import OrderIntent
-from planner import PricingContext, RuleBasedIntentPricer
+from quant.execution.planning import TargetBuilder, TargetBuilderOutput, IntentPricer, IntentPricerOutput
+from quant.execution.orders import OrderIntent
+from quant.execution.planner import PricingContext, RuleBasedIntentPricer
 
 
 def test_rule_based_core_implements_target_builder_protocol():
-    from rebalancer import RuleBasedCoreTargetBuilder
+    from quant.execution.rebalancer import RuleBasedCoreTargetBuilder
     builder = RuleBasedCoreTargetBuilder()
     # Structural check: has build() returning TargetBuilderOutput-shaped object
     assert hasattr(builder, "build")
@@ -14,7 +14,7 @@ def test_rule_based_core_implements_target_builder_protocol():
 
 
 def test_rule_based_aggressive_implements_target_builder_protocol():
-    from rebalancer import RuleBasedAggressiveTargetBuilder
+    from quant.execution.rebalancer import RuleBasedAggressiveTargetBuilder
     builder = RuleBasedAggressiveTargetBuilder()
     assert hasattr(builder, "build")
 
@@ -52,19 +52,19 @@ def test_target_builder_output_has_required_fields():
 def test_rebalancer_run_accepts_protocol_target_builder(tmp_path, monkeypatch):
     """rebalancer.run should work with a Protocol-conforming TargetBuilder,
     not only a zero-arg callable."""
-    import rebalancer, orders, config as cfg
-    from pending_plan import load_plan
+    import quant.execution.rebalancer as rebalancer, quant.execution.orders as orders, quant.config as cfg
+    from quant.execution.pending_plan import load_plan
     from tests.fakes import FakeBroker
-    from planning import TargetBuilderOutput
+    from quant.execution.planning import TargetBuilderOutput
 
     monkeypatch.setattr(orders, "HALT_PATH", str(tmp_path / "no_halt"))
     monkeypatch.setattr(orders, "DAILY_TRADE_LOG", str(tmp_path / "log.json"))
     monkeypatch.setattr(orders, "PENDING_ORDERS_PATH", str(tmp_path / "pend.json"))
     monkeypatch.setattr(orders, "PORTFOLIO_PATH", str(tmp_path / "port.json"))
-    monkeypatch.setattr("pending_plan.PENDING_PLAN_PATH", str(tmp_path / "plan.json"))
+    monkeypatch.setattr("quant.execution.pending_plan.PENDING_PLAN_PATH", str(tmp_path / "plan.json"))
     monkeypatch.setattr(cfg, "EXECUTOR_SHADOW_MODE", False)
 
-    import baseline as bl
+    import quant.signals.baseline as bl
     monkeypatch.setattr(bl, "_fetch_spy", lambda: 480.0)
     monkeypatch.setattr(bl, "_fetch_vix", lambda: 14.0)
     monkeypatch.setattr(bl, "_fetch_macro_score", lambda: 0.0)

@@ -21,7 +21,7 @@ LOG = logging.getLogger(__name__)
 _REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if _REPO_ROOT not in sys.path:
     sys.path.insert(0, _REPO_ROOT)
-from fileio import (  # noqa: E402
+from quant.infra.fileio import (  # noqa: E402
     atomic_write_json, atomic_append_text, read_modify_write_json,
 )
 
@@ -242,7 +242,7 @@ def _write_tg_notification(result: ApplierResult,
     _root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     if _root not in _sys.path:
         _sys.path.insert(0, _root)
-    from notifications import append_notification
+    from quant.infra.notifications import append_notification
     message = _format_tg_message(result, review_context)
     # Target the quant subagent's own TG path (env-overridable + test-patchable);
     # falls back to config.TELEGRAM_NOTIFY_PATH inside the helper when None.

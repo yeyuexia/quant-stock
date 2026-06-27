@@ -15,7 +15,7 @@ integration = pytest.mark.integration
 
 @integration
 def test_submit_limit_on_paper_roundtrips():
-    from broker import Broker
+    from quant.execution.broker import Broker
     if not (os.environ.get("ALPACA_API_KEY") and os.environ.get("ALPACA_API_SECRET")):
         pytest.skip("Alpaca credentials not set")
     b = Broker(env="paper")
@@ -37,10 +37,10 @@ def test_submit_limit_on_paper_roundtrips():
 @integration
 def test_executor_runs_against_paper_with_shadow_mode():
     """Smoke: write a minimal plan, run one executor tick in shadow mode."""
-    from broker import Broker
-    from pending_plan import PendingPlan, IntentState, Baseline, write_plan, clear_plan
-    from orders import OrderIntent
-    import executor, config as cfg
+    from quant.execution.broker import Broker
+    from quant.execution.pending_plan import PendingPlan, IntentState, Baseline, write_plan, clear_plan
+    from quant.execution.orders import OrderIntent
+    import quant.execution.executor as executor, quant.config as cfg
     if not (os.environ.get("ALPACA_API_KEY") and os.environ.get("ALPACA_API_SECRET")):
         pytest.skip("Alpaca credentials not set")
     b = Broker(env="paper")

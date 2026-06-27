@@ -1,13 +1,13 @@
 # tests/test_pending_plan.py
 import datetime as dt
-from pending_plan import (
+from quant.execution.pending_plan import (
     PendingPlan, IntentState, Baseline, write_plan, load_plan, clear_plan,
 )
-from orders import OrderIntent
+from quant.execution.orders import OrderIntent
 from unittest.mock import patch
 import json
 import os
-import pending_plan
+import quant.execution.pending_plan as pending_plan
 import pytest
 import sys
 
@@ -22,7 +22,7 @@ def _sample_intent(symbol="SPY", notional=1000.0):
 
 
 def test_write_then_load_roundtrips(tmp_path, monkeypatch):
-    monkeypatch.setattr("pending_plan.PENDING_PLAN_PATH", str(tmp_path / "plan.json"))
+    monkeypatch.setattr("quant.execution.pending_plan.PENDING_PLAN_PATH", str(tmp_path / "plan.json"))
     baseline = Baseline(
         spy=480.0, vix=14.0, macro_score=0.12,
         news_cursor_at=dt.datetime(2026, 4, 17, 13, 35, tzinfo=dt.timezone.utc),
@@ -44,12 +44,12 @@ def test_write_then_load_roundtrips(tmp_path, monkeypatch):
 
 
 def test_load_returns_none_when_absent(tmp_path, monkeypatch):
-    monkeypatch.setattr("pending_plan.PENDING_PLAN_PATH", str(tmp_path / "missing.json"))
+    monkeypatch.setattr("quant.execution.pending_plan.PENDING_PLAN_PATH", str(tmp_path / "missing.json"))
     assert load_plan() is None
 
 
 def test_clear_removes_file(tmp_path, monkeypatch):
-    monkeypatch.setattr("pending_plan.PENDING_PLAN_PATH", str(tmp_path / "plan.json"))
+    monkeypatch.setattr("quant.execution.pending_plan.PENDING_PLAN_PATH", str(tmp_path / "plan.json"))
     baseline = Baseline(spy=480.0, vix=14.0, macro_score=0.0,
                         news_cursor_at=dt.datetime(2026, 4, 17, tzinfo=dt.timezone.utc))
     plan = PendingPlan(plan_id="t", tranche="core", created_at=baseline.news_cursor_at,
@@ -83,11 +83,11 @@ from unittest.mock import patch
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 
-import pending_plan
-from pending_plan import (
+import quant.execution.pending_plan as pending_plan
+from quant.execution.pending_plan import (
     PendingPlan, IntentState, Baseline, write_plan, load_plan, clear_plan,
 )
-from orders import OrderIntent
+from quant.execution.orders import OrderIntent
 
 
 def _plan(tmp_path, monkeypatch):

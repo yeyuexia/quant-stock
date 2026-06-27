@@ -10,7 +10,7 @@ import time
 import datetime as dt
 import pytest
 
-from broker import Broker, BrokerError
+from quant.execution.broker import Broker, BrokerError
 
 pytestmark = pytest.mark.integration
 
@@ -54,11 +54,11 @@ def test_submit_bracket(broker):
 
 def test_rebalancer_dry_run(broker, tmp_path, monkeypatch):
     """End-to-end: build a plan against an empty paper account."""
-    monkeypatch.setattr("orders.PORTFOLIO_PATH", str(tmp_path / "portfolio.json"))
-    monkeypatch.setattr("orders.DAILY_LOG_PATH", str(tmp_path / "daily_log.csv"))
-    monkeypatch.setattr("orders.HALT_PATH", str(tmp_path / "HALT"))
-    monkeypatch.setattr("orders.DAILY_TRADE_LOG", str(tmp_path / "daily_trade_log.json"))
-    monkeypatch.setattr("orders.PENDING_ORDERS_PATH", str(tmp_path / "pending_orders.json"))
+    monkeypatch.setattr("quant.execution.orders.PORTFOLIO_PATH", str(tmp_path / "portfolio.json"))
+    monkeypatch.setattr("quant.execution.orders.DAILY_LOG_PATH", str(tmp_path / "daily_log.csv"))
+    monkeypatch.setattr("quant.execution.orders.HALT_PATH", str(tmp_path / "HALT"))
+    monkeypatch.setattr("quant.execution.orders.DAILY_TRADE_LOG", str(tmp_path / "daily_trade_log.json"))
+    monkeypatch.setattr("quant.execution.orders.PENDING_ORDERS_PATH", str(tmp_path / "pending_orders.json"))
 
-    from rebalancer import run
+    from quant.execution.rebalancer import run
     run(tranche="core", dry_run=True, force=True, broker=broker)
