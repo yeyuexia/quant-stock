@@ -1141,7 +1141,23 @@ def _save_screener_cache(df: "pd.DataFrame") -> None:
 
 
 def _get_screened_stocks() -> "pd.DataFrame":
-    """Return screener results from 1-hour cache, or run a fresh screen."""
+    """Candidate source for check_buy_signals.
+
+    Prefers the ensemble agent's vetted top-N (.cache/buy_candidates.json); if
+    that's absent/empty, falls back to the raw screener (1-hour cache or fresh).
+    """
+    import investor_agent
+    try:
+        if os.path.exists(investor_agent.BUY_CANDIDATES_PATH):
+            with open(investor_agent.BUY_CANDIDATES_PATH) as f:
+                data = json.load(f)
+            picks = data.get("picks", [])
+            if picks:
+                return pd.DataFrame(
+                    [{"ticker": p["ticker"]} for p in picks if p.get("ticker")])
+    except (OSError, json.JSONDecodeError, KeyError):
+        pass  # fall through to screener
+
     cached = _load_screener_cache()
     if cached is not None and not cached.empty:
         return cached

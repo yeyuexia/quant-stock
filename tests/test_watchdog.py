@@ -1459,3 +1459,25 @@ def test_log_daily_appends_one_row_only(tmp_path, monkeypatch):
     assert content[1].count(",") == 5
 
 
+def test_get_screened_stocks_prefers_buy_candidates(tmp_path, monkeypatch):
+    import json, watchdog, investor_agent
+    path = tmp_path / "buy_candidates.json"
+    path.write_text(json.dumps({"generated_at": "x", "picks": [
+        {"ticker": "AAA", "rationale": "r", "strategies": ["value"]},
+        {"ticker": "BBB", "rationale": "r", "strategies": ["canslim"]},
+    ]}))
+    monkeypatch.setattr(investor_agent, "BUY_CANDIDATES_PATH", str(path))
+
+    df = watchdog._get_screened_stocks()
+    assert list(df["ticker"]) == ["AAA", "BBB"]
+
+
+def test_get_screened_stocks_falls_back_to_screener(tmp_path, monkeypatch):
+    import investor_agent, watchdog
+    import pandas as pd
+    monkeypatch.setattr(investor_agent, "BUY_CANDIDATES_PATH",
+                        str(tmp_path / "missing.json"))
+    monkeypatch.setattr(watchdog, "_load_screener_cache", lambda: None)
+    monkeypatch.setattr("screener.screen_stocks", lambda: pd.DataFrame([{"ticker": "ZZZ"}]))
+    df = watchdog._get_screened_stocks()
+    assert list(df["ticker"]) == ["ZZZ"]
