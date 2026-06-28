@@ -125,226 +125,319 @@
     .ens .ar{justify-content:center;transform:rotate(90deg)}
     .glossary dl{grid-template-columns:1fr}
   }
+
+  /* Language toggle */
+  #langtoggle{position:fixed;top:10px;right:12px;z-index:50;display:flex;gap:4px}
+  #langtoggle button{cursor:pointer;font:inherit;padding:2px 8px;border-radius:6px;border:1px solid var(--line);background:transparent;color:inherit;opacity:.55}
+  #langtoggle button.active{opacity:1;font-weight:600;border-color:currentColor}
+  body[data-lang="en"] .lang-zh{display:none}
+  body[data-lang="zh"] .lang-en{display:none}
 </style>
 </head>
 <body>
 
+<div id="langtoggle" aria-label="language">
+  <button data-setlang="en">EN</button><button data-setlang="zh">中文</button>
+</div>
+
 <header class="hero">
   <div class="wrap">
-    <span class="badge">System Overview · living document</span>
-    <h1>Automated Quant Trading System</h1>
-    <p class="lead">A self-running pipeline that screens US stocks, has an AI agent pick the best buy candidates, times entries with coded rules, and executes on a <strong>paper</strong> Alpaca account — all behind a layered safety net. This page explains the whole thing, from the 10,000-ft view down to each moving part.</p>
+    <span class="badge"><span class="lang-en">System Overview · living document</span><span class="lang-zh">系统概览 · 持续更新文档</span></span>
+    <h1><span class="lang-en">Automated Quant Trading System</span><span class="lang-zh">自动化量化交易系统</span></h1>
+    <p class="lead lang-en">A self-running pipeline that screens US stocks, has an AI agent pick the best buy candidates, times entries with coded rules, and executes on a <strong>paper</strong> Alpaca account — all behind a layered safety net. This page explains the whole thing, from the 10,000-ft view down to each moving part.</p>
+    <p class="lead lang-zh">一套自动运行的流水线：筛选美股、由 AI 智能体选出最佳买入标的、通过编码规则把握入场时机，并在 Alpaca <strong>模拟</strong>账户中执行——全程由多层安全防护兜底。本页从全局视角出发，逐一介绍每个关键模块。</p>
     <div class="factgrid">
-      <div class="fact"><div class="n">$100K</div><div class="l">Paper portfolio</div></div>
-      <div class="fact"><div class="n">2</div><div class="l">Tranches (core + aggressive)</div></div>
-      <div class="fact"><div class="n">2&nbsp;→&nbsp;1</div><div class="l">Strategies → AI agent</div></div>
-      <div class="fact"><div class="n">Top&nbsp;4</div><div class="l">Daily buy candidates</div></div>
-      <div class="fact"><div class="n">Auto</div><div class="l">Buys & stop exits</div></div>
+      <div class="fact"><div class="n">$100K</div><div class="l"><span class="lang-en">Paper portfolio</span><span class="lang-zh">模拟投资组合</span></div></div>
+      <div class="fact"><div class="n">2</div><div class="l"><span class="lang-en">Tranches (core + aggressive)</span><span class="lang-zh">份额（核心 + 激进）</span></div></div>
+      <div class="fact"><div class="n">2&nbsp;→&nbsp;1</div><div class="l"><span class="lang-en">Strategies → AI agent</span><span class="lang-zh">策略 → AI 智能体</span></div></div>
+      <div class="fact"><div class="n">Top&nbsp;4</div><div class="l"><span class="lang-en">Daily buy candidates</span><span class="lang-zh">每日买入候选</span></div></div>
+      <div class="fact"><div class="n">Auto</div><div class="l"><span class="lang-en">Buys & stop exits</span><span class="lang-zh">自动买入与止损</span></div></div>
     </div>
   </div>
 </header>
 
 <nav class="top"><div class="wrap">
-  <a href="architecture.html" style="color:var(--accent);border:1px solid rgba(56,189,248,.4)">🔍 Interactive Graph</a>
-  <a href="#overview">Overview</a>
-  <a href="#pipeline">Pipeline</a>
-  <a href="#ensemble">AI Ensemble</a>
-  <a href="#timeline">Daily Timeline</a>
-  <a href="#components">Components</a>
-  <a href="#safety">Risk &amp; Safety</a>
-  <a href="#exits">Exits</a>
-  <a href="#glossary">Glossary</a>
+  <a href="architecture.html" style="color:var(--accent);border:1px solid rgba(56,189,248,.4)">🔍 <span class="lang-en">Interactive Graph</span><span class="lang-zh">交互式架构图</span></a>
+  <a href="#overview"><span class="lang-en">Overview</span><span class="lang-zh">概览</span></a>
+  <a href="#pipeline"><span class="lang-en">Pipeline</span><span class="lang-zh">流水线</span></a>
+  <a href="#ensemble"><span class="lang-en">AI Ensemble</span><span class="lang-zh">AI 集成</span></a>
+  <a href="#timeline"><span class="lang-en">Daily Timeline</span><span class="lang-zh">每日时间表</span></a>
+  <a href="#components"><span class="lang-en">Components</span><span class="lang-zh">组件</span></a>
+  <a href="#safety"><span class="lang-en">Risk &amp; Safety</span><span class="lang-zh">风控与安全</span></a>
+  <a href="#exits"><span class="lang-en">Exits</span><span class="lang-zh">出场</span></a>
+  <a href="#glossary"><span class="lang-en">Glossary</span><span class="lang-zh">术语表</span></a>
 </div></nav>
 
 <!-- OVERVIEW -->
 <section id="overview"><div class="wrap">
-  <div class="eyebrow">The big picture</div>
-  <h2>What the system does, in one breath</h2>
-  <p class="muted">Every trading day the system asks three questions and answers each with the right tool:</p>
+  <div class="eyebrow"><span class="lang-en">The big picture</span><span class="lang-zh">全局视角</span></div>
+  <h2><span class="lang-en">What the system does, in one breath</span><span class="lang-zh">系统功能一句话概括</span></h2>
+  <p class="muted lang-en">Every trading day the system asks three questions and answers each with the right tool:</p>
+  <p class="muted lang-zh">每个交易日，系统会提出三个问题，并用合适的工具各自作答：</p>
   <div class="cards" style="grid-template-columns:repeat(auto-fit,minmax(260px,1fr))">
-    <details class="card" open><summary><span class="lay" style="background:var(--select)"></span>What should I buy?</summary>
-      <div class="body">Two independent <strong>strategies</strong> each rank stocks (one on cheapness+quality, one on growth+momentum). A single <strong>AI agent</strong> reads both lists and picks the <strong>top 4</strong>. Slow, judgment-heavy → runs <strong>once a day</strong>.</div></details>
-    <details class="card" open><summary><span class="lay" style="background:var(--timing)"></span>When do I buy it?</summary>
-      <div class="body">The <strong>watchdog</strong> watches those 4 names intraday and fires a buy only when a <strong>coded volume-breakout</strong> rule confirms the move. Fast, deterministic → runs <strong>every 5 minutes</strong>.</div></details>
-    <details class="card" open><summary><span class="lay" style="background:var(--safety)"></span>How do I not blow up?</summary>
-      <div class="body">Every order passes a <strong>safety layer</strong> (kill-switch, cash check, daily caps, large-order gate). Positions get <strong>stop-losses</strong> and rule-based <strong>exits</strong>. Nothing trades on real money — it's a paper account.</div></details>
+    <details class="card" open><summary><span class="lay" style="background:var(--select)"></span><span class="lang-en">What should I buy?</span><span class="lang-zh">我应该买什么？</span></summary>
+      <div class="body">
+        <p class="lang-en">Two independent <strong>strategies</strong> each rank stocks (one on cheapness+quality, one on growth+momentum). A single <strong>AI agent</strong> reads both lists and picks the <strong>top 4</strong>. Slow, judgment-heavy → runs <strong>once a day</strong>.</p>
+        <p class="lang-zh">两套独立<strong>策略</strong>各自对股票排名（一套基于低估+质量，一套基于成长+动量）。一个<strong>AI 智能体</strong>综合两份榜单，选出<strong>前 4 名</strong>。决策慢而重、需要判断力 → 每日运行<strong>一次</strong>。</p>
+      </div></details>
+    <details class="card" open><summary><span class="lay" style="background:var(--timing)"></span><span class="lang-en">When do I buy it?</span><span class="lang-zh">我应该什么时候买？</span></summary>
+      <div class="body">
+        <p class="lang-en">The <strong>watchdog</strong> watches those 4 names intraday and fires a buy only when a <strong>coded volume-breakout</strong> rule confirms the move. Fast, deterministic → runs <strong>every 5 minutes</strong>.</p>
+        <p class="lang-zh"><strong>watchdog</strong> 在盘中持续监控这 4 只标的，仅当<strong>量能突破</strong>的编码规则确认信号时才触发买入。快速、确定性 → 每 <strong>5 分钟</strong>运行一次。</p>
+      </div></details>
+    <details class="card" open><summary><span class="lay" style="background:var(--safety)"></span><span class="lang-en">How do I not blow up?</span><span class="lang-zh">如何避免爆仓？</span></summary>
+      <div class="body">
+        <p class="lang-en">Every order passes a <strong>safety layer</strong> (kill-switch, cash check, daily caps, large-order gate). Positions get <strong>stop-losses</strong> and rule-based <strong>exits</strong>. Nothing trades on real money — it's a paper account.</p>
+        <p class="lang-zh">每笔订单都经过<strong>安全层</strong>审核（熔断开关、现金校验、每日限额、大单审批）。所有持仓配备<strong>止损</strong>和规则驱动的<strong>出场机制</strong>。系统仅操作模拟账户，不涉及真实资金。</p>
+      </div></details>
   </div>
   <div class="callout">
-    <strong>Design principle that runs through everything:</strong> separate the <em>slow, smart, daily</em> decision (which stocks — done by the LLM) from the <em>fast, deterministic, high-frequency</em> decision (when to buy / when to exit — done by code). The LLM never sits on the intraday hot loop.
+    <p class="lang-en"><strong>Design principle that runs through everything:</strong> separate the <em>slow, smart, daily</em> decision (which stocks — done by the LLM) from the <em>fast, deterministic, high-frequency</em> decision (when to buy / when to exit — done by code). The LLM never sits on the intraday hot loop.</p>
+    <p class="lang-zh"><strong>贯穿全系统的设计原则：</strong>将<em>慢速、智能、每日一次</em>的决策（选哪些股票——由 LLM 完成）与<em>快速、确定性、高频</em>的决策（何时买入 / 何时出场——由代码完成）严格分离。LLM 永远不会出现在盘中热循环中。</p>
   </div>
 </div></section>
 
 <!-- PIPELINE -->
 <section id="pipeline"><div class="wrap">
-  <div class="eyebrow">End-to-end flow</div>
-  <h2>The five stages</h2>
-  <p class="muted">Data flows left to right. Each stage has one job and hands off to the next through a file or a function call.</p>
+  <div class="eyebrow"><span class="lang-en">End-to-end flow</span><span class="lang-zh">端到端流程</span></div>
+  <h2><span class="lang-en">The five stages</span><span class="lang-zh">五个阶段</span></h2>
+  <p class="muted lang-en">Data flows left to right. Each stage has one job and hands off to the next through a file or a function call.</p>
+  <p class="muted lang-zh">数据从左向右流动。每个阶段只负责一项职责，通过文件或函数调用传递给下一阶段。</p>
   <div class="pipe">
-    <div class="stage s-signal"><h4><span class="dot"></span>1 · Signals</h4>
-      <p>Momentum, CANSLIM screen + VCP bases, value/quality, macro regime.</p>
+    <div class="stage s-signal"><h4><span class="dot"></span>1 · <span class="lang-en">Signals</span><span class="lang-zh">信号</span></h4>
+      <p class="lang-en">Momentum, CANSLIM screen + VCP bases, value/quality, macro regime.</p>
+      <p class="lang-zh">动量信号、CANSLIM 筛选 + VCP 形态、价值/质量、宏观环境。</p>
       <div class="files"><code>quant/signals/momentum.py</code> <code>quant/signals/screener.py</code> <code>quant/strategies/value/screen.py</code> <code>quant/signals/macro.py</code></div></div>
-    <div class="stage s-select"><h4><span class="dot"></span>2 · Selection</h4>
-      <p>Strategies write ranked lists; the AI agent picks the top&nbsp;4 buy candidates.</p>
+    <div class="stage s-select"><h4><span class="dot"></span>2 · <span class="lang-en">Selection</span><span class="lang-zh">选股</span></h4>
+      <p class="lang-en">Strategies write ranked lists; the AI agent picks the top&nbsp;4 buy candidates.</p>
+      <p class="lang-zh">各策略输出排名列表；AI 智能体从中选出前&nbsp;4 个买入候选标的。</p>
       <div class="files"><code>quant/strategies/contract.py</code> <code>quant/agent/investor.py</code></div></div>
-    <div class="stage s-timing"><h4><span class="dot"></span>3 · Timing</h4>
-      <p>Watchdog monitors candidates &amp; holdings; coded rules decide buy / exit moments.</p>
+    <div class="stage s-timing"><h4><span class="dot"></span>3 · <span class="lang-en">Timing</span><span class="lang-zh">择时</span></h4>
+      <p class="lang-en">Watchdog monitors candidates &amp; holdings; coded rules decide buy / exit moments.</p>
+      <p class="lang-zh">Watchdog 监控候选标的和持仓；编码规则决定买入 / 出场时机。</p>
       <div class="files"><code>quant/monitor/watchdog.py</code> <code>quant/risk/sepa_exits.py</code></div></div>
-    <div class="stage s-exec"><h4><span class="dot"></span>4 · Execution</h4>
-      <p>Targets become sliced orders; circuit breakers gate intraday submission.</p>
+    <div class="stage s-exec"><h4><span class="dot"></span>4 · <span class="lang-en">Execution</span><span class="lang-zh">执行</span></h4>
+      <p class="lang-en">Targets become sliced orders; circuit breakers gate intraday submission.</p>
+      <p class="lang-zh">目标仓位拆分为分批订单；熔断器控制盘中提交节奏。</p>
       <div class="files"><code>quant/execution/rebalancer.py</code> <code>quant/execution/planner.py</code> <code>quant/execution/executor.py</code></div></div>
-    <div class="stage s-safety"><h4><span class="dot"></span>5 · Safety &amp; Broker</h4>
-      <p>Every order funnels through the policy layer, then to Alpaca.</p>
+    <div class="stage s-safety"><h4><span class="dot"></span>5 · <span class="lang-en">Safety &amp; Broker</span><span class="lang-zh">安全与经纪</span></h4>
+      <p class="lang-en">Every order funnels through the policy layer, then to Alpaca.</p>
+      <p class="lang-zh">每笔订单经过策略层审核，再提交至 Alpaca。</p>
       <div class="files"><code>quant/execution/orders.py</code> <code>quant/execution/broker.py</code> → Alpaca</div></div>
   </div>
   <div class="arrows"><span></span><span>→</span><span>→</span><span>→</span><span>→</span></div>
-  <p class="faint">Invariant: <strong>every</strong> order — from a rebalance, a buy signal, a stop, or a SEPA exit — passes through <code>quant/execution/orders.py</code>, which enforces HALT / paper-live guard / daily caps / large-order approval. <code>quant/execution/broker.py</code> is pure I/O with no policy.</p>
-  <div class="callout">🔍 <strong>Explore it interactively:</strong> the <a href="architecture.html">interactive architecture graph</a> lets you pan, zoom, drag the nodes around, and click any one to see what it does and how it connects.</div>
+  <p class="faint lang-en">Invariant: <strong>every</strong> order — from a rebalance, a buy signal, a stop, or a SEPA exit — passes through <code>quant/execution/orders.py</code>, which enforces HALT / paper-live guard / daily caps / large-order approval. <code>quant/execution/broker.py</code> is pure I/O with no policy.</p>
+  <p class="faint lang-zh">不变量：<strong>所有</strong>订单——无论来自再平衡、买入信号、止损还是 SEPA 出场——都必须经过 <code>quant/execution/orders.py</code>，该模块强制执行 HALT / 模拟-实盘防护 / 每日限额 / 大单审批。<code>quant/execution/broker.py</code> 是纯 I/O 层，不含任何策略逻辑。</p>
+  <div class="callout">🔍 <strong><span class="lang-en">Explore it interactively:</span><span class="lang-zh">交互式探索：</span></strong> <span class="lang-en">the <a href="architecture.html">interactive architecture graph</a> lets you pan, zoom, drag the nodes around, and click any one to see what it does and how it connects.</span><span class="lang-zh"><a href="architecture.html">交互式架构图</a> 支持平移、缩放、拖拽节点，点击任意节点可查看其功能与连接关系。</span></div>
 </div></section>
 
 <!-- ENSEMBLE -->
 <section id="ensemble"><div class="wrap">
-  <div class="eyebrow">The AI ensemble (newest layer)</div>
-  <h2>Two strategies → one agent → four picks</h2>
-  <p class="muted">This is how "what to buy" is decided. The strategies are <strong>isolated</strong> — each runs independently and writes its own file, so one breaking never affects the other. They run <strong>in parallel</strong>.</p>
+  <div class="eyebrow"><span class="lang-en">The AI ensemble (newest layer)</span><span class="lang-zh">AI 集成层（最新模块）</span></div>
+  <h2><span class="lang-en">Two strategies → one agent → four picks</span><span class="lang-zh">两套策略 → 一个智能体 → 四只标的</span></h2>
+  <p class="muted lang-en">This is how "what to buy" is decided. The strategies are <strong>isolated</strong> — each runs independently and writes its own file, so one breaking never affects the other. They run <strong>in parallel</strong>.</p>
+  <p class="muted lang-zh">这就是"买什么"的决策过程。两套策略<strong>相互隔离</strong>——各自独立运行并写入自己的文件，一套出错不会影响另一套。它们<strong>并行</strong>运行。</p>
   <div class="ens">
     <div class="box">
-      <h4 style="color:var(--signal)">Isolated strategies</h4>
+      <h4 style="color:var(--signal)"><span class="lang-en">Isolated strategies</span><span class="lang-zh">隔离策略</span></h4>
       <div class="two">
-        <div class="chip"><strong>value</strong><br><small>cheap + quality + improving</small></div>
-        <div class="chip"><strong>canslim</strong><br><small>growth + RS + VCP base</small></div>
+        <div class="chip"><strong>value</strong><br><small><span class="lang-en">cheap + quality + improving</span><span class="lang-zh">低估 + 质量 + 改善</span></small></div>
+        <div class="chip"><strong>canslim</strong><br><small><span class="lang-en">growth + RS + VCP base</span><span class="lang-zh">成长 + 相对强度 + VCP 形态</span></small></div>
       </div>
       <small>→ <code>.cache/strategies/&lt;name&gt;.json</code></small>
     </div>
     <div class="ar">→</div>
     <div class="box">
-      <h4 style="color:var(--select)">One Claude agent</h4>
-      <small>Merges both lists, dedupes (consensus boosts a name), drops owned/illiquid, then asks the <code>claude</code> CLI for the <strong>top 4 + rationale</strong>. If the LLM fails, it falls back to a deterministic rule ranking.</small>
+      <h4 style="color:var(--select)"><span class="lang-en">One Claude agent</span><span class="lang-zh">单一 Claude 智能体</span></h4>
+      <small><span class="lang-en">Merges both lists, dedupes (consensus boosts a name), drops owned/illiquid, then asks the <code>claude</code> CLI for the <strong>top 4 + rationale</strong>. If the LLM fails, it falls back to a deterministic rule ranking.</span><span class="lang-zh">合并两份榜单，去重（共识标的权重提升），剔除已持有 / 流动性不足的标的，然后调用 <code>claude</code> CLI 获取<strong>前 4 名及理由</strong>。若 LLM 失败，则回退到确定性规则排名。</span></small>
     </div>
     <div class="ar">→</div>
     <div class="box">
-      <h4 style="color:var(--timing)">Buy candidates</h4>
-      <small><code>.cache/buy_candidates.json</code> — the only names the watchdog will consider buying that day. Read-only to the watchdog; a staleness guard ignores it if the daily job hasn't refreshed it.</small>
+      <h4 style="color:var(--timing)"><span class="lang-en">Buy candidates</span><span class="lang-zh">买入候选</span></h4>
+      <small><code>.cache/buy_candidates.json</code> — <span class="lang-en">the only names the watchdog will consider buying that day. Read-only to the watchdog; a staleness guard ignores it if the daily job hasn't refreshed it.</span><span class="lang-zh">当日 watchdog 唯一会考虑买入的标的列表。对 watchdog 为只读；若每日任务未刷新，过期保护机制将忽略该文件。</span></small>
     </div>
   </div>
   <div class="callout">
-    <strong>Why it runs once a day, not every 5 minutes:</strong> the agent's only inputs are the daily screens — re-running the LLM intraday can't produce a better answer (no new information), just more cost and churn. So selection happens once, in the pre-market <code>watchdog</code> run; the intraday loop only does coded timing.
+    <p class="lang-en"><strong>Why it runs once a day, not every 5 minutes:</strong> the agent's only inputs are the daily screens — re-running the LLM intraday can't produce a better answer (no new information), just more cost and churn. So selection happens once, in the pre-market <code>watchdog</code> run; the intraday loop only does coded timing.</p>
+    <p class="lang-zh"><strong>为何每日只运行一次而非每 5 分钟：</strong>智能体的唯一输入是每日筛选结果——盘中重复调用 LLM 不会产生更好的答案（没有新信息），只会增加成本和扰动。因此，选股只在盘前 <code>watchdog</code> 运行时执行一次；盘中循环仅负责编码择时。</p>
   </div>
 </div></section>
 
 <!-- TIMELINE -->
 <section id="timeline"><div class="wrap">
-  <div class="eyebrow">A day in the life (local time; US-Eastern market hours)</div>
-  <h2>What runs, and when</h2>
-  <p class="muted">Scheduled by cron. Times below are the machine's local time, mapped to US market hours.</p>
+  <div class="eyebrow"><span class="lang-en">A day in the life (local time; US-Eastern market hours)</span><span class="lang-zh">系统的一天（本地时间；对应美东市场时段）</span></div>
+  <h2><span class="lang-en">What runs, and when</span><span class="lang-zh">运行内容与时间</span></h2>
+  <p class="muted lang-en">Scheduled by cron. Times below are the machine's local time, mapped to US market hours.</p>
+  <p class="muted lang-zh">由 cron 调度。以下时间均为机器本地时间，对应美国市场时段。</p>
   <div class="timeline">
-    <div class="tl sel"><div class="t">20:30 · Daily watchdog<span>= 8:30 AM ET, pre-market</span></div>
-      <p>Syncs the live portfolio, attaches missing stops, checks macro — <strong>and runs the AI ensemble once</strong> (strategies in parallel → agent → <code>buy_candidates.json</code>). Fail-open: a generation hiccup never breaks the watchdog.</p></div>
-    <div class="tl"><div class="t">21:35 · Rebalancer<span>= 9:35 AM ET</span></div>
-      <p>Builds two-tranche target weights (core ETFs + stocks, aggressive leveraged ETFs), writes the plan to <code>pending_plan.json</code>. Large orders queue for approval; tiny ones submit directly.</p></div>
-    <div class="tl crit"><div class="t">22:00–04:00 · Intraday loop<span>every 5–10 min, RTH only</span></div>
-      <p><strong>Executor</strong> works the pending plan through 5 circuit breakers. <strong>Watchdog --intraday</strong> reads the buy candidates and fires coded buy signals, enforces stop-losses (market-sell on breach, works on fractional shares), and runs SEPA exits. <em>No LLM here.</em></p></div>
-    <div class="tl"><div class="t">07:00 · Quant review<span>= post-close, Tue–Sat</span></div>
-      <p>A separate Claude review writes strategy overrides + a Telegram note for the next day's rebalance.</p></div>
-    <div class="tl"><div class="t">Sun 20:00 · Discovery<span>weekly</span></div>
-      <p>Refreshes the auto-discovered watchlist (S&amp;P 500 + Nasdaq-100 + S&amp;P 400) before Monday's rebalance.</p></div>
+    <div class="tl sel"><div class="t">20:30 · <span class="lang-en">Daily watchdog</span><span class="lang-zh">每日 watchdog</span><span>= 8:30 AM ET, <span class="lang-en">pre-market</span><span class="lang-zh">盘前</span></span></div>
+      <p class="lang-en">Syncs the live portfolio, attaches missing stops, checks macro — <strong>and runs the AI ensemble once</strong> (strategies in parallel → agent → <code>buy_candidates.json</code>). Fail-open: a generation hiccup never breaks the watchdog.</p>
+      <p class="lang-zh">同步实时投资组合、补充缺失止损、检查宏观环境——<strong>并一次性运行 AI 集成</strong>（策略并行 → 智能体 → <code>buy_candidates.json</code>）。容错设计：生成失败不会中断 watchdog。</p></div>
+    <div class="tl"><div class="t">21:35 · <span class="lang-en">Rebalancer</span><span class="lang-zh">再平衡器</span><span>= 9:35 AM ET</span></div>
+      <p class="lang-en">Builds two-tranche target weights (core ETFs + stocks, aggressive leveraged ETFs), writes the plan to <code>pending_plan.json</code>. Large orders queue for approval; tiny ones submit directly.</p>
+      <p class="lang-zh">构建双份额目标权重（核心 ETF + 股票、激进杠杆 ETF），将计划写入 <code>pending_plan.json</code>。大额订单排队等待审批，小额订单直接提交。</p></div>
+    <div class="tl crit"><div class="t">22:00–04:00 · <span class="lang-en">Intraday loop</span><span class="lang-zh">盘中循环</span><span><span class="lang-en">every 5–10 min, RTH only</span><span class="lang-zh">每 5–10 分钟，仅限正常交易时段</span></span></div>
+      <p class="lang-en"><strong>Executor</strong> works the pending plan through 5 circuit breakers. <strong>Watchdog --intraday</strong> reads the buy candidates and fires coded buy signals, enforces stop-losses (market-sell on breach, works on fractional shares), and runs SEPA exits. <em>No LLM here.</em></p>
+      <p class="lang-zh"><strong>Executor</strong> 通过 5 个熔断器处理待执行计划。<strong>Watchdog --intraday</strong> 读取买入候选标的、触发编码买入信号、执行止损（触发时市价卖出，支持碎股），并运行 SEPA 出场规则。<em>此处不调用 LLM。</em></p></div>
+    <div class="tl"><div class="t">07:00 · <span class="lang-en">Quant review</span><span class="lang-zh">量化复盘</span><span>= <span class="lang-en">post-close, Tue–Sat</span><span class="lang-zh">收盘后，周二至周六</span></span></div>
+      <p class="lang-en">A separate Claude review writes strategy overrides + a Telegram note for the next day's rebalance.</p>
+      <p class="lang-zh">独立的 Claude 复盘流程输出策略覆盖参数，并向 Telegram 发送次日再平衡备注。</p></div>
+    <div class="tl"><div class="t">Sun 20:00 · <span class="lang-en">Discovery</span><span class="lang-zh">标的发现</span><span><span class="lang-en">weekly</span><span class="lang-zh">每周</span></span></div>
+      <p class="lang-en">Refreshes the auto-discovered watchlist (S&amp;P 500 + Nasdaq-100 + S&amp;P 400) before Monday's rebalance.</p>
+      <p class="lang-zh">在周一再平衡前刷新自动发现的观察列表（S&amp;P 500 + Nasdaq-100 + S&amp;P 400）。</p></div>
   </div>
 </div></section>
 
 <!-- COMPONENTS -->
 <section id="components"><div class="wrap">
-  <div class="eyebrow">Under the hood</div>
-  <h2>Components — click any to expand</h2>
+  <div class="eyebrow"><span class="lang-en">Under the hood</span><span class="lang-zh">内部实现</span></div>
+  <h2><span class="lang-en">Components — click any to expand</span><span class="lang-zh">组件——点击展开</span></h2>
   <div class="legend">
-    <span><i class="key" style="background:var(--signal)"></i>Signals</span>
-    <span><i class="key" style="background:var(--select)"></i>Selection</span>
-    <span><i class="key" style="background:var(--timing)"></i>Timing</span>
-    <span><i class="key" style="background:var(--exec)"></i>Execution</span>
-    <span><i class="key" style="background:var(--safety)"></i>Safety / data</span>
+    <span><i class="key" style="background:var(--signal)"></i><span class="lang-en">Signals</span><span class="lang-zh">信号</span></span>
+    <span><i class="key" style="background:var(--select)"></i><span class="lang-en">Selection</span><span class="lang-zh">选股</span></span>
+    <span><i class="key" style="background:var(--timing)"></i><span class="lang-en">Timing</span><span class="lang-zh">择时</span></span>
+    <span><i class="key" style="background:var(--exec)"></i><span class="lang-en">Execution</span><span class="lang-zh">执行</span></span>
+    <span><i class="key" style="background:var(--safety)"></i><span class="lang-en">Safety / data</span><span class="lang-zh">安全 / 数据</span></span>
   </div>
   <div class="cards">
-    <details class="card"><summary><span class="lay" style="background:var(--signal)"></span>screener.py<span class="tag">signals</span></summary>
-      <div class="body">CANSLIM technical screen: quarterly EPS/revenue growth pre-filter, relative-strength percentile, and VCP (Volatility Contraction Pattern) base detection with a buy pivot. One of the two ensemble strategies.</div></details>
-    <details class="card"><summary><span class="lay" style="background:var(--signal)"></span>value_screen.py<span class="tag">signals</span></summary>
-      <div class="body">Two-track value screen over the <strong>Russell 3000</strong> (iShares IWV CSV). A stage-0 price/volume pre-filter cuts ~3000 → a few hundred (no fundamentals calls); survivors' fundamentals are fetched in parallel and split into <strong>Track A</strong> (profitable "mispriced bargains" — PEG/PE cheap + growth + solvency) and <strong>Track B</strong> (unprofitable growth — P/S cheap + high revenue growth + cash-runway), then ranked and interleaved. Thresholds live in <code>config.VS_TRACK_A/VS_TRACK_B</code>. The "low value, high potential" source.</div></details>
-    <details class="card"><summary><span class="lay" style="background:var(--signal)"></span>momentum.py / macro.py<span class="tag">signals</span></summary>
-      <div class="body">Dual-momentum ETF rotation for the core sleeve, and a FRED-based macro regime overlay that shrinks risk in hostile regimes and can trigger macro-driven exits.</div></details>
-    <details class="card"><summary><span class="lay" style="background:var(--select)"></span>strategies.py<span class="tag">selection</span></summary>
-      <div class="body">The isolated-strategy contract + parallel runner. Each strategy writes <code>{ticker, score, rank, factors}</code> rows to its own JSON file; a strategy that errors or <em>hangs</em> is skipped (bounded by a timeout) so one can never stall the others or the watchdog.</div></details>
-    <details class="card"><summary><span class="lay" style="background:var(--select)"></span>investor_agent.py<span class="tag">selection</span></summary>
-      <div class="body">Five-stage LLM due-diligence pipeline. <code>select_candidates()</code>: (1) merges strategy pools, excludes owned names; (2) builds peer-relative <strong>dossiers</strong> in parallel (price/PE/target, EPS surprises, news, sector z-scores); (3) produces a <strong>balanced blind shortlist</strong> (source-cap prevents one strategy dominating, labels stripped to remove positivity bias, source mix logged to <code>.cache/agent_source_mix.csv</code>); (4) <strong>Analyst</strong> stage writes structured bull/bear verdicts, <strong>Critic</strong> stage prunes weak ones; (5) <strong>PM</strong> stage selects 0&#8211;<code>AGENT_MAX_PICKS</code> final picks with advisory <code>buy_low/buy_high/stop_loss/take_profit</code> levels (may abstain; picks below <code>AGENT_CONVICTION_FLOOR</code> are dropped). Rationale and levels appended to <code>.cache/agent_reasons.log</code>. Falls back to rule-ranking on any LLM failure.</div></details>
-    <details class="card"><summary><span class="lay" style="background:var(--timing)"></span>watchdog.py<span class="tag">timing</span></summary>
-      <div class="body">The daily + intraday monitor. Daily run: sync, stop attach, macro, and the once-a-day ensemble trigger. Intraday run (every 5 min, RTH): coded buy signals from the candidate list, stop-loss enforcement (auto market-sell on breach), and SEPA exits. The candidate source prefers <code>buy_candidates.json</code> and falls back to the raw screener.</div></details>
-    <details class="card"><summary><span class="lay" style="background:var(--timing)"></span>sepa_exits.py<span class="tag">timing</span></summary>
-      <div class="body">Pure Minervini SEPA exit rules: R-multiple scale-outs, failed-breakout detection, climax-top detection, and a 21-EMA trailing backstop. The watchdog calls into it.</div></details>
-    <details class="card"><summary><span class="lay" style="background:var(--exec)"></span>rebalancer.py<span class="tag">execution</span></summary>
-      <div class="body">Builds target weights per tranche from the signals, sends the tiny actionable slice through <code>quant/execution/orders.py</code>, and writes the rest to <code>pending_plan.json</code> for the intraday executor.</div></details>
-    <details class="card"><summary><span class="lay" style="background:var(--exec)"></span>executor.py<span class="tag">execution</span></summary>
-      <div class="body">Intraday driver (every 10 min, RTH). Consumes the pending plan, evaluates 5 circuit breakers (SPY drop, VIX spike, single-name shock, news shock, macro flip), and submits sliced marketable-limit orders.</div></details>
-    <details class="card"><summary><span class="lay" style="background:var(--exec)"></span>planner.py / planning.py<span class="tag">execution</span></summary>
-      <div class="body">Pure functions that enrich raw order intents with execution tier, price limits, and slice counts. No I/O.</div></details>
-    <details class="card"><summary><span class="lay" style="background:var(--safety)"></span>orders.py<span class="tag">policy</span></summary>
-      <div class="body">The policy chokepoint. <code>sync_state</code> reconciles live positions and <strong>adopts</strong> broker-imported holdings into a sleeve; <code>execute_plan</code> applies all safety rails; pending-queue + stop helpers live here. Every order goes through it.</div></details>
-    <details class="card"><summary><span class="lay" style="background:var(--safety)"></span>broker.py<span class="tag">data</span></summary>
-      <div class="body">Thin Alpaca SDK wrapper — pure I/O, raises <code>BrokerError</code>, leaks no SDK objects. The paper/live guard requires two explicit env flags to ever touch a live account.</div></details>
+    <details class="card"><summary><span class="lay" style="background:var(--signal)"></span>screener.py<span class="tag"><span class="lang-en">signals</span><span class="lang-zh">信号</span></span></summary>
+      <div class="body">
+        <p class="lang-en">CANSLIM technical screen: quarterly EPS/revenue growth pre-filter, relative-strength percentile, and VCP (Volatility Contraction Pattern) base detection with a buy pivot. One of the two ensemble strategies.</p>
+        <p class="lang-zh">CANSLIM 技术筛选：季度 EPS/营收增长预过滤、相对强度百分位，以及带买入枢轴的 VCP（波动率收缩形态）形态识别。集成策略之一。</p>
+      </div></details>
+    <details class="card"><summary><span class="lay" style="background:var(--signal)"></span>value_screen.py<span class="tag"><span class="lang-en">signals</span><span class="lang-zh">信号</span></span></summary>
+      <div class="body">
+        <p class="lang-en">Two-track value screen over the <strong>Russell 3000</strong> (iShares IWV CSV). A stage-0 price/volume pre-filter cuts ~3000 → a few hundred (no fundamentals calls); survivors' fundamentals are fetched in parallel and split into <strong>Track A</strong> (profitable "mispriced bargains" — PEG/PE cheap + growth + solvency) and <strong>Track B</strong> (unprofitable growth — P/S cheap + high revenue growth + cash-runway), then ranked and interleaved. Thresholds live in <code>config.VS_TRACK_A/VS_TRACK_B</code>. The "low value, high potential" source.</p>
+        <p class="lang-zh">针对 <strong>Russell 3000</strong>（iShares IWV CSV）的双轨价值筛选。第 0 阶段价格/成交量预过滤将约 3000 只股票压缩至数百只（不调用基本面接口）；幸存者的基本面数据并行获取，分为 <strong>Track A</strong>（盈利的"价值洼地"——PEG/PE 低估 + 成长 + 偿债能力）和 <strong>Track B</strong>（不盈利的成长股——P/S 低估 + 营收高增长 + 现金储备），排名后交错合并。阈值存储于 <code>config.VS_TRACK_A/VS_TRACK_B</code>。这是"低估值、高潜力"的来源。</p>
+      </div></details>
+    <details class="card"><summary><span class="lay" style="background:var(--signal)"></span>momentum.py / macro.py<span class="tag"><span class="lang-en">signals</span><span class="lang-zh">信号</span></span></summary>
+      <div class="body">
+        <p class="lang-en">Dual-momentum ETF rotation for the core sleeve, and a FRED-based macro regime overlay that shrinks risk in hostile regimes and can trigger macro-driven exits.</p>
+        <p class="lang-zh">针对核心份额的双动量 ETF 轮动，以及基于 FRED 数据的宏观环境覆盖层——在不利环境下收缩风险敞口，并可触发宏观驱动的出场。</p>
+      </div></details>
+    <details class="card"><summary><span class="lay" style="background:var(--select)"></span>strategies.py<span class="tag"><span class="lang-en">selection</span><span class="lang-zh">选股</span></span></summary>
+      <div class="body">
+        <p class="lang-en">The isolated-strategy contract + parallel runner. Each strategy writes <code>{ticker, score, rank, factors}</code> rows to its own JSON file; a strategy that errors or <em>hangs</em> is skipped (bounded by a timeout) so one can never stall the others or the watchdog.</p>
+        <p class="lang-zh">隔离策略契约 + 并行运行器。每套策略将 <code>{ticker, score, rank, factors}</code> 行写入各自的 JSON 文件；出错或<em>挂起</em>的策略会被跳过（受超时限制），确保单套策略不会阻塞其他策略或 watchdog。</p>
+      </div></details>
+    <details class="card"><summary><span class="lay" style="background:var(--select)"></span>investor_agent.py<span class="tag"><span class="lang-en">selection</span><span class="lang-zh">选股</span></span></summary>
+      <div class="body">
+        <p class="lang-en">Five-stage LLM due-diligence pipeline. <code>select_candidates()</code>: (1) merges strategy pools, excludes owned names; (2) builds peer-relative <strong>dossiers</strong> in parallel (price/PE/target, EPS surprises, news, sector z-scores); (3) produces a <strong>balanced blind shortlist</strong> (source-cap prevents one strategy dominating, labels stripped to remove positivity bias, source mix logged to <code>.cache/agent_source_mix.csv</code>); (4) <strong>Analyst</strong> stage writes structured bull/bear verdicts, <strong>Critic</strong> stage prunes weak ones; (5) <strong>PM</strong> stage selects 0&#8211;<code>AGENT_MAX_PICKS</code> final picks with advisory <code>buy_low/buy_high/stop_loss/take_profit</code> levels (may abstain; picks below <code>AGENT_CONVICTION_FLOOR</code> are dropped). Rationale and levels appended to <code>.cache/agent_reasons.log</code>. Falls back to rule-ranking on any LLM failure.</p>
+        <p class="lang-zh">五阶段 LLM 尽职调查流水线。<code>select_candidates()</code>：(1) 合并各策略候选池，排除已持有标的；(2) 并行构建同行相对<strong>档案</strong>（价格/PE/目标价、EPS 超预期、新闻、行业 z-score）；(3) 生成<strong>均衡盲选短名单</strong>（来源上限防止单策略主导，去除标签以消除正向偏差，来源混合比例记录至 <code>.cache/agent_source_mix.csv</code>）；(4) <strong>Analyst</strong> 阶段撰写结构化多空判断，<strong>Critic</strong> 阶段剔除弱势标的；(5) <strong>PM</strong> 阶段选出 0&#8211;<code>AGENT_MAX_PICKS</code> 个最终标的，附带建议的 <code>buy_low/buy_high/stop_loss/take_profit</code> 水平（可能弃权；低于 <code>AGENT_CONVICTION_FLOOR</code> 的标的被剔除）。理由和水平追加至 <code>.cache/agent_reasons.log</code>。任何 LLM 失败均回退到规则排名。</p>
+      </div></details>
+    <details class="card"><summary><span class="lay" style="background:var(--timing)"></span>watchdog.py<span class="tag"><span class="lang-en">timing</span><span class="lang-zh">择时</span></span></summary>
+      <div class="body">
+        <p class="lang-en">The daily + intraday monitor. Daily run: sync, stop attach, macro, and the once-a-day ensemble trigger. Intraday run (every 5 min, RTH): coded buy signals from the candidate list, stop-loss enforcement (auto market-sell on breach), and SEPA exits. The candidate source prefers <code>buy_candidates.json</code> and falls back to the raw screener.</p>
+        <p class="lang-zh">每日 + 盘中监控器。每日运行：同步、补充止损、宏观检查，以及每日一次的集成触发。盘中运行（每 5 分钟，正常交易时段）：来自候选列表的编码买入信号、止损执行（触发时自动市价卖出）以及 SEPA 出场。候选来源优先使用 <code>buy_candidates.json</code>，回退至原始筛选器。</p>
+      </div></details>
+    <details class="card"><summary><span class="lay" style="background:var(--timing)"></span>sepa_exits.py<span class="tag"><span class="lang-en">timing</span><span class="lang-zh">择时</span></span></summary>
+      <div class="body">
+        <p class="lang-en">Pure Minervini SEPA exit rules: R-multiple scale-outs, failed-breakout detection, climax-top detection, and a 21-EMA trailing backstop. The watchdog calls into it.</p>
+        <p class="lang-zh">纯 Minervini SEPA 出场规则：R 倍数分批平仓、突破失败检测、顶部高潮形态检测，以及 21-EMA 追踪止损。由 watchdog 调用。</p>
+      </div></details>
+    <details class="card"><summary><span class="lay" style="background:var(--exec)"></span>rebalancer.py<span class="tag"><span class="lang-en">execution</span><span class="lang-zh">执行</span></span></summary>
+      <div class="body">
+        <p class="lang-en">Builds target weights per tranche from the signals, sends the tiny actionable slice through <code>quant/execution/orders.py</code>, and writes the rest to <code>pending_plan.json</code> for the intraday executor.</p>
+        <p class="lang-zh">根据信号为每个份额构建目标权重，将可立即执行的小额部分通过 <code>quant/execution/orders.py</code> 提交，其余写入 <code>pending_plan.json</code> 供盘中 executor 处理。</p>
+      </div></details>
+    <details class="card"><summary><span class="lay" style="background:var(--exec)"></span>executor.py<span class="tag"><span class="lang-en">execution</span><span class="lang-zh">执行</span></span></summary>
+      <div class="body">
+        <p class="lang-en">Intraday driver (every 10 min, RTH). Consumes the pending plan, evaluates 5 circuit breakers (SPY drop, VIX spike, single-name shock, news shock, macro flip), and submits sliced marketable-limit orders.</p>
+        <p class="lang-zh">盘中驱动器（每 10 分钟，正常交易时段）。消费待执行计划，评估 5 个熔断器（SPY 下跌、VIX 飙升、个股冲击、新闻冲击、宏观反转），并提交分批可成交限价单。</p>
+      </div></details>
+    <details class="card"><summary><span class="lay" style="background:var(--exec)"></span>planner.py / planning.py<span class="tag"><span class="lang-en">execution</span><span class="lang-zh">执行</span></span></summary>
+      <div class="body">
+        <p class="lang-en">Pure functions that enrich raw order intents with execution tier, price limits, and slice counts. No I/O.</p>
+        <p class="lang-zh">纯函数，为原始订单意图补充执行层级、价格限制和分批数量。无 I/O。</p>
+      </div></details>
+    <details class="card"><summary><span class="lay" style="background:var(--safety)"></span>orders.py<span class="tag"><span class="lang-en">policy</span><span class="lang-zh">策略</span></span></summary>
+      <div class="body">
+        <p class="lang-en">The policy chokepoint. <code>sync_state</code> reconciles live positions and <strong>adopts</strong> broker-imported holdings into a sleeve; <code>execute_plan</code> applies all safety rails; pending-queue + stop helpers live here. Every order goes through it.</p>
+        <p class="lang-zh">策略核心节点。<code>sync_state</code> 核对实时持仓并将经纪商导入的持仓<strong>纳入</strong>份额管理；<code>execute_plan</code> 执行所有安全规则；待执行队列和止损辅助函数均在此处。所有订单必经此模块。</p>
+      </div></details>
+    <details class="card"><summary><span class="lay" style="background:var(--safety)"></span>broker.py<span class="tag"><span class="lang-en">data</span><span class="lang-zh">数据</span></span></summary>
+      <div class="body">
+        <p class="lang-en">Thin Alpaca SDK wrapper — pure I/O, raises <code>BrokerError</code>, leaks no SDK objects. The paper/live guard requires two explicit env flags to ever touch a live account.</p>
+        <p class="lang-zh">精简的 Alpaca SDK 封装层——纯 I/O，抛出 <code>BrokerError</code>，不暴露任何 SDK 对象。模拟/实盘防护要求同时设置两个明确的环境变量才能接触实盘账户。</p>
+      </div></details>
   </div>
 </div></section>
 
 <!-- SAFETY -->
 <section id="safety"><div class="wrap">
-  <div class="eyebrow">Why it doesn't blow up</div>
-  <h2>Risk &amp; safety rails</h2>
-  <p class="muted">Every order — no matter the trigger — passes these in <code>quant/execution/orders.py</code>:</p>
+  <div class="eyebrow"><span class="lang-en">Why it doesn't blow up</span><span class="lang-zh">为何不会爆仓</span></div>
+  <h2><span class="lang-en">Risk &amp; safety rails</span><span class="lang-zh">风险与安全护栏</span></h2>
+  <p class="muted lang-en">Every order — no matter the trigger — passes these in <code>quant/execution/orders.py</code>:</p>
+  <p class="muted lang-zh">每笔订单——无论何种触发方式——都会经过 <code>quant/execution/orders.py</code> 中的以下检查：</p>
   <div class="rails">
-    <div class="rail"><h4>HALT kill-switch</h4><p>Drop a <code>.cache/HALT</code> file and all order logic exits cleanly. <code>touch</code> to pause, <code>rm</code> to resume.</p></div>
-    <div class="rail"><h4>Paper / live guard</h4><p>Live trading needs <em>both</em> <code>ALPACA_ENV=live</code> and an explicit confirm flag. Any single-flag typo stays on paper.</p></div>
-    <div class="rail"><h4>Cash-aware gate</h4><p>Buys can't exceed available cash (unless margin is explicitly allowed); a broker-fetch failure fails closed.</p></div>
-    <div class="rail"><h4>Daily caps</h4><p>Hard limits on order count and total notional per day; excess defers to tomorrow.</p></div>
-    <div class="rail"><h4>Large-order approval</h4><p>Orders above a threshold queue to <code>pending_orders.json</code> for Telegram approval instead of firing.</p></div>
-    <div class="rail"><h4>Position adoption + starvation alert</h4><p>Broker-imported "unknown" positions are auto-tagged into a sleeve so the rebalancer manages them; a loud alert fires if untagged value would starve it.</p></div>
-    <div class="rail"><h4>Fractional-safe stops</h4><p>Native stops can't attach to fractional shares, so the watchdog enforces stops by market-selling on breach — anchored to each position's adoption date so a freshly-adopted name isn't liquidated against an old high.</p></div>
-    <div class="rail"><h4>Candidate staleness guard</h4><p>If the daily ensemble job hasn't refreshed <code>buy_candidates.json</code> within a max age, the watchdog ignores it and falls back — so auto-buys never run on stale picks.</p></div>
+    <div class="rail"><h4><span class="lang-en">HALT kill-switch</span><span class="lang-zh">HALT 熔断开关</span></h4><p class="lang-en">Drop a <code>.cache/HALT</code> file and all order logic exits cleanly. <code>touch</code> to pause, <code>rm</code> to resume.</p><p class="lang-zh">创建 <code>.cache/HALT</code> 文件即可干净地终止所有订单逻辑。<code>touch</code> 暂停，<code>rm</code> 恢复。</p></div>
+    <div class="rail"><h4><span class="lang-en">Paper / live guard</span><span class="lang-zh">模拟/实盘防护</span></h4><p class="lang-en">Live trading needs <em>both</em> <code>ALPACA_ENV=live</code> and an explicit confirm flag. Any single-flag typo stays on paper.</p><p class="lang-zh">实盘交易需要<em>同时</em>设置 <code>ALPACA_ENV=live</code> 和明确的确认标志。任何单标志误操作均停留在模拟模式。</p></div>
+    <div class="rail"><h4><span class="lang-en">Cash-aware gate</span><span class="lang-zh">资金感知门控</span></h4><p class="lang-en">Buys can't exceed available cash (unless margin is explicitly allowed); a broker-fetch failure fails closed.</p><p class="lang-zh">买入不得超过可用现金（除非明确允许使用保证金）；经纪商数据获取失败时默认拒绝。</p></div>
+    <div class="rail"><h4><span class="lang-en">Daily caps</span><span class="lang-zh">每日限额</span></h4><p class="lang-en">Hard limits on order count and total notional per day; excess defers to tomorrow.</p><p class="lang-zh">每日订单数量和总名义金额的硬性上限；超额部分推迟至次日。</p></div>
+    <div class="rail"><h4><span class="lang-en">Large-order approval</span><span class="lang-zh">大单审批</span></h4><p class="lang-en">Orders above a threshold queue to <code>pending_orders.json</code> for Telegram approval instead of firing.</p><p class="lang-zh">超过阈值的订单进入 <code>pending_orders.json</code> 队列，等待 Telegram 审批，而非直接执行。</p></div>
+    <div class="rail"><h4><span class="lang-en">Position adoption + starvation alert</span><span class="lang-zh">持仓纳管 + 资源匮乏告警</span></h4><p class="lang-en">Broker-imported "unknown" positions are auto-tagged into a sleeve so the rebalancer manages them; a loud alert fires if untagged value would starve it.</p><p class="lang-zh">经纪商导入的"未知"持仓自动标记纳入某份额，由再平衡器统一管理；若未标记的仓值会导致份额资金匮乏，则触发显著告警。</p></div>
+    <div class="rail"><h4><span class="lang-en">Fractional-safe stops</span><span class="lang-zh">碎股安全止损</span></h4><p class="lang-en">Native stops can't attach to fractional shares, so the watchdog enforces stops by market-selling on breach — anchored to each position's adoption date so a freshly-adopted name isn't liquidated against an old high.</p><p class="lang-zh">原生止损单不支持碎股，因此 watchdog 通过触发时市价卖出来执行止损——锚定每个持仓的纳管日期，避免新纳管标的被旧高点触发清仓。</p></div>
+    <div class="rail"><h4><span class="lang-en">Candidate staleness guard</span><span class="lang-zh">候选过期保护</span></h4><p class="lang-en">If the daily ensemble job hasn't refreshed <code>buy_candidates.json</code> within a max age, the watchdog ignores it and falls back — so auto-buys never run on stale picks.</p><p class="lang-zh">若每日集成任务未在最大时限内刷新 <code>buy_candidates.json</code>，watchdog 将忽略该文件并回退——确保自动买入不会基于过期标的执行。</p></div>
   </div>
 </div></section>
 
 <!-- EXITS -->
 <section id="exits"><div class="wrap">
-  <div class="eyebrow">Getting out</div>
-  <h2>Exit logic</h2>
-  <p class="muted">Selling is rule-driven, never discretionary. The core stock sleeve uses Minervini SEPA; everything has a stop.</p>
+  <div class="eyebrow"><span class="lang-en">Getting out</span><span class="lang-zh">出场机制</span></div>
+  <h2><span class="lang-en">Exit logic</span><span class="lang-zh">出场逻辑</span></h2>
+  <p class="muted lang-en">Selling is rule-driven, never discretionary. The core stock sleeve uses Minervini SEPA; everything has a stop.</p>
+  <p class="muted lang-zh">卖出由规则驱动，从不依赖主观判断。核心股票份额使用 Minervini SEPA；所有持仓均设有止损。</p>
   <div class="exits">
-    <div class="exit"><h4>Stop-loss</h4><p>Per-sleeve stop (ATR-scaled for core, fixed for aggressive). Breach → market sell, enforced intraday.</p></div>
-    <div class="exit"><h4>Trailing stop</h4><p>Peak-to-current trail, measured from when the position was first managed (not its full history).</p></div>
-    <div class="exit"><h4>SEPA R-multiple scale-out</h4><p>Sell a fraction at 2R and 3R profit tiers, banking gains as the move extends.</p></div>
-    <div class="exit"><h4>Failed breakout</h4><p>If a fresh breakout reverses below its pivot within a few days, exit — the thesis failed.</p></div>
-    <div class="exit"><h4>Climax top</h4><p>Parabolic blow-off detection (extended run + range/volume expansion) tightens the trail.</p></div>
-    <div class="exit"><h4>21-EMA backstop</h4><p>After the final scale-out tier, exit the remainder on a daily close below the 21-EMA.</p></div>
-    <div class="exit"><h4>Macro flip</h4><p>A hostile macro-regime change can drive defensive exits the next day.</p></div>
-    <div class="exit"><h4>Circuit breakers</h4><p>Intraday SPY drop / VIX spike / single-name / news / macro shocks halt or abort in-flight execution.</p></div>
+    <div class="exit"><h4><span class="lang-en">Stop-loss</span><span class="lang-zh">止损</span></h4><p class="lang-en">Per-sleeve stop (ATR-scaled for core, fixed for aggressive). Breach → market sell, enforced intraday.</p><p class="lang-zh">按份额设置止损（核心份额以 ATR 为比例，激进份额固定比例）。触发 → 市价卖出，盘中执行。</p></div>
+    <div class="exit"><h4><span class="lang-en">Trailing stop</span><span class="lang-zh">追踪止损</span></h4><p class="lang-en">Peak-to-current trail, measured from when the position was first managed (not its full history).</p><p class="lang-zh">从峰值到当前的追踪止损，从持仓首次纳管时开始计量（而非完整历史）。</p></div>
+    <div class="exit"><h4><span class="lang-en">SEPA R-multiple scale-out</span><span class="lang-zh">SEPA R 倍数分批平仓</span></h4><p class="lang-en">Sell a fraction at 2R and 3R profit tiers, banking gains as the move extends.</p><p class="lang-zh">在 2R 和 3R 盈利节点分批卖出，随行情延伸逐步锁定收益。</p></div>
+    <div class="exit"><h4><span class="lang-en">Failed breakout</span><span class="lang-zh">突破失败</span></h4><p class="lang-en">If a fresh breakout reverses below its pivot within a few days, exit — the thesis failed.</p><p class="lang-zh">若新突破在数日内回落至枢轴下方，立即出场——逻辑已证伪。</p></div>
+    <div class="exit"><h4><span class="lang-en">Climax top</span><span class="lang-zh">顶部高潮</span></h4><p class="lang-en">Parabolic blow-off detection (extended run + range/volume expansion) tightens the trail.</p><p class="lang-zh">抛物线式高潮顶部检测（持续上涨 + 振幅/成交量放大）收紧追踪止损。</p></div>
+    <div class="exit"><h4>21-EMA <span class="lang-en">backstop</span><span class="lang-zh">托底止损</span></h4><p class="lang-en">After the final scale-out tier, exit the remainder on a daily close below the 21-EMA.</p><p class="lang-zh">最后一批分批平仓后，若日收盘价跌破 21-EMA，则清仓剩余仓位。</p></div>
+    <div class="exit"><h4><span class="lang-en">Macro flip</span><span class="lang-zh">宏观反转</span></h4><p class="lang-en">A hostile macro-regime change can drive defensive exits the next day.</p><p class="lang-zh">宏观环境转为不利时，可驱动次日进行防御性出场。</p></div>
+    <div class="exit"><h4><span class="lang-en">Circuit breakers</span><span class="lang-zh">熔断器</span></h4><p class="lang-en">Intraday SPY drop / VIX spike / single-name / news / macro shocks halt or abort in-flight execution.</p><p class="lang-zh">盘中 SPY 下跌 / VIX 飙升 / 个股 / 新闻 / 宏观冲击暂停或中止正在执行中的订单。</p></div>
   </div>
 </div></section>
 
 <!-- GLOSSARY -->
 <section id="glossary"><div class="wrap glossary">
-  <div class="eyebrow">Plain-English terms</div>
-  <h2>Glossary</h2>
+  <div class="eyebrow"><span class="lang-en">Plain-English terms</span><span class="lang-zh">术语释义</span></div>
+  <h2><span class="lang-en">Glossary</span><span class="lang-zh">术语表</span></h2>
   <dl>
-    <dt>Tranche</dt><dd>A sub-portfolio with its own rules. Core (~90%) = diversified ETFs + screened stocks; Aggressive (~10%) = leveraged ETF momentum.</dd>
-    <dt>CANSLIM / VCP</dt><dd>A growth-stock methodology (O'Neil) and the tight "base" pattern that precedes a breakout — the buy pivot.</dd>
-    <dt>SEPA</dt><dd>Minervini's Specific Entry Point Analysis — the rule set for scaling out of winners and cutting failures.</dd>
-    <dt>R-multiple</dt><dd>Profit measured in units of initial risk. "2R" = twice the per-share risk taken at entry.</dd>
-    <dt>Ensemble</dt><dd>Running multiple independent strategies and combining their outputs — here, via the AI agent's top-N pick.</dd>
-    <dt>Buy candidates</dt><dd>The agent's daily shortlist (top 4). The only names the watchdog will consider buying that day.</dd>
-    <dt>Circuit breaker</dt><dd>An automatic trading halt/abort triggered by a market or single-name shock during execution.</dd>
-    <dt>Paper account</dt><dd>A simulated brokerage account — real prices, fake money. This system trades paper by default.</dd>
+    <dt>Tranche</dt><dd><span class="lang-en">A sub-portfolio with its own rules. Core (~90%) = diversified ETFs + screened stocks; Aggressive (~10%) = leveraged ETF momentum.</span><span class="lang-zh">具有独立规则的子投资组合。核心（约 90%）= 多元化 ETF + 筛选股票；激进（约 10%）= 杠杆 ETF 动量。</span></dd>
+    <dt>CANSLIM / VCP</dt><dd><span class="lang-en">A growth-stock methodology (O'Neil) and the tight "base" pattern that precedes a breakout — the buy pivot.</span><span class="lang-zh">欧尼尔的成长股方法论，以及突破前的紧密"底部"形态——买入枢轴。</span></dd>
+    <dt>SEPA</dt><dd><span class="lang-en">Minervini's Specific Entry Point Analysis — the rule set for scaling out of winners and cutting failures.</span><span class="lang-zh">Minervini 的特定入场点分析——用于分批平仓盈利和及时止损亏损的规则集。</span></dd>
+    <dt>R-multiple</dt><dd><span class="lang-en">Profit measured in units of initial risk. "2R" = twice the per-share risk taken at entry.</span><span class="lang-zh">以初始风险单位衡量的盈利。"2R" = 入场时每股风险的两倍。</span></dd>
+    <dt>Ensemble</dt><dd><span class="lang-en">Running multiple independent strategies and combining their outputs — here, via the AI agent's top-N pick.</span><span class="lang-zh">运行多套独立策略并合并其输出——此处通过 AI 智能体的前 N 个选股实现。</span></dd>
+    <dt><span class="lang-en">Buy candidates</span><span class="lang-zh">买入候选</span></dt><dd><span class="lang-en">The agent's daily shortlist (top 4). The only names the watchdog will consider buying that day.</span><span class="lang-zh">智能体每日短名单（前 4 名）。当日 watchdog 唯一会考虑买入的标的。</span></dd>
+    <dt><span class="lang-en">Circuit breaker</span><span class="lang-zh">熔断器</span></dt><dd><span class="lang-en">An automatic trading halt/abort triggered by a market or single-name shock during execution.</span><span class="lang-zh">执行期间由市场或个股冲击触发的自动交易暂停/中止机制。</span></dd>
+    <dt><span class="lang-en">Paper account</span><span class="lang-zh">模拟账户</span></dt><dd><span class="lang-en">A simulated brokerage account — real prices, fake money. This system trades paper by default.</span><span class="lang-zh">模拟经纪账户——真实价格，虚拟资金。本系统默认在模拟账户中交易。</span></dd>
   </dl>
 </div></section>
 
 <footer><div class="wrap">
-  <div class="note">📌 <strong>Living document.</strong> This page must be kept in sync with the system. Whenever a component, data flow, schedule, or safety rule changes, update <code>docs/system_overview.html</code> alongside the code and the README.</div>
-  <p style="margin-top:18px">Automated Quant Trading System · paper trading on Alpaca · generated as the canonical system overview.</p>
+  <div class="note">📌 <strong><span class="lang-en">Living document.</span><span class="lang-zh">持续更新文档。</span></strong> <span class="lang-en">This page must be kept in sync with the system. Whenever a component, data flow, schedule, or safety rule changes, update <code>docs/system_overview.html</code> alongside the code and the README.</span><span class="lang-zh">本页必须与系统保持同步。每当组件、数据流、调度计划或安全规则发生变更时，请在更新代码和 README 的同时更新 <code>docs/system_overview.html</code>。</span></div>
+  <p style="margin-top:18px"><span class="lang-en">Automated Quant Trading System · paper trading on Alpaca · generated as the canonical system overview.</span><span class="lang-zh">自动化量化交易系统 · Alpaca 模拟交易 · 本页为权威系统概览文档。</span></p>
 </div></footer>
 
 <script>
+  // Language toggle
+  (function(){
+    function pick(){ var s=localStorage.getItem('docLang');
+      if(s) return s;
+      return (navigator.language||'').toLowerCase().indexOf('zh')===0 ? 'zh':'en'; }
+    function set(l){ document.body.setAttribute('data-lang',l);
+      localStorage.setItem('docLang',l);
+      document.querySelectorAll('#langtoggle button').forEach(function(b){
+        b.classList.toggle('active', b.getAttribute('data-setlang')===l); });
+      if(window.onLangChange) window.onLangChange(l); }   // hook for JS-rendered content
+    document.addEventListener('DOMContentLoaded',function(){
+      document.querySelectorAll('#langtoggle button').forEach(function(b){
+        b.addEventListener('click',function(){ set(b.getAttribute('data-setlang')); }); });
+      set(pick());
+    });
+  })();
+
   // Active nav highlight on scroll
   const links=[...document.querySelectorAll('nav.top a')];
   const map=Object.fromEntries(links.map(a=>[a.getAttribute('href').slice(1),a]));
