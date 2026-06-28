@@ -79,15 +79,28 @@
   .hint{position:fixed;bottom:16px;right:18px;z-index:5;color:var(--faint);font-size:.76rem;background:rgba(20,27,36,.7);
     border:1px solid var(--line);border-radius:8px;padding:6px 11px;transition:opacity .6s}
   a.back{color:var(--accent);font-size:.8rem;text-decoration:none}
+
+  /* ---- bilingual toggle ---- */
+  #langtoggle{position:fixed;top:10px;right:72px;z-index:50;display:flex;gap:4px}
+  #langtoggle button{cursor:pointer;font:inherit;padding:2px 8px;border-radius:6px;border:1px solid var(--line);background:transparent;color:inherit;opacity:.55}
+  #langtoggle button.active{opacity:1;font-weight:600;border-color:currentColor}
+  body[data-lang="en"] .lang-zh{display:none}
+  body[data-lang="zh"] .lang-en{display:none}
 </style>
 </head>
 <body>
-<div class="hud">
-  <h1>System Architecture</h1>
-  <p>Pan = drag canvas · zoom = scroll / +&minus; · drag a node to move it · <strong>click</strong> a node for details · <strong>double-click</strong> a ⤢ module to zoom into its internal flow · scroll out to come back. <a class="back" href="system_overview.html">← narrative</a></p>
+
+<div id="langtoggle" aria-label="language">
+  <button data-setlang="en">EN</button><button data-setlang="zh">中文</button>
 </div>
 
-<div class="crumb" id="crumb"><button id="crumbBack" title="Back to overview">←</button><span id="crumbText"><span class="cur">Overview</span></span></div>
+<div class="hud">
+  <h1><span class="lang-en">System Architecture</span><span class="lang-zh">系统架构</span></h1>
+  <p class="lang-en">Pan = drag canvas · zoom = scroll / +&minus; · drag a node to move it · <strong>click</strong> a node for details · <strong>double-click</strong> a ⤢ module to zoom into its internal flow · scroll out to come back. <a class="back" href="system_overview.html">← narrative</a></p>
+  <p class="lang-zh">平移 = 拖拽画布 · 缩放 = 滚轮 / +&minus; · 拖拽节点移动 · <strong>单击</strong>节点查看详情 · <strong>双击</strong> ⤢ 模块进入内部流程 · 向外滚动返回。<a class="back" href="system_overview.html">← 叙述文档</a></p>
+</div>
+
+<div class="crumb" id="crumb"><button id="crumbBack" title="Back to overview">←</button><span id="crumbText"><span class="cur"><span class="lang-en">Overview</span><span class="lang-zh">总览</span></span></span></div>
 
 <div class="controls">
   <button id="zin" title="Zoom in">+</button>
@@ -116,25 +129,40 @@
 <div class="drawer" id="drawer">
   <button class="x" id="drawerX">✕</button>
   <div class="top"><span class="chip" id="dChip"></span><h2 id="dTitle"></h2><div class="file" id="dFile"></div></div>
-  <div class="bd"><button class="drill" id="dDrill">⤢ Zoom into detail flow</button><div id="dBody"></div><h3>Connections</h3><div class="conns" id="dConns"></div></div>
+  <div class="bd"><button class="drill" id="dDrill">⤢ <span class="lang-en">Zoom into detail flow</span><span class="lang-zh">进入详细流程</span></button><div id="dBody"></div><h3><span class="lang-en">Connections</span><span class="lang-zh">连接关系</span></h3><div class="conns" id="dConns"></div></div>
 </div>
 
-<div class="hint" id="hint">scroll to zoom · double-click a ⤢ node to drill in</div>
+<div class="hint" id="hint"><span class="lang-en">scroll to zoom · double-click a ⤢ node to drill in</span><span class="lang-zh">滚轮缩放 · 双击 ⤢ 节点进入详情</span></div>
 
 <script>
+/* ---- language accessor ---- */
+function L(v){ return (v && typeof v==='object') ? (v[document.body.getAttribute('data-lang')||'en'] || v.en) : v; }
+
 /* ============ palettes ============ */
-const LAYER = { signal:['#3b82f6','Signals'], select:['#a855f7','Selection (AI)'], timing:['#f59e0b','Timing'],
-  exec:['#22c55e','Execution'], safety:['#ef4444','Policy / Broker'], data:['#14b8a6','State / Data'] };
-const KIND = { input:['#3b82f6','Input'], process:['#22c55e','Process'], decision:['#f59e0b','Decision'],
-  output:['#14b8a6','Output'], ext:['#a855f7','LLM / external'], safety:['#ef4444','Safety gate'] };
+const LAYER = {
+  signal:  ['#3b82f6', {en:'Signals',            zh:'信号'}],
+  select:  ['#a855f7', {en:'Selection (AI)',      zh:'AI 选股'}],
+  timing:  ['#f59e0b', {en:'Timing',              zh:'择时'}],
+  exec:    ['#22c55e', {en:'Execution',            zh:'执行'}],
+  safety:  ['#ef4444', {en:'Policy / Broker',     zh:'策略 / 券商'}],
+  data:    ['#14b8a6', {en:'State / Data',         zh:'状态 / 数据'}]
+};
+const KIND = {
+  input:    ['#3b82f6', {en:'Input',      zh:'输入'}],
+  process:  ['#22c55e', {en:'Process',    zh:'处理'}],
+  decision: ['#f59e0b', {en:'Decision',   zh:'决策'}],
+  output:   ['#14b8a6', {en:'Output',     zh:'输出'}],
+  ext:      ['#a855f7', {en:'LLM / external', zh:'LLM / 外部'}],
+  safety:   ['#ef4444', {en:'Safety gate',   zh:'安全关卡'}]
+};
 
 /* timeline phases (clock order) + per-node [phase, row] placement */
 const PHASES=[
-  {t:'Weekly',time:'Sun 20:00 · universe',c:'#16202c'},
-  {t:'Pre-market',time:'20:30 · daily watchdog + AI ensemble',c:'#172234'},
-  {t:'Rebalance',time:'21:35 · build target weights',c:'#16242c'},
-  {t:'Intraday loop',time:'22:00–04:00 · every 5–10 min (RTH)',c:'#1d2230'},
-  {t:'Continuous',time:'every order · settle',c:'#231b27'},
+  {t:{en:'Weekly',zh:'每周'},    time:{en:'Sun 20:00 · universe',              zh:'周日 20:00 · 股票池'}},
+  {t:{en:'Pre-market',zh:'盘前'},time:{en:'20:30 · daily watchdog + AI ensemble',zh:'20:30 · 每日看门狗 + AI 集成'}},
+  {t:{en:'Rebalance',zh:'再平衡'},time:{en:'21:35 · build target weights',      zh:'21:35 · 构建目标权重'}},
+  {t:{en:'Intraday loop',zh:'日内循环'},time:{en:'22:00–04:00 · every 5–10 min (RTH)',zh:'22:00–04:00 · 每 5–10 分钟（RTH）'}},
+  {t:{en:'Continuous',zh:'持续'},time:{en:'every order · settle',               zh:'每笔订单 · 结算'}},
 ];
 const TPOS={ discovery:[0,0],
   macro:[1,0], screener:[1,1], value:[1,2], strategies:[1,3], agent:[1,4], candidates:[1,5],
@@ -145,24 +173,96 @@ const PCOLW=252, ROWH_T=96, RTOP=160;
 
 /* ============ OVERVIEW graph ============ */
 const OVERVIEW = { legend:LAYER, nodes:[
-  {id:'discovery',label:'Discovery',file:'quant/data/universe.py',layer:'signal',col:0,row:0,detail:'Weekly job that builds the tradable universe (S&P 500 + Nasdaq-100 + S&P 400) into the auto-watchlist used by the screens.'},
-  {id:'momentum',label:'Momentum / ETF rotation',file:'quant/signals/momentum.py',layer:'signal',col:0,row:1,detail:'Dual-momentum relative-strength ranking driving the core ETF sleeve and the aggressive leveraged-ETF sleeve.'},
-  {id:'macro',label:'Macro regime',file:'quant/signals/macro.py',layer:'signal',col:0,row:2,detail:'FRED-based macro overlay. Shrinks risk in hostile regimes and can trigger defensive (macro-flip) exits.'},
-  {id:'screener',label:'CANSLIM screener',file:'quant/signals/screener.py',layer:'signal',col:0,row:3,detail:'Growth screen: EPS/revenue growth filter, relative-strength percentile, VCP base detection with a buy pivot. One of the two ensemble strategies.'},
-  {id:'value',label:'Value + Quality screen',file:'quant/strategies/value/screen.py',layer:'signal',col:0,row:4,detail:'Two-track value screen over the Russell 3000 (iShares IWV): price/volume pre-filter → parallel fundamentals → Track A (profitable bargains) / Track B (unprofitable growth) gates → rank. The other ensemble strategy.'},
-  {id:'strategies',label:'Strategy runner',file:'quant/strategies/contract.py',layer:'select',col:1,row:1,detail:'Isolated-strategy contract + parallel runner. Each strategy writes its own file; a hung/erroring one is skipped (timeout-bounded) so it can never stall the others or the watchdog.'},
-  {id:'agent',label:'AI agent · due diligence',file:'quant/agent/investor.py',layer:'select',col:1,row:2.4,detail:'Five-stage LLM pipeline: Pool → Dossiers (peer-relative) → Balanced blind shortlist → Analyst (bull/bear) → Critic → PM (0–5, floor) → Picks + advisory levels → buy_candidates.json. Abstention allowed. Rule-rank fallback on any stage failure. Runs ONCE per day.'},
-  {id:'candidates',label:'buy_candidates.json',file:'.cache/',layer:'data',col:1,row:3.7,detail:'The agent’s daily shortlist — the only names the watchdog will consider buying. A staleness guard ignores it (falls back to the screener) if the daily job hasn’t refreshed it.'},
-  {id:'watchdog',label:'Watchdog',file:'quant/monitor/watchdog.py',layer:'timing',col:2,row:1.6,detail:'Daily + intraday monitor. Daily: sync, stops, macro, and the once-a-day ensemble trigger. Intraday (5 min): coded volume-breakout buys, stop-loss enforcement, SEPA exits. No LLM on this loop.'},
-  {id:'sepa',label:'SEPA exits',file:'quant/risk/sepa_exits.py',layer:'timing',col:2,row:3,detail:'Pure Minervini exit rules: R-multiple scale-outs, failed-breakout, climax-top, and a 21-EMA trailing backstop. The watchdog calls into it.'},
-  {id:'rebalancer',label:'Rebalancer',file:'quant/execution/rebalancer.py',layer:'exec',col:3,row:0.3,detail:'Builds two-tranche target weights, sends the tiny actionable slice through orders.py, writes the rest to the pending plan.'},
-  {id:'planner',label:'Planner',file:'quant/execution/planner.py',layer:'exec',col:3,row:1.4,detail:'Pure functions enriching order intents with tier, price limits and slice counts. No I/O.'},
-  {id:'plan',label:'pending_plan.json',file:'.cache/',layer:'data',col:3,row:2.5,detail:'The on-disk daily plan — written by the rebalancer, worked tick-by-tick by the executor.'},
-  {id:'executor',label:'Executor',file:'quant/execution/executor.py',layer:'exec',col:3,row:3.6,detail:'Intraday driver (10 min). Consumes the plan, evaluates 5 circuit breakers, submits sliced marketable-limit orders.'},
-  {id:'orders',label:'Orders · policy + safety',file:'quant/execution/orders.py',layer:'safety',col:4,row:1.4,detail:'The policy chokepoint EVERY order passes through: HALT, paper/live guard, cash gate, daily caps, large-order approval. Also reconciles state and adopts broker-imported positions.'},
-  {id:'broker',label:'Broker (Alpaca SDK)',file:'quant/execution/broker.py',layer:'safety',col:4,row:2.6,detail:'Thin Alpaca wrapper — pure I/O, raises BrokerError, leaks no SDK objects. Live trading needs two explicit env flags; otherwise paper.'},
-  {id:'portfolio',label:'portfolio.json',file:'state',layer:'data',col:4,row:3.7,detail:'Cached source-of-truth snapshot (positions, cash, tranche tags, stop ids). Written by sync_state, read across the system.'},
-  {id:'alpaca',label:'Alpaca (paper)',file:'broker',layer:'safety',col:4,row:0.3,detail:'The brokerage. Paper account by default — real prices, simulated money.'},
+  {id:'discovery',
+   label:{en:'Discovery',zh:'股票池发现'},
+   file:'quant/data/universe.py',layer:'signal',col:0,row:0,
+   detail:{en:'Weekly job that builds the tradable universe (S&P 500 + Nasdaq-100 + S&P 400) into the auto-watchlist used by the screens.',
+           zh:'每周任务，将可交易股票池（S&P 500 + Nasdaq-100 + S&P 400）构建为各筛选器使用的自动观察列表。'}},
+  {id:'momentum',
+   label:{en:'Momentum / ETF rotation',zh:'动量 / ETF 轮动'},
+   file:'quant/signals/momentum.py',layer:'signal',col:0,row:1,
+   detail:{en:'Dual-momentum relative-strength ranking driving the core ETF sleeve and the aggressive leveraged-ETF sleeve.',
+           zh:'双动量相对强度排名，驱动核心 ETF 仓位和激进杠杆 ETF 仓位。'}},
+  {id:'macro',
+   label:{en:'Macro regime',zh:'宏观状态'},
+   file:'quant/signals/macro.py',layer:'signal',col:0,row:2,
+   detail:{en:'FRED-based macro overlay. Shrinks risk in hostile regimes and can trigger defensive (macro-flip) exits.',
+           zh:'基于 FRED 的宏观叠加层。在不利状态下收缩风险，并可触发防御性（宏观翻转）退出。'}},
+  {id:'screener',
+   label:{en:'CANSLIM screener',zh:'CANSLIM 选股器'},
+   file:'quant/signals/screener.py',layer:'signal',col:0,row:3,
+   detail:{en:'Growth screen: EPS/revenue growth filter, relative-strength percentile, VCP base detection with a buy pivot. One of the two ensemble strategies.',
+           zh:'成长型筛选：EPS/营收增长过滤、相对强度百分位、VCP 底部识别与买入点。两个集成策略之一。'}},
+  {id:'value',
+   label:{en:'Value + Quality screen',zh:'价值 + 质量筛选'},
+   file:'quant/strategies/value/screen.py',layer:'signal',col:0,row:4,
+   detail:{en:'Two-track value screen over the Russell 3000 (iShares IWV): price/volume pre-filter → parallel fundamentals → Track A (profitable bargains) / Track B (unprofitable growth) gates → rank. The other ensemble strategy.',
+           zh:'针对 Russell 3000（iShares IWV）的双轨价值筛选：价格/成交量预过滤 → 并行基本面 → Track A（盈利低估）/ Track B（亏损成长）关卡 → 排名。另一个集成策略。'}},
+  {id:'strategies',
+   label:{en:'Strategy runner',zh:'策略执行器'},
+   file:'quant/strategies/contract.py',layer:'select',col:1,row:1,
+   detail:{en:'Isolated-strategy contract + parallel runner. Each strategy writes its own file; a hung/erroring one is skipped (timeout-bounded) so it can never stall the others or the watchdog.',
+           zh:'隔离策略合约 + 并行执行器。每个策略写入独立文件；挂起/出错的策略会被跳过（受超时限制），不会阻塞其他策略或看门狗。'}},
+  {id:'agent',
+   label:{en:'AI agent · due diligence',zh:'AI 智能体 · 尽职调查'},
+   file:'quant/agent/investor.py',layer:'select',col:1,row:2.4,
+   detail:{en:'Five-stage LLM pipeline: Pool → Dossiers (peer-relative) → Balanced blind shortlist → Analyst (bull/bear) → Critic → PM (0–5, floor) → Picks + advisory levels → buy_candidates.json. Abstention allowed. Rule-rank fallback on any stage failure. Runs ONCE per day.',
+           zh:'五阶段 LLM 流水线：股票池 → 档案（同行相对）→ 平衡盲目候选名单 → 分析师（多/空）→ 评论员 → 投资经理（0–5，下限）→ 选股 + 建议价位 → buy_candidates.json。允许弃权。任意阶段失败时回退至规则排名。每日运行一次。'}},
+  {id:'candidates',
+   label:{en:'buy_candidates.json',zh:'buy_candidates.json'},
+   file:'.cache/',layer:'data',col:1,row:3.7,
+   detail:{en:'The agent\'s daily shortlist — the only names the watchdog will consider buying. A staleness guard ignores it (falls back to the screener) if the daily job hasn\'t refreshed it.',
+           zh:'智能体每日候选名单 —— 看门狗仅会考虑买入其中的标的。若每日任务未刷新，则通过陈旧性保护忽略该文件并回退至选股器。'}},
+  {id:'watchdog',
+   label:{en:'Watchdog',zh:'看门狗'},
+   file:'quant/monitor/watchdog.py',layer:'timing',col:2,row:1.6,
+   detail:{en:'Daily + intraday monitor. Daily: sync, stops, macro, and the once-a-day ensemble trigger. Intraday (5 min): coded volume-breakout buys, stop-loss enforcement, SEPA exits. No LLM on this loop.',
+           zh:'每日 + 日内监控器。每日：同步、止损、宏观，以及每日一次的集成触发。日内（5 分钟）：编程成交量突破买入、止损执行、SEPA 退出。此循环不使用 LLM。'}},
+  {id:'sepa',
+   label:{en:'SEPA exits',zh:'SEPA 退出'},
+   file:'quant/risk/sepa_exits.py',layer:'timing',col:2,row:3,
+   detail:{en:'Pure Minervini exit rules: R-multiple scale-outs, failed-breakout, climax-top, and a 21-EMA trailing backstop. The watchdog calls into it.',
+           zh:'纯 Minervini 退出规则：R 倍数分批减仓、突破失败、高潮顶、21-EMA 跟踪止损。由看门狗调用。'}},
+  {id:'rebalancer',
+   label:{en:'Rebalancer',zh:'再平衡器'},
+   file:'quant/execution/rebalancer.py',layer:'exec',col:3,row:0.3,
+   detail:{en:'Builds two-tranche target weights, sends the tiny actionable slice through orders.py, writes the rest to the pending plan.',
+           zh:'构建双批次目标权重，将小额可执行部分通过 orders.py 提交，其余写入待执行计划。'}},
+  {id:'planner',
+   label:{en:'Planner',zh:'计划器'},
+   file:'quant/execution/planner.py',layer:'exec',col:3,row:1.4,
+   detail:{en:'Pure functions enriching order intents with tier, price limits and slice counts. No I/O.',
+           zh:'纯函数，用层级、价格限制和分片数量丰富订单意图。无 I/O。'}},
+  {id:'plan',
+   label:{en:'pending_plan.json',zh:'pending_plan.json'},
+   file:'.cache/',layer:'data',col:3,row:2.5,
+   detail:{en:'The on-disk daily plan — written by the rebalancer, worked tick-by-tick by the executor.',
+           zh:'磁盘上的每日计划 —— 由再平衡器写入，由执行器逐 tick 执行。'}},
+  {id:'executor',
+   label:{en:'Executor',zh:'执行器'},
+   file:'quant/execution/executor.py',layer:'exec',col:3,row:3.6,
+   detail:{en:'Intraday driver (10 min). Consumes the plan, evaluates 5 circuit breakers, submits sliced marketable-limit orders.',
+           zh:'日内驱动程序（10 分钟）。消费计划，评估 5 个熔断器，提交分片可成交限价订单。'}},
+  {id:'orders',
+   label:{en:'Orders · policy + safety',zh:'订单 · 策略 + 安全'},
+   file:'quant/execution/orders.py',layer:'safety',col:4,row:1.4,
+   detail:{en:'The policy chokepoint EVERY order passes through: HALT, paper/live guard, cash gate, daily caps, large-order approval. Also reconciles state and adopts broker-imported positions.',
+           zh:'每笔订单必经的策略检查点：HALT、模拟/实盘保护、现金关卡、每日上限、大额订单审批。同时核对状态并接受券商导入的持仓。'}},
+  {id:'broker',
+   label:{en:'Broker (Alpaca SDK)',zh:'券商（Alpaca SDK）'},
+   file:'quant/execution/broker.py',layer:'safety',col:4,row:2.6,
+   detail:{en:'Thin Alpaca wrapper — pure I/O, raises BrokerError, leaks no SDK objects. Live trading needs two explicit env flags; otherwise paper.',
+           zh:'轻量 Alpaca 封装 —— 纯 I/O，抛出 BrokerError，不泄露 SDK 对象。实盘交易需要两个显式环境变量，否则为模拟交易。'}},
+  {id:'portfolio',
+   label:{en:'portfolio.json',zh:'portfolio.json'},
+   file:'state',layer:'data',col:4,row:3.7,
+   detail:{en:'Cached source-of-truth snapshot (positions, cash, tranche tags, stop ids). Written by sync_state, read across the system.',
+           zh:'缓存的权威快照（持仓、现金、批次标签、止损 id）。由 sync_state 写入，供全系统读取。'}},
+  {id:'alpaca',
+   label:{en:'Alpaca (paper)',zh:'Alpaca（模拟）'},
+   file:'broker',layer:'safety',col:4,row:0.3,
+   detail:{en:'The brokerage. Paper account by default — real prices, simulated money.',
+           zh:'券商。默认为模拟账户 —— 真实价格，虚拟资金。'}},
 ], edges:[
   ['discovery','screener'],['discovery','value'],['screener','strategies'],['value','strategies'],
   ['strategies','agent'],['agent','candidates'],['candidates','watchdog','hot'],
@@ -174,95 +274,129 @@ const OVERVIEW = { legend:LAYER, nodes:[
 
 /* ============ DETAIL sub-graphs (internal flow per module) ============ */
 const SUB = {
-  value:{ title:'Value screen — two-track Russell 3000', file:'quant/strategies/value/screen.py', legend:KIND, nodes:[
-    {id:'v1',label:'Universe',file:'Russell 3000 (IWV CSV)',kind:'input',col:0,row:1,detail:'discovery.get_russell3000_tickers — iShares IWV holdings CSV, weekly-cached, fail-open.'},
-    {id:'v2',label:'Stage-0 pre-filter',file:'price ≥ $5 · $-vol ≥ $5M',kind:'decision',col:1,row:1,detail:'Cheap + illiquid dropped on price/volume only (no .info): ~3000 → a few hundred. value_prefilter.'},
-    {id:'v3',label:'Fundamentals',file:'parallel .info → Fundamentals',kind:'process',col:2,row:1,detail:'fetch_info per survivor in a thread pool; value_fundamentals.from_info normalizes the yfinance keys.'},
-    {id:'v4',label:'Classify A / B',file:'profitable?',kind:'decision',col:3,row:1,detail:'Market-cap gate, then Track A (profitable) vs Track B (unprofitable growth). value_tracks.classify.'},
-    {id:'v5',label:'Track gates',file:'VS_TRACK_A / VS_TRACK_B',kind:'decision',col:4,row:1,detail:'A: PEG<1, PE<20, growth, solvency. B: P/S<6, rev>25%, gross>40%, cash-runway>6q. Fail-open per field with a ≥1-of-each-signal guard.'},
-    {id:'v6',label:'Rank + interleave',file:'A,B,A,B → top-N',kind:'process',col:5,row:1},
-    {id:'v7',label:'write value.json',file:'.cache/strategies/',kind:'output',col:6,row:1},
+  value:{ title:{en:'Value screen — two-track Russell 3000',zh:'价值筛选 —— 双轨 Russell 3000'}, file:'quant/strategies/value/screen.py', legend:KIND, nodes:[
+    {id:'v1',label:{en:'Universe',zh:'股票池'},file:'Russell 3000 (IWV CSV)',kind:'input',col:0,row:1,
+     detail:{en:'discovery.get_russell3000_tickers — iShares IWV holdings CSV, weekly-cached, fail-open.',
+             zh:'discovery.get_russell3000_tickers —— iShares IWV 持仓 CSV，每周缓存，失败时开放通行。'}},
+    {id:'v2',label:{en:'Stage-0 pre-filter',zh:'Stage-0 预过滤'},file:'price ≥ $5 · $-vol ≥ $5M',kind:'decision',col:1,row:1,
+     detail:{en:'Cheap + illiquid dropped on price/volume only (no .info): ~3000 → a few hundred. value_prefilter.',
+             zh:'仅凭价格/成交量剔除低价和流动性不足的股票（无需 .info）：~3000 → 数百只。value_prefilter。'}},
+    {id:'v3',label:{en:'Fundamentals',zh:'基本面'},file:'parallel .info → Fundamentals',kind:'process',col:2,row:1,
+     detail:{en:'fetch_info per survivor in a thread pool; value_fundamentals.from_info normalizes the yfinance keys.',
+             zh:'在线程池中对每只幸存股票调用 fetch_info；value_fundamentals.from_info 规范化 yfinance 字段。'}},
+    {id:'v4',label:{en:'Classify A / B',zh:'分类 A / B'},file:'profitable?',kind:'decision',col:3,row:1,
+     detail:{en:'Market-cap gate, then Track A (profitable) vs Track B (unprofitable growth). value_tracks.classify.',
+             zh:'市值关卡，然后分为 Track A（盈利）与 Track B（亏损成长）。value_tracks.classify。'}},
+    {id:'v5',label:{en:'Track gates',zh:'轨道关卡'},file:'VS_TRACK_A / VS_TRACK_B',kind:'decision',col:4,row:1,
+     detail:{en:'A: PEG<1, PE<20, growth, solvency. B: P/S<6, rev>25%, gross>40%, cash-runway>6q. Fail-open per field with a ≥1-of-each-signal guard.',
+             zh:'A：PEG<1，PE<20，增长，偿付能力。B：P/S<6，营收>25%，毛利>40%，现金跑道>6q。每字段失败时开放，且每类信号至少满足一个。'}},
+    {id:'v6',label:{en:'Rank + interleave',zh:'排名 + 交叉'},file:'A,B,A,B → top-N',kind:'process',col:5,row:1},
+    {id:'v7',label:{en:'write value.json',zh:'写入 value.json'},file:'.cache/strategies/',kind:'output',col:6,row:1},
   ], edges:[['v1','v2'],['v2','v3'],['v3','v4'],['v4','v5'],['v5','v6'],['v6','v7','hot']]},
 
-  screener:{ title:'CANSLIM screener', file:'quant/signals/screener.py', legend:KIND, nodes:[
-    {id:'c1',label:'Universe',file:'watchlist',kind:'input',col:0,row:1},
-    {id:'c2',label:'C + A filter',file:'EPS & revenue growth',kind:'decision',col:1,row:1},
-    {id:'c3',label:'RS percentile',file:'3/6/12-mo blend',kind:'process',col:2,row:1},
-    {id:'c4',label:'VCP base detect',file:'→ buy pivot',kind:'process',col:3,row:1},
-    {id:'c5',label:'Composite score',file:'',kind:'process',col:4,row:1},
-    {id:'c6',label:'top-N',file:'SCREEN_TOP_N',kind:'process',col:5,row:1},
-    {id:'c7',label:'write canslim.json',file:'.cache/strategies/',kind:'output',col:6,row:1},
+  screener:{ title:{en:'CANSLIM screener',zh:'CANSLIM 选股器'}, file:'quant/signals/screener.py', legend:KIND, nodes:[
+    {id:'c1',label:{en:'Universe',zh:'股票池'},file:'watchlist',kind:'input',col:0,row:1},
+    {id:'c2',label:{en:'C + A filter',zh:'C + A 过滤'},file:'EPS & revenue growth',kind:'decision',col:1,row:1},
+    {id:'c3',label:{en:'RS percentile',zh:'RS 百分位'},file:'3/6/12-mo blend',kind:'process',col:2,row:1},
+    {id:'c4',label:{en:'VCP base detect',zh:'VCP 底部识别'},file:'→ buy pivot',kind:'process',col:3,row:1},
+    {id:'c5',label:{en:'Composite score',zh:'综合评分'},file:'',kind:'process',col:4,row:1},
+    {id:'c6',label:{en:'top-N',zh:'top-N'},file:'SCREEN_TOP_N',kind:'process',col:5,row:1},
+    {id:'c7',label:{en:'write canslim.json',zh:'写入 canslim.json'},file:'.cache/strategies/',kind:'output',col:6,row:1},
   ], edges:[['c1','c2'],['c2','c3'],['c3','c4'],['c4','c5'],['c5','c6'],['c6','c7','hot']]},
 
-  strategies:{ title:'Strategy runner (parallel + isolated)', file:'quant/strategies/contract.py', legend:KIND, nodes:[
-    {id:'t1',label:'Registry',file:'ENSEMBLE_STRATEGIES',kind:'input',col:0,row:1.5},
-    {id:'t2',label:'run value',file:'thread (yfinance)',kind:'process',col:1,row:0.6},
-    {id:'t3',label:'run canslim',file:'thread (yfinance)',kind:'process',col:1,row:2.4},
-    {id:'t4',label:'Timeout / isolation',file:'hang → skip',kind:'safety',col:2,row:1.5,detail:'Each strategy is bounded by ENSEMBLE_STRATEGY_TIMEOUT_SEC; a hung or erroring one is abandoned so it cannot stall the others or the daily watchdog.'},
-    {id:'t5',label:'write <name>.json',file:'one file each',kind:'output',col:3,row:1.5},
+  strategies:{ title:{en:'Strategy runner (parallel + isolated)',zh:'策略执行器（并行 + 隔离）'}, file:'quant/strategies/contract.py', legend:KIND, nodes:[
+    {id:'t1',label:{en:'Registry',zh:'注册表'},file:'ENSEMBLE_STRATEGIES',kind:'input',col:0,row:1.5},
+    {id:'t2',label:{en:'run value',zh:'运行 value'},file:'thread (yfinance)',kind:'process',col:1,row:0.6},
+    {id:'t3',label:{en:'run canslim',zh:'运行 canslim'},file:'thread (yfinance)',kind:'process',col:1,row:2.4},
+    {id:'t4',label:{en:'Timeout / isolation',zh:'超时 / 隔离'},file:'hang → skip',kind:'safety',col:2,row:1.5,
+     detail:{en:'Each strategy is bounded by ENSEMBLE_STRATEGY_TIMEOUT_SEC; a hung or erroring one is abandoned so it cannot stall the others or the daily watchdog.',
+             zh:'每个策略受 ENSEMBLE_STRATEGY_TIMEOUT_SEC 约束；挂起或出错的策略会被放弃，不会阻塞其他策略或每日看门狗。'}},
+    {id:'t5',label:{en:'write <name>.json',zh:'写入 <name>.json'},file:'one file each',kind:'output',col:3,row:1.5},
   ], edges:[['t1','t2'],['t1','t3'],['t2','t4'],['t3','t4'],['t4','t5','hot']]},
 
-  agent:{ title:'AI agent — due-diligence pipeline', file:'quant/agent/investor.py', legend:KIND, nodes:[
-    {id:'a1',label:'Pool',file:'merge + dedupe + exclude owned',kind:'input',col:0,row:1.5,detail:'Merges all strategy rows, dedupes tickers, records strategy votes, keeps best rank/score, excludes already-owned names.'},
-    {id:'a2',label:'Dossiers (peer-relative)',file:'parallel fetch per ticker',kind:'process',col:1,row:1.5,detail:'Concurrent fundamentals fetch: price/PE/target, EPS surprises, news. Adds peer-relative PE and price-to-target z-scores within each sector cohort.'},
-    {id:'a3',label:'Balanced blind shortlist',file:'source-cap + strip labels',kind:'process',col:2,row:1.5,detail:'Re-balances seats so no single strategy exceeds AGENT_SOURCE_BALANCE_CAP (default 50%). Strips strategy labels before the LLM sees the list (blind) to remove positivity bias. Logs source mix to .cache/agent_source_mix.csv.'},
-    {id:'a4',label:'Analyst (bull/bear)',file:'STAGE=ANALYST',kind:'ext',col:3,row:0.8,detail:'LLM writes a structured verdict per shortlisted ticker: {signal, confidence, thesis, risks, catalysts, bull, bear}. Falls back to rule-ranking on failure.'},
-    {id:'a5',label:'Critic',file:'STAGE=CRITIC',kind:'ext',col:3,row:2.2,detail:'LLM challenges each Analyst verdict. Verdicts that do not survive scrutiny are pruned before the PM sees them.'},
-    {id:'a6',label:'PM (0–5, floor)',file:'STAGE=PM',kind:'ext',col:4,row:1.5,detail:'PM selects 0–AGENT_MAX_PICKS final picks from surviving verdicts; may abstain (empty list) if conviction is insufficient. Picks below AGENT_CONVICTION_FLOOR are removed.'},
-    {id:'a7',label:'Picks + levels',file:'advisory buy/stop/tp',kind:'process',col:5,row:0.8,detail:'Each pick is enriched with advisory levels from technical/fundamental heuristics: buy_low, buy_high, stop_loss, take_profit (may be None). Rationale + levels appended to .cache/agent_reasons.log.'},
-    {id:'a8',label:'Rule-rank fallback',file:'on any LLM failure',kind:'process',col:5,row:2.2,detail:'If any stage fails or returns junk, deterministic consensus-then-score ranking takes over. The pipeline never stalls.'},
-    {id:'a9',label:'buy_candidates.json',file:'.cache/',kind:'output',col:6,row:1.5,detail:'Persisted picks with schema: {generated_at, picks:[{ticker,rationale,strategies,confidence,buy_low,buy_high,stop_loss,take_profit}]}.'},
+  agent:{ title:{en:'AI agent — due-diligence pipeline',zh:'AI 智能体 —— 尽职调查流水线'}, file:'quant/agent/investor.py', legend:KIND, nodes:[
+    {id:'a1',label:{en:'Pool',zh:'股票池'},file:'merge + dedupe + exclude owned',kind:'input',col:0,row:1.5,
+     detail:{en:'Merges all strategy rows, dedupes tickers, records strategy votes, keeps best rank/score, excludes already-owned names.',
+             zh:'合并所有策略行，去重标的，记录策略投票，保留最佳排名/评分，排除已持仓标的。'}},
+    {id:'a2',label:{en:'Dossiers (peer-relative)',zh:'档案（同行相对）'},file:'parallel fetch per ticker',kind:'process',col:1,row:1.5,
+     detail:{en:'Concurrent fundamentals fetch: price/PE/target, EPS surprises, news. Adds peer-relative PE and price-to-target z-scores within each sector cohort.',
+             zh:'并发基本面获取：价格/PE/目标价、EPS 超预期、新闻。在各行业组内添加同行相对 PE 和价格对目标价 z 分数。'}},
+    {id:'a3',label:{en:'Balanced blind shortlist',zh:'平衡盲目候选名单'},file:'source-cap + strip labels',kind:'process',col:2,row:1.5,
+     detail:{en:'Re-balances seats so no single strategy exceeds AGENT_SOURCE_BALANCE_CAP (default 50%). Strips strategy labels before the LLM sees the list (blind) to remove positivity bias. Logs source mix to .cache/agent_source_mix.csv.',
+             zh:'重新平衡席位，使单一策略不超过 AGENT_SOURCE_BALANCE_CAP（默认 50%）。在 LLM 看到名单前去除策略标签（盲评）以消除正向偏差。将来源构成记录至 .cache/agent_source_mix.csv。'}},
+    {id:'a4',label:{en:'Analyst (bull/bear)',zh:'分析师（多/空）'},file:'STAGE=ANALYST',kind:'ext',col:3,row:0.8,
+     detail:{en:'LLM writes a structured verdict per shortlisted ticker: {signal, confidence, thesis, risks, catalysts, bull, bear}. Falls back to rule-ranking on failure.',
+             zh:'LLM 对每只候选标的写出结构化判断：{signal, confidence, thesis, risks, catalysts, bull, bear}。失败时回退至规则排名。'}},
+    {id:'a5',label:{en:'Critic',zh:'评论员'},file:'STAGE=CRITIC',kind:'ext',col:3,row:2.2,
+     detail:{en:'LLM challenges each Analyst verdict. Verdicts that do not survive scrutiny are pruned before the PM sees them.',
+             zh:'LLM 挑战每条分析师判断。未通过审查的判断在投资经理看到之前被剔除。'}},
+    {id:'a6',label:{en:'PM (0–5, floor)',zh:'投资经理（0–5，下限）'},file:'STAGE=PM',kind:'ext',col:4,row:1.5,
+     detail:{en:'PM selects 0–AGENT_MAX_PICKS final picks from surviving verdicts; may abstain (empty list) if conviction is insufficient. Picks below AGENT_CONVICTION_FLOOR are removed.',
+             zh:'投资经理从通过审查的判断中选出 0–AGENT_MAX_PICKS 只最终标的；若信念不足可弃权（空列表）。低于 AGENT_CONVICTION_FLOOR 的选股被移除。'}},
+    {id:'a7',label:{en:'Picks + levels',zh:'选股 + 价位'},file:'advisory buy/stop/tp',kind:'process',col:5,row:0.8,
+     detail:{en:'Each pick is enriched with advisory levels from technical/fundamental heuristics: buy_low, buy_high, stop_loss, take_profit (may be None). Rationale + levels appended to .cache/agent_reasons.log.',
+             zh:'每只选股通过技术/基本面启发式添加建议价位：buy_low, buy_high, stop_loss, take_profit（可为 None）。理由 + 价位追加至 .cache/agent_reasons.log。'}},
+    {id:'a8',label:{en:'Rule-rank fallback',zh:'规则排名回退'},file:'on any LLM failure',kind:'process',col:5,row:2.2,
+     detail:{en:'If any stage fails or returns junk, deterministic consensus-then-score ranking takes over. The pipeline never stalls.',
+             zh:'若任意阶段失败或返回无效结果，确定性共识后评分排名接管。流水线永不停滞。'}},
+    {id:'a9',label:{en:'buy_candidates.json',zh:'buy_candidates.json'},file:'.cache/',kind:'output',col:6,row:1.5,
+     detail:{en:'Persisted picks with schema: {generated_at, picks:[{ticker,rationale,strategies,confidence,buy_low,buy_high,stop_loss,take_profit}]}.',
+             zh:'持久化选股，格式：{generated_at, picks:[{ticker,rationale,strategies,confidence,buy_low,buy_high,stop_loss,take_profit}]}。'}},
   ], edges:[['a1','a2'],['a2','a3'],['a3','a4'],['a3','a5'],['a4','a6'],['a5','a6'],['a6','a7'],['a6','a8','alt'],['a7','a9','hot'],['a8','a9','alt']]},
 
-  watchdog:{ title:'Watchdog — daily & intraday', file:'quant/monitor/watchdog.py', legend:KIND, nodes:[
-    {id:'w0',label:'Run',file:'cron',kind:'input',col:0,row:1.6},
-    {id:'wd1',label:'Snapshot + adopt',file:'sync_state',kind:'process',col:1,row:0.4},
-    {id:'wd2',label:'Attach stops',file:'ensure_trailing_stops',kind:'process',col:2,row:0.4},
-    {id:'wd3',label:'Macro check',file:'',kind:'process',col:3,row:0.4},
-    {id:'wd4',label:'Run ensemble (once)',file:'_run_daily_ensemble',kind:'ext',col:4,row:0.4,detail:'DAILY only: strategies + agent → buy_candidates.json. Fail-open. This is the one place the LLM runs.'},
-    {id:'wi1',label:'Read candidates',file:'buy_candidates.json',kind:'input',col:1,row:2.8},
-    {id:'wi2',label:'Volume-breakout buy?',file:'coded rule',kind:'decision',col:2,row:2.8,detail:'INTRADAY: deterministic — estimated full-day volume breaking the max down-day volume. No LLM.'},
-    {id:'wi3',label:'Enforce stop-loss',file:'market-sell on breach',kind:'safety',col:3,row:2.8},
-    {id:'wi4',label:'SEPA exits',file:'quant/risk/sepa_exits.py',kind:'process',col:4,row:2.8},
+  watchdog:{ title:{en:'Watchdog — daily & intraday',zh:'看门狗 —— 每日与日内'}, file:'quant/monitor/watchdog.py', legend:KIND, nodes:[
+    {id:'w0',label:{en:'Run',zh:'运行'},file:'cron',kind:'input',col:0,row:1.6},
+    {id:'wd1',label:{en:'Snapshot + adopt',zh:'快照 + 接受'},file:'sync_state',kind:'process',col:1,row:0.4},
+    {id:'wd2',label:{en:'Attach stops',zh:'附加止损'},file:'ensure_trailing_stops',kind:'process',col:2,row:0.4},
+    {id:'wd3',label:{en:'Macro check',zh:'宏观检查'},file:'',kind:'process',col:3,row:0.4},
+    {id:'wd4',label:{en:'Run ensemble (once)',zh:'运行集成（一次）'},file:'_run_daily_ensemble',kind:'ext',col:4,row:0.4,
+     detail:{en:'DAILY only: strategies + agent → buy_candidates.json. Fail-open. This is the one place the LLM runs.',
+             zh:'仅每日：strategies + agent → buy_candidates.json。失败时开放通行。这是 LLM 唯一运行的地方。'}},
+    {id:'wi1',label:{en:'Read candidates',zh:'读取候选'},file:'buy_candidates.json',kind:'input',col:1,row:2.8},
+    {id:'wi2',label:{en:'Volume-breakout buy?',zh:'成交量突破买入？'},file:'coded rule',kind:'decision',col:2,row:2.8,
+     detail:{en:'INTRADAY: deterministic — estimated full-day volume breaking the max down-day volume. No LLM.',
+             zh:'日内：确定性 —— 预估全天成交量突破最大下跌日成交量。无 LLM。'}},
+    {id:'wi3',label:{en:'Enforce stop-loss',zh:'执行止损'},file:'market-sell on breach',kind:'safety',col:3,row:2.8},
+    {id:'wi4',label:{en:'SEPA exits',zh:'SEPA 退出'},file:'quant/risk/sepa_exits.py',kind:'process',col:4,row:2.8},
   ], edges:[['w0','wd1','daily'],['wd1','wd2'],['wd2','wd3'],['wd3','wd4','daily'],
             ['w0','wi1'],['wi1','wi2'],['wi2','wi3'],['wi3','wi4']]},
 
-  rebalancer:{ title:'Rebalancer', file:'quant/execution/rebalancer.py', legend:KIND, nodes:[
-    {id:'r1',label:'Signals',file:'momentum·screen·macro',kind:'input',col:0,row:1.5},
-    {id:'r2',label:'Core targets',file:'ETFs + stocks',kind:'process',col:1,row:0.6},
-    {id:'r3',label:'Aggressive targets',file:'leveraged-ETF momentum',kind:'process',col:1,row:2.4},
-    {id:'r4',label:'Reconcile to targets',file:'MAX_POSITION_PCT cap',kind:'process',col:2,row:1.5},
-    {id:'r5',label:'Tiny slice → orders',file:'execute_plan',kind:'output',col:3,row:0.7},
-    {id:'r6',label:'Large → pending_plan',file:'+ Telegram note',kind:'output',col:3,row:2.3},
+  rebalancer:{ title:{en:'Rebalancer',zh:'再平衡器'}, file:'quant/execution/rebalancer.py', legend:KIND, nodes:[
+    {id:'r1',label:{en:'Signals',zh:'信号'},file:'momentum·screen·macro',kind:'input',col:0,row:1.5},
+    {id:'r2',label:{en:'Core targets',zh:'核心目标'},file:'ETFs + stocks',kind:'process',col:1,row:0.6},
+    {id:'r3',label:{en:'Aggressive targets',zh:'激进目标'},file:'leveraged-ETF momentum',kind:'process',col:1,row:2.4},
+    {id:'r4',label:{en:'Reconcile to targets',zh:'调整至目标'},file:'MAX_POSITION_PCT cap',kind:'process',col:2,row:1.5},
+    {id:'r5',label:{en:'Tiny slice → orders',zh:'小额分片 → 订单'},file:'execute_plan',kind:'output',col:3,row:0.7},
+    {id:'r6',label:{en:'Large → pending_plan',zh:'大额 → pending_plan'},file:'+ Telegram note',kind:'output',col:3,row:2.3},
   ], edges:[['r1','r2'],['r1','r3'],['r2','r4'],['r3','r4'],['r4','r5'],['r4','r6']]},
 
-  executor:{ title:'Executor (intraday)', file:'quant/execution/executor.py', legend:KIND, nodes:[
-    {id:'x1',label:'Load pending_plan',file:'.cache/',kind:'input',col:0,row:1.5},
-    {id:'x2',label:'5 circuit breakers',file:'SPY·VIX·name·news·macro',kind:'decision',col:1,row:1.5},
-    {id:'x3',label:'Tripped → abort',file:'sticky',kind:'safety',col:2,row:0.5},
-    {id:'x4',label:'Slice intents',file:'marketable-limit',kind:'process',col:2,row:2.3},
-    {id:'x5',label:'Submit → orders',file:'',kind:'output',col:3,row:2.3},
-    {id:'x6',label:'Update plan state',file:'write back',kind:'process',col:4,row:2.3},
+  executor:{ title:{en:'Executor (intraday)',zh:'执行器（日内）'}, file:'quant/execution/executor.py', legend:KIND, nodes:[
+    {id:'x1',label:{en:'Load pending_plan',zh:'加载 pending_plan'},file:'.cache/',kind:'input',col:0,row:1.5},
+    {id:'x2',label:{en:'5 circuit breakers',zh:'5 个熔断器'},file:'SPY·VIX·name·news·macro',kind:'decision',col:1,row:1.5},
+    {id:'x3',label:{en:'Tripped → abort',zh:'触发 → 中止'},file:'sticky',kind:'safety',col:2,row:0.5},
+    {id:'x4',label:{en:'Slice intents',zh:'分片意图'},file:'marketable-limit',kind:'process',col:2,row:2.3},
+    {id:'x5',label:{en:'Submit → orders',zh:'提交 → 订单'},file:'',kind:'output',col:3,row:2.3},
+    {id:'x6',label:{en:'Update plan state',zh:'更新计划状态'},file:'write back',kind:'process',col:4,row:2.3},
   ], edges:[['x1','x2'],['x2','x3','alt'],['x2','x4'],['x4','x5'],['x5','x6']]},
 
-  orders:{ title:'Orders — policy & safety rails', file:'quant/execution/orders.py', legend:KIND, nodes:[
-    {id:'o1',label:'Order intent',file:'from any trigger',kind:'input',col:0,row:1.2},
-    {id:'o2',label:'HALT?',file:'.cache/HALT',kind:'safety',col:1,row:1.2},
-    {id:'o3',label:'Market open?',file:'',kind:'decision',col:2,row:1.2},
-    {id:'o4',label:'Cash-aware gate',file:'fail-closed',kind:'decision',col:3,row:1.2},
-    {id:'o5',label:'Daily caps',file:'count + notional',kind:'decision',col:4,row:1.2},
-    {id:'o6',label:'Large-order gate',file:'≥ threshold',kind:'decision',col:5,row:1.2},
-    {id:'o7',label:'Submit → broker',file:'',kind:'output',col:6,row:0.5},
-    {id:'o8',label:'Queue pending',file:'Telegram approval',kind:'output',col:6,row:2.0},
+  orders:{ title:{en:'Orders — policy & safety rails',zh:'订单 —— 策略与安全护栏'}, file:'quant/execution/orders.py', legend:KIND, nodes:[
+    {id:'o1',label:{en:'Order intent',zh:'订单意图'},file:'from any trigger',kind:'input',col:0,row:1.2},
+    {id:'o2',label:{en:'HALT?',zh:'HALT？'},file:'.cache/HALT',kind:'safety',col:1,row:1.2},
+    {id:'o3',label:{en:'Market open?',zh:'市场开市？'},file:'',kind:'decision',col:2,row:1.2},
+    {id:'o4',label:{en:'Cash-aware gate',zh:'现金感知关卡'},file:'fail-closed',kind:'decision',col:3,row:1.2},
+    {id:'o5',label:{en:'Daily caps',zh:'每日上限'},file:'count + notional',kind:'decision',col:4,row:1.2},
+    {id:'o6',label:{en:'Large-order gate',zh:'大额订单关卡'},file:'≥ threshold',kind:'decision',col:5,row:1.2},
+    {id:'o7',label:{en:'Submit → broker',zh:'提交 → 券商'},file:'',kind:'output',col:6,row:0.5},
+    {id:'o8',label:{en:'Queue pending',zh:'排队等待'},file:'Telegram approval',kind:'output',col:6,row:2.0},
   ], edges:[['o1','o2'],['o2','o3'],['o3','o4'],['o4','o5'],['o5','o6'],['o6','o7'],['o6','o8','alt']]},
 
-  sepa:{ title:'SEPA exits (rule checks)', file:'quant/risk/sepa_exits.py', legend:KIND, nodes:[
-    {id:'p1',label:'Position + price',file:'',kind:'input',col:0,row:1},
-    {id:'p2',label:'R-tier hit?',file:'2R / 3R scale-out',kind:'decision',col:1,row:1},
-    {id:'p3',label:'Failed breakout?',file:'window expiry',kind:'decision',col:2,row:1},
-    {id:'p4',label:'Climax top?',file:'range/volume blow-off',kind:'decision',col:3,row:1},
-    {id:'p5',label:'21-EMA break?',file:'backstop',kind:'decision',col:4,row:1},
-    {id:'p6',label:'Emit exit action',file:'→ watchdog',kind:'output',col:5,row:1},
+  sepa:{ title:{en:'SEPA exits (rule checks)',zh:'SEPA 退出（规则检查）'}, file:'quant/risk/sepa_exits.py', legend:KIND, nodes:[
+    {id:'p1',label:{en:'Position + price',zh:'持仓 + 价格'},file:'',kind:'input',col:0,row:1},
+    {id:'p2',label:{en:'R-tier hit?',zh:'R 倍数触达？'},file:'2R / 3R scale-out',kind:'decision',col:1,row:1},
+    {id:'p3',label:{en:'Failed breakout?',zh:'突破失败？'},file:'window expiry',kind:'decision',col:2,row:1},
+    {id:'p4',label:{en:'Climax top?',zh:'高潮顶？'},file:'range/volume blow-off',kind:'decision',col:3,row:1},
+    {id:'p5',label:{en:'21-EMA break?',zh:'21-EMA 跌破？'},file:'backstop',kind:'decision',col:4,row:1},
+    {id:'p6',label:{en:'Emit exit action',zh:'触发退出动作'},file:'→ watchdog',kind:'output',col:5,row:1},
   ], edges:[['p1','p2'],['p2','p3'],['p3','p4'],['p4','p5'],['p5','p6']]},
 };
 
@@ -275,7 +409,7 @@ const vp=document.getElementById('viewport'), svg=document.getElementById('svg')
 let G=null, byId={}, edgeEls=[], nodeEls={}, level=0, currentSub=null, vmode='time';
 
 function colorOf(n){ return n.layer ? LAYER[n.layer][0] : KIND[n.kind][0]; }
-function tagOf(n){ return n.layer ? LAYER[n.layer][1] : KIND[n.kind][1]; }
+function tagOf(n){ return n.layer ? L(LAYER[n.layer][1]) : L(KIND[n.kind][1]); }
 
 function buildGraph(def){
   gEdges.innerHTML=''; gNodes.innerHTML=''; edgeEls=[]; nodeEls={};
@@ -298,7 +432,7 @@ function buildGraph(def){
     const bar=document.createElementNS(SVGNS,'rect'); bar.setAttribute('width',5); bar.setAttribute('height',NH);
     bar.setAttribute('rx',2); bar.setAttribute('fill',colorOf(n));
     const lbl=document.createElementNS(SVGNS,'text'); lbl.setAttribute('class','lbl');
-    lbl.setAttribute('x',16); lbl.setAttribute('y',n.file?24:34); lbl.textContent=n.label;
+    lbl.setAttribute('x',16); lbl.setAttribute('y',n.file?24:34); lbl.textContent=L(n.label);
     g.appendChild(r); g.appendChild(bar); g.appendChild(lbl);
     if(n.file){ const f=document.createElementNS(SVGNS,'text'); f.setAttribute('class','file');
       f.setAttribute('x',16); f.setAttribute('y',42); f.textContent=n.file; g.appendChild(f); }
@@ -325,9 +459,9 @@ function buildRibbon(){
     num.textContent='PHASE '+(i+1); g.appendChild(num);
     const t1=document.createElementNS(SVGNS,'text'); t1.setAttribute('x',x+16); t1.setAttribute('y',top+52);
     t1.setAttribute('fill','#e6edf3'); t1.setAttribute('font-size','17'); t1.setAttribute('font-weight','700');
-    t1.textContent=ph.t; g.appendChild(t1);
+    t1.textContent=L(ph.t); g.appendChild(t1);
     const t2=document.createElementNS(SVGNS,'text'); t2.setAttribute('x',x+16); t2.setAttribute('y',top+70);
-    t2.setAttribute('fill','#6b7785'); t2.setAttribute('font-size','11'); t2.textContent=ph.time; g.appendChild(t2);
+    t2.setAttribute('fill','#6b7785'); t2.setAttribute('font-size','11'); t2.textContent=L(ph.time); g.appendChild(t2);
   });
 }
 function cy(n){return n.y+NH/2}
@@ -339,9 +473,10 @@ function renderEdges(){ edgeEls.forEach(p=>{
 function renderNodes(){ G.nodes.forEach(n=>nodeEls[n.id].setAttribute('transform',`translate(${n.x},${n.y})`)); }
 
 function buildLegend(map){ const el=document.getElementById('legend');
-  let h='<b>'+(level===0?'Layers':'Step kind')+'</b>';
-  Object.values(map).forEach(([c,l])=>h+=`<div class="row"><i class="k" style="background:${c}"></i>${l}</div>`);
-  if(level===0) h+='<div class="row" style="margin-top:7px"><i class="ek"></i>daily LLM trigger</div>';
+  const lang = document.body.getAttribute('data-lang') || 'en';
+  let h='<b>'+(level===0?(lang==='zh'?'图层':'Layers'):(lang==='zh'?'步骤类型':'Step kind'))+'</b>';
+  Object.values(map).forEach(([c,l])=>h+=`<div class="row"><i class="k" style="background:${c}"></i>${L(l)}</div>`);
+  if(level===0) h+=`<div class="row" style="margin-top:7px"><i class="ek"></i>${lang==='zh'?'每日 LLM 触发':'daily LLM trigger'}</div>`;
   el.innerHTML=h; }
 
 /* ============ pan / zoom ============ */
@@ -399,34 +534,79 @@ function swap(buildFn){ vp.style.opacity=0; setTimeout(()=>{ buildFn(); fit(); v
 function drillIn(id){ const def=SUB[id]; if(!def)return; level=1; currentSub=id; closeDrawer();
   swap(()=>buildGraph(def));
   crumb.className='crumb l1';
-  document.getElementById('crumbText').innerHTML=`<a id="toOv">Overview</a> <span class="sep">›</span> <span class="cur">${def.title}</span>`;
+  const lang = document.body.getAttribute('data-lang') || 'en';
+  const ovLabel = lang==='zh' ? '总览' : 'Overview';
+  document.getElementById('crumbText').innerHTML=`<a id="toOv">${ovLabel}</a> <span class="sep">›</span> <span class="cur">${L(def.title)}</span>`;
   document.getElementById('toOv').onclick=drillOut;
 }
 function drillOut(){ if(level===0)return; level=0; currentSub=null; closeDrawer();
   swap(()=>buildGraph(OVERVIEW));
-  crumb.className='crumb'; document.getElementById('crumbText').innerHTML='<span class="cur">Overview</span>';
+  crumb.className='crumb';
+  const lang = document.body.getAttribute('data-lang') || 'en';
+  document.getElementById('crumbText').innerHTML=`<span class="cur">${lang==='zh'?'总览':'Overview'}</span>`;
 }
 document.getElementById('crumbBack').onclick=drillOut;
 document.addEventListener('keydown',e=>{ if(e.key==='Escape'){ if(level===1)drillOut(); else closeDrawer(); } });
 
 /* ============ detail drawer ============ */
 const drawer=document.getElementById('drawer');
-function openDrawer(id){ const n=byId[id];
+let _openDrawerId=null;
+function openDrawer(id){ _openDrawerId=id; const n=byId[id];
   document.getElementById('dChip').textContent=tagOf(n); document.getElementById('dChip').style.background=colorOf(n);
-  document.getElementById('dTitle').textContent=n.label;
+  document.getElementById('dTitle').textContent=L(n.label);
   document.getElementById('dFile').textContent=n.file||'';
-  document.getElementById('dBody').innerHTML=n.detail?('<p>'+n.detail+'</p>'):'<p class="muted">'+(n.label)+'</p>';
+  document.getElementById('dBody').innerHTML=n.detail?('<p>'+L(n.detail)+'</p>'):'<p class="muted">'+L(n.label)+'</p>';
   const drillBtn=document.getElementById('dDrill');
   if(level===0 && SUB[id]){ drillBtn.classList.add('show'); drillBtn.onclick=()=>drillIn(id); } else drillBtn.classList.remove('show');
   const outs=G.edges.filter(e=>e[0]===id).map(e=>byId[e[1]]), ins=G.edges.filter(e=>e[1]===id).map(e=>byId[e[0]]);
   const conns=document.getElementById('dConns'); conns.innerHTML='';
-  outs.forEach(t=>conns.insertAdjacentHTML('beforeend',`<a data-go="${t.id}">→ ${t.label}</a>`));
-  ins.forEach(t=>conns.insertAdjacentHTML('beforeend',`<a data-go="${t.id}">← ${t.label}</a>`));
+  outs.forEach(t=>conns.insertAdjacentHTML('beforeend',`<a data-go="${t.id}">→ ${L(t.label)}</a>`));
+  ins.forEach(t=>conns.insertAdjacentHTML('beforeend',`<a data-go="${t.id}">← ${L(t.label)}</a>`));
   conns.querySelectorAll('a').forEach(a=>a.onclick=()=>openDrawer(a.dataset.go));
   drawer.classList.add('open'); G.nodes.forEach(x=>nodeEls[x.id].classList.remove('sel')); nodeEls[id].classList.add('sel'); highlight(id);
 }
-function closeDrawer(){ drawer.classList.remove('open'); clearHi(); }
+function closeDrawer(){ _openDrawerId=null; drawer.classList.remove('open'); clearHi(); }
 document.getElementById('drawerX').onclick=closeDrawer;
+
+/* ============ language toggle ============ */
+(function(){
+  function pick(){ var s=localStorage.getItem('docLang');
+    if(s) return s;
+    return (navigator.language||'').toLowerCase().indexOf('zh')===0 ? 'zh':'en'; }
+  function set(l){ document.body.setAttribute('data-lang',l);
+    localStorage.setItem('docLang',l);
+    document.querySelectorAll('#langtoggle button').forEach(function(b){
+      b.classList.toggle('active', b.getAttribute('data-setlang')===l); });
+    if(window.onLangChange) window.onLangChange(l); }
+  document.addEventListener('DOMContentLoaded',function(){
+    document.querySelectorAll('#langtoggle button').forEach(function(b){
+      b.addEventListener('click',function(){ set(b.getAttribute('data-setlang')); }); });
+    set(pick());
+  });
+})();
+
+/* ============ re-render on lang change ============ */
+window.onLangChange = function(lang){
+  // Re-render the graph (rebuilds all SVG text with new L() values)
+  if(G){
+    // Preserve node positions across re-render
+    const savedPos={};
+    if(G.nodes) G.nodes.forEach(n=>{ savedPos[n.id]={x:n.x,y:n.y}; });
+    buildGraph(level===0?OVERVIEW:(SUB[currentSub]||OVERVIEW));
+    if(G.nodes) G.nodes.forEach(n=>{ if(savedPos[n.id]){ n.x=savedPos[n.id].x; n.y=savedPos[n.id].y; } });
+    renderNodes(); renderEdges();
+  }
+  // Update crumb breadcrumb text
+  if(level===1 && currentSub && SUB[currentSub]){
+    const ovLabel = lang==='zh' ? '总览' : 'Overview';
+    document.getElementById('crumbText').innerHTML=`<a id="toOv">${ovLabel}</a> <span class="sep">›</span> <span class="cur">${L(SUB[currentSub].title)}</span>`;
+    document.getElementById('toOv').onclick=drillOut;
+  } else {
+    document.getElementById('crumbText').innerHTML=`<span class="cur">${lang==='zh'?'总览':'Overview'}</span>`;
+  }
+  // Re-render open drawer
+  if(_openDrawerId){ openDrawer(_openDrawerId); }
+};
 
 window.addEventListener('resize',fit);
 buildGraph(OVERVIEW); fit();
