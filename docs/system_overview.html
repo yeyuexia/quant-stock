@@ -315,6 +315,11 @@
         <p class="lang-en">Dual-momentum ETF rotation for the core sleeve, and a FRED-based macro regime overlay that shrinks risk in hostile regimes and can trigger macro-driven exits.</p>
         <p class="lang-zh">针对核心份额的双动量 ETF 轮动，以及基于 FRED 数据的宏观环境覆盖层——在不利环境下收缩风险敞口，并可触发宏观驱动的出场。</p>
       </div></details>
+    <details class="card"><summary><span class="lay" style="background:var(--signal)"></span>quant/news/ (political forecast)<span class="tag"><span class="lang-en">signals</span><span class="lang-zh">信号</span></span></summary>
+      <div class="body">
+        <p class="lang-en">Political-forecast subsystem: RSS political-event classification → SQLite news store → LLM hotspot/briefing analysis. Blends a political-risk score (30%) into the macro equity adjustment and surfaces a watchdog POLITICAL alert; the Telegram bot's <code>/forecast</code> + <code>/hotspots</code> read from it.</p>
+        <p class="lang-zh">政治预测子系统：RSS 政治事件分类 → SQLite 新闻库 → LLM 热点/简报分析。将政治风险分数（30%）融入宏观股票仓位调整，并在看门狗中产生 POLITICAL 告警；Telegram 机器人的 <code>/forecast</code> 与 <code>/hotspots</code> 从中读取数据。</p>
+      </div></details>
     <details class="card"><summary><span class="lay" style="background:var(--select)"></span>strategies.py<span class="tag"><span class="lang-en">selection</span><span class="lang-zh">选股</span></span></summary>
       <div class="body">
         <p class="lang-en">The isolated-strategy contract + parallel runner. Each strategy writes <code>{ticker, score, rank, factors}</code> rows to its own JSON file; a strategy that errors or <em>hangs</em> is skipped (bounded by a timeout) so one can never stall the others or the watchdog.</p>
