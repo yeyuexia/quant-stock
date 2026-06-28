@@ -924,6 +924,36 @@ def check_rebalance(portfolio):
     return alerts
 
 
+def check_political_forecast():
+    """Surface a recent political-forecast score as an alert (fail-open).
+
+    Reads the latest LLM political analysis from the news subsystem; skips
+    silently if the subsystem is unavailable or the analysis is stale (>4h)."""
+    alerts = []
+    try:
+        from quant.news.news_store import init_db, get_latest_analysis
+        import datetime as _dt
+        init_db()
+        latest = get_latest_analysis()
+        if not latest:
+            return alerts
+        created = _dt.datetime.fromisoformat(latest["created_at"])
+        age_hours = (_dt.datetime.utcnow() - created).total_seconds() / 3600
+        if age_hours > 4:
+            return alerts  # stale — skip
+        score = latest["political_risk_score"]
+        snippet = latest.get("briefing", "")[:80]
+        if score < -0.3:
+            alerts.append((Alert.WARNING, "POLITICAL",
+                f"Political risk elevated ({score:+.2f}): {snippet}"))
+        elif score > 0.3:
+            alerts.append((Alert.INFO, "POLITICAL",
+                f"Political tailwind ({score:+.2f}): {snippet}"))
+    except Exception:
+        pass
+    return alerts
+
+
 # ── Daily Log ─────────────────────────────────────────────────
 
 _DAILY_LOG_COLUMNS = ["date", "total_value", "pnl_pct", "cash",
@@ -1087,6 +1117,10 @@ def run_watchdog(quick=False):
         header("NEWS & SENTIMENT")
         news_alerts = check_news(portfolio)
         all_alerts.extend(news_alerts)
+
+        header("POLITICAL FORECAST")
+        political_alerts = check_political_forecast()
+        all_alerts.extend(political_alerts)
 
     # Rebalance reminder
     rebal_alerts = check_rebalance(portfolio)

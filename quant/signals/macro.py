@@ -416,15 +416,24 @@ def macro_composite_score() -> float:
 
 
 def macro_risk_adjustment(base_equity_pct: float) -> float:
-    """Adjust equity allocation based on macro regime.
+    """Adjust equity allocation based on macro regime + political risk.
 
-    Linear scaling: score 1.0 → 100% of target, score -1.0 → 40% of target.
-    Caps are defensive — score is already bounded [-1, +1] upstream.
+    Blends the FRED macro score (70%) with the political-risk score (30%).
+    Linear scaling per source: score 1.0 → 100% of target, score -1.0 → 40%.
+    Caps are defensive — scores are already bounded [-1, +1] upstream.
+    Falls back to FRED-only if the political-forecast module is unavailable.
     """
     result = macro_regime_score()
     score = result["score"]
-    adj = max(0.4, min(1.0, 0.7 + 0.3 * score))
-    return base_equity_pct * adj
+    fred_adj = max(0.4, min(1.0, 0.7 + 0.3 * score))
+    try:
+        from quant.news.forecast import get_latest_political_score
+        political_score = get_latest_political_score()
+        political_adj = max(0.4, min(1.0, 0.7 + 0.3 * political_score))
+        blended = 0.7 * fred_adj + 0.3 * political_adj
+    except Exception:
+        blended = fred_adj  # FRED-only fallback
+    return base_equity_pct * blended
 
 
 # ── CLI: force-refresh all FRED cache ────────────────────────────

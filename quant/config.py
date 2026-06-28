@@ -19,6 +19,15 @@ import os
 from quant import paths
 import json  # used by _load_auto_watchlist() at module load — must precede it
 
+# Load .env so API keys / env vars are available to every module that imports
+# config, even when started outside the cron-wrapper / bot contexts that
+# otherwise pre-load it. Must run before the os.environ reads below.
+try:
+    from dotenv import load_dotenv
+    load_dotenv(os.path.join(paths.REPO_ROOT, ".env"))
+except Exception:
+    pass  # python-dotenv is a requirement, but don't hard-crash if absent
+
 # ── Portfolio Mode ──────────────────────────────────────────────
 # Set via: PORTFOLIO_MODE=growth python3 run.py
 # Or change the default here
@@ -608,3 +617,74 @@ def _apply_overrides():
         globals()[key] = value
 
 _apply_overrides()
+
+
+# ── News Polling ─────────────────────────────────────────────────
+NEWS_POLL_INTERVAL_SECONDS = 300     # 5 minutes
+NEWS_RETENTION_DAYS = 7
+
+# ── Hotspot Detection ────────────────────────────────────────────
+HOTSPOT_WINDOW_MINUTES = 30
+HOTSPOT_THRESHOLD_COUNT = 5
+HOTSPOT_MAX_LLM_CALLS_PER_HOUR = 3
+
+# ── LLM Models (political forecast subsystem) ────────────────────
+LLM_HOTSPOT_MODEL = "claude-haiku-4-5-20251001"
+LLM_BRIEFING_MODEL = "claude-sonnet-4-6"
+LLM_BRIEFING_HOURS = 8       # hours of history for scheduled briefing
+LLM_PREMARKET_HOURS = 14     # extended window for pre-market (covers Asia overnight)
+
+# ── RSS Feeds ────────────────────────────────────────────────────
+RSS_FEEDS = [
+    # US
+    {"url": "https://feeds.bbci.co.uk/news/business/rss.xml",        "source": "BBC Business",      "region": "us"},
+    {"url": "https://thehill.com/news/feed/",                         "source": "The Hill",          "region": "us"},
+    {"url": "https://www.cnbc.com/id/100003114/device/rss/rss.html",  "source": "CNBC Top",          "region": "us"},
+    {"url": "https://www.cnbc.com/id/10000664/device/rss/rss.html",   "source": "CNBC Politics",     "region": "us"},
+    {"url": "https://feeds.marketwatch.com/marketwatch/topstories/",  "source": "MarketWatch",       "region": "us"},
+    {"url": "https://rss.politico.com/politics-news.xml",             "source": "Politico",          "region": "us"},
+    {"url": "https://www.theguardian.com/business/rss",               "source": "Guardian Business", "region": "us"},
+    {"url": "https://www.federalreserve.gov/feeds/press_all.xml",     "source": "Federal Reserve",   "region": "us"},
+    # Asia
+    {"url": "https://asia.nikkei.com/rss/feed/nar",                               "source": "Nikkei Asia",  "region": "asia"},
+    {"url": "https://www.scmp.com/rss/11/feed",                                   "source": "SCMP Business","region": "asia"},
+    {"url": "https://www.channelnewsasia.com/api/v1/rss-outbound-feed?_format=xml&category=6511", "source": "CNA Business",  "region": "asia"},
+    {"url": "https://www.japantimes.co.jp/feed/",                                  "source": "Japan Times",  "region": "asia"},
+    {"url": "https://www.bangkokpost.com/rss/data/topstories.xml",                 "source": "Bangkok Post", "region": "asia"},
+]
+
+# ── Political Event Categories ────────────────────────────────────
+NEWS_CATEGORIES = {
+    "tariff": {
+        "keywords": ["tariff", "trade war", "import duty", "sanction", "export ban",
+                     "trade deal", "trade deficit", "customs duty"],
+        "sectors": ["XLY", "XLI", "XLE", "AAPL", "AMZN", "NVDA"],
+    },
+    "fed": {
+        "keywords": ["federal reserve", "fed rate", "fomc", "powell", "interest rate",
+                     "quantitative easing", "rate hike", "rate cut", "monetary policy",
+                     "basis points"],
+        "sectors": ["XLF", "TLT", "IEF", "BIL", "SHY"],
+    },
+    "election": {
+        "keywords": ["election", "congress", "senate", "president", "policy",
+                     "regulation", "legislation", "vote", "ballot"],
+        "sectors": ["XLV", "XLE", "XLF", "XLY"],
+    },
+    "geopolitical": {
+        "keywords": ["war", "conflict", "missile", "invasion", "coup", "taiwan",
+                     "nato", "military", "nuclear", "troops", "attack", "strike"],
+        "sectors": ["XLE", "TLT", "BIL"],
+    },
+    "macro_data": {
+        "keywords": ["cpi", "inflation", "gdp", "unemployment", "jobs report",
+                     "recession", "pce", "retail sales", "nonfarm payroll",
+                     "consumer price index"],
+        "sectors": ["SPY", "TLT", "BIL", "XLF"],
+    },
+    "earnings": {
+        "keywords": ["earnings", "revenue", "guidance", "quarterly results",
+                     "beats estimates", "misses estimates", "profit warning"],
+        "sectors": [],  # earnings are ticker-specific, not sector-routable
+    },
+}
